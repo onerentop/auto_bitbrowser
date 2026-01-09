@@ -4,6 +4,7 @@
 
 这是一个基于 Python/PyQt6 开发的比特浏览器（BitBrowser）自动化管理工具，支持批量创建窗口、自动分配代理、自动化提取 SheerID 验证链接以及账号资格检测等功能。
 
+使用教程文档：https://docs.qq.com/doc/DSEVnZHprV0xMR05j?no_promotion=1&is_blank_or_template=blank
 ---
 
 ## 📢 广告 / Advertisement
