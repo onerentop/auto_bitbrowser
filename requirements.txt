@@ -6,3 +6,6 @@ svglib
 reportlab
 Pillow
 cairosvg
+ixbrowser-local-api
+deep-translator
+selenium

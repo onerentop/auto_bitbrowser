@@ -6,8 +6,8 @@ import os
 import sys
 import threading
 from playwright.async_api import async_playwright, Playwright
-from bit_api import openBrowser, closeBrowser
-from create_window import get_browser_list, get_browser_info
+from ix_api import openBrowser, closeBrowser
+from ix_window import get_browser_list, get_browser_info
 from deep_translator import GoogleTranslator
 from account_manager import AccountManager
 
@@ -375,28 +375,32 @@ async def _async_process_wrapper(browser_id, account_info, ws_endpoint, log_call
     async with async_playwright() as playwright:
         return await _automate_login_and_extract(playwright, browser_id, account_info, ws_endpoint, log_callback)
 
-def process_browser(browser_id, log_callback=None):
+def process_browser(profile_id, log_callback=None):
     """
     Synchronous entry point for processing a single browser.
     Returns (success, message)
+
+    Args:
+        profile_id: ixBrowser profile ID (integer)
     """
-    print(f"Fetching info for browser ID: {browser_id}")
-    
-    target_browser = get_browser_info(browser_id)
+    print(f"Fetching info for profile ID: {profile_id}")
+
+    target_browser = get_browser_info(profile_id)
     if not target_browser:
         # Fallback search
-        print(f"Direct info fetch failed for {browser_id}, attempting list search...")
-        browsers = get_browser_list(page=0, pageSize=1000)
+        print(f"Direct info fetch failed for {profile_id}, attempting list search...")
+        browsers = get_browser_list(page=1, limit=1000)
         for b in browsers:
-             if b.get('id') == browser_id:
+             if b.get('profile_id') == profile_id:
                  target_browser = b
                  break
-    
+
     if not target_browser:
-        return False, f"Browser {browser_id} not found."
+        return False, f"Profile {profile_id} not found."
 
     account_info = {}
-    remark = target_browser.get('remark', '')
+    # ixBrowser uses 'note' instead of 'remark'
+    remark = target_browser.get('note', '') or target_browser.get('remark', '')
     parts = remark.split('----')
     if len(parts) >= 4:
         account_info = {
@@ -406,29 +410,28 @@ def process_browser(browser_id, log_callback=None):
             'secret': parts[3].strip()
         }
     else:
-        # Even if password/secret missing, maybe we are already logged in?
-        # But if email is missing, it's hard to log (for the file).
-        # We'll try to get email from remark anyway if partial
-        if len(parts) >= 1:
+        # Try to get credentials from profile fields directly
+        account_info['email'] = target_browser.get('username') or target_browser.get('name', 'unknown')
+        account_info['password'] = target_browser.get('password', '')
+        account_info['secret'] = target_browser.get('tfa_secret', '')
+        if len(parts) >= 1 and parts[0].strip():
              account_info['email'] = parts[0].strip()
-        else:
-             account_info['email'] = 'unknown'
-        print("Remark format invalid or empty, logging in might fail if credentials needed.")
+        print("Note format invalid or empty, using profile fields for credentials.")
 
-    print(f"Opening browser {browser_id}...")
-    res = openBrowser(browser_id)
+    print(f"Opening browser {profile_id}...")
+    res = openBrowser(profile_id)
     if not res or not res.get('success', False):
         return False, f"Failed to open browser: {res}"
 
     ws_endpoint = res.get('data', {}).get('ws')
     if not ws_endpoint:
-        closeBrowser(browser_id)
+        closeBrowser(profile_id)
         return False, "No WebSocket endpoint returned."
 
     try:
         # Run automation
-        result = asyncio.run(_async_process_wrapper(browser_id, account_info, ws_endpoint, log_callback))
-        
+        result = asyncio.run(_async_process_wrapper(profile_id, account_info, ws_endpoint, log_callback))
+
         # Handle tuple return or boolean for backward compatibility
         if isinstance(result, tuple):
             success, msg = result
@@ -439,11 +442,11 @@ def process_browser(browser_id, log_callback=None):
             else:
                 return False, "Automation finished but link not found or error occurred."
     finally:
-        print(f"Closing browser {browser_id}...")
-        closeBrowser(browser_id)
+        print(f"Closing browser {profile_id}...")
+        closeBrowser(profile_id)
 
 if __name__ == "__main__":
     # Test with specific ID
-    target_id = "62b1596a5e064629a7126b11feed7c89"
+    target_id = 1  # ixBrowser profile_id is integer
     success, msg = process_browser(target_id)
     print(f"Result: {success} - {msg}")

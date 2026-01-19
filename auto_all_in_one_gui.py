@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from playwright.async_api import async_playwright
-from bit_api import openBrowser, closeBrowser
-from create_window import get_browser_info, get_browser_list
+from ix_api import openBrowser, closeBrowser
+from ix_window import get_browser_info, get_browser_list
 from database import DBManager
 from sheerid_verifier import SheerIDVerifier
 
@@ -133,7 +133,7 @@ class AutoAllInOneWorker(QThread):
             if not target_browser:
                 return False, "无法获取浏览器信息"
             
-            remark = target_browser.get('remark', '')
+            remark = target_browser.get('note', '')
             parts = remark.split('----')
             
             account_info = None
@@ -496,13 +496,31 @@ class AutoAllInOneWindow(QWidget):
             for line in lines:
                 if line.startswith('分隔符='):
                     continue
-                parts = line.split()
+                # 支持两种分隔符: ---- 或 空格
+                if '----' in line:
+                    parts = line.split('----')
+                else:
+                    parts = line.split()
                 if len(parts) >= 4:
+                    # 6字段格式: 卡号----月份----年份----CVV----姓名----邮编
+                    # 5字段格式(旧): 卡号----月份----年份----CVV----邮编
+                    if len(parts) >= 6:
+                        name = parts[4].strip()
+                        zip_code = parts[5].strip()
+                    elif len(parts) >= 5:
+                        name = 'John Smith'
+                        zip_code = parts[4].strip()
+                    else:
+                        name = 'John Smith'
+                        zip_code = '10001'
+
                     card = {
                         'number': parts[0].strip(),
                         'exp_month': parts[1].strip(),
                         'exp_year': parts[2].strip(),
-                        'cvv': parts[3].strip()
+                        'cvv': parts[3].strip(),
+                        'name': name,
+                        'zip_code': zip_code
                     }
                     self.cards.append(card)
             
@@ -537,15 +555,15 @@ class AutoAllInOneWindow(QWidget):
             conn.close()
             
             # 获取浏览器列表
-            browsers = get_browser_list(page=0, pageSize=1000)
+            browsers = get_browser_list(page=1, limit=1000)
             email_to_browser = {}
             for browser in browsers:
-                remark = browser.get('remark', '')
+                remark = browser.get('note', '')
                 if '----' in remark:
                     parts = remark.split('----')
                     if parts and '@' in parts[0]:
                         browser_email = parts[0].strip()
-                        browser_id = browser.get('id', '')
+                        browser_id = browser.get('profile_id', '')
                         email_to_browser[browser_email] = browser_id
             
             self.table.setRowCount(0)

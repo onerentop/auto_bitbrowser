@@ -2,18 +2,135 @@
 自动绑卡脚本 - Google One AI Student 订阅
 """
 import asyncio
+import os
 import pyotp
 from playwright.async_api import async_playwright, Page
-from bit_api import openBrowser, closeBrowser
+from ix_api import openBrowser, closeBrowser
 from account_manager import AccountManager
 
-# 测试卡信息
-TEST_CARD = {
+# 卡片配置文件路径
+CARDS_FILE = 'cards.txt'
+
+# 当前卡片索引（用于轮换）
+_current_card_index = 0
+
+# 默认测试卡信息（当 cards.txt 不存在时使用）
+DEFAULT_CARD = {
     'number': '5481087170529907',
     'exp_month': '01',
     'exp_year': '32',
-    'cvv': '536'
+    'cvv': '536',
+    'name': 'John Smith',  # 持卡人姓名
+    'zip_code': '10001'    # 美国纽约邮编
 }
+
+
+def read_cards_from_file(file_path: str = CARDS_FILE) -> list:
+    """
+    从文件读取卡片信息
+
+    Args:
+        file_path: 卡片配置文件路径
+
+    Returns:
+        卡片列表 [{'number', 'exp_month', 'exp_year', 'cvv'}, ...]
+    """
+    cards = []
+
+    if not os.path.exists(file_path):
+        print(f"⚠️ 卡片文件 {file_path} 不存在，使用默认卡片")
+        return [DEFAULT_CARD]
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # 跳过空行和注释
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split('----')
+                if len(parts) >= 4:
+                    card = {
+                        'number': parts[0].strip(),
+                        'exp_month': parts[1].strip(),
+                        'exp_year': parts[2].strip(),
+                        'cvv': parts[3].strip(),
+                        'name': parts[4].strip() if len(parts) >= 5 else 'John Smith',  # 持卡人姓名
+                        'zip_code': parts[5].strip() if len(parts) >= 6 else '10001'    # 账单邮编
+                    }
+                    cards.append(card)
+                else:
+                    print(f"⚠️ 跳过格式错误的行: {line}")
+
+        if not cards:
+            print(f"⚠️ 卡片文件为空，使用默认卡片")
+            return [DEFAULT_CARD]
+
+        print(f"✅ 从 {file_path} 读取到 {len(cards)} 张卡片")
+        return cards
+
+    except Exception as e:
+        print(f"❌ 读取卡片文件失败: {e}，使用默认卡片")
+        return [DEFAULT_CARD]
+
+
+def get_next_card() -> dict:
+    """
+    获取下一张卡片（轮换）
+
+    Returns:
+        卡片信息字典
+    """
+    global _current_card_index
+
+    cards = read_cards_from_file()
+    card = cards[_current_card_index % len(cards)]
+    _current_card_index += 1
+
+    print(f"📋 使用卡片 #{_current_card_index}: **** **** **** {card['number'][-4:]}")
+    return card
+
+
+def get_card_by_index(index: int = 0) -> dict:
+    """
+    获取指定索引的卡片
+
+    Args:
+        index: 卡片索引（从0开始）
+
+    Returns:
+        卡片信息字典
+    """
+    cards = read_cards_from_file()
+    if index < 0 or index >= len(cards):
+        print(f"⚠️ 索引 {index} 超出范围，使用第一张卡片")
+        index = 0
+
+    card = cards[index]
+    print(f"📋 使用卡片 #{index + 1}: **** **** **** {card['number'][-4:]}")
+    return card
+
+
+def get_all_cards() -> list:
+    """
+    获取所有卡片列表
+
+    Returns:
+        卡片列表
+    """
+    return read_cards_from_file()
+
+
+def reset_card_rotation():
+    """重置卡片轮换索引"""
+    global _current_card_index
+    _current_card_index = 0
+    print("🔄 卡片轮换索引已重置")
+
+
+# 兼容旧代码的别名
+TEST_CARD = DEFAULT_CARD
 
 async def check_and_login(page: Page, account_info: dict = None):
     """
@@ -87,20 +204,31 @@ async def check_and_login(page: Page, account_info: dict = None):
         print(f"登录检测出错: {e}")
         return False, f"登录检测错误: {e}"
 
-async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict = None):
+async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict = None,
+                         use_rotation: bool = False, card_index: int = None):
     """
     自动绑卡函数
-    
+
     Args:
         page: Playwright Page 对象
         card_info: 卡信息字典 {'number', 'exp_month', 'exp_year', 'cvv'}
+                   如果为 None，则根据 use_rotation 和 card_index 决定使用哪张卡
         account_info: 账号信息（用于登录）{'email', 'password', 'secret'}
-    
+        use_rotation: 是否使用卡片轮换（每次调用使用下一张卡）
+        card_index: 指定使用第几张卡（从0开始），优先级高于 use_rotation
+
     Returns:
         (success: bool, message: str)
     """
+    # 确定使用哪张卡片
     if card_info is None:
-        card_info = TEST_CARD
+        if card_index is not None:
+            card_info = get_card_by_index(card_index)
+        elif use_rotation:
+            card_info = get_next_card()
+        else:
+            # 默认使用第一张卡
+            card_info = get_card_by_index(0)
     
     try:
         # 首先检测并执行登录（如果需要）
@@ -485,15 +613,80 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
             # 第3个输入框 = Security code
             cvv_input = all_inputs.nth(2)
             print("  使用第3个输入框作为CVV输入框")
-            
+
             await cvv_input.click()
             await cvv_input.fill(card_info['cvv'])
             print("✅ CVV已填写")
             await asyncio.sleep(0.5)
         except Exception as e:
             return False, f"填写CVV失败: {e}"
-        
-        # Step 6: 点击 "Save card" 按钮
+
+        # Step 6.5: 填写持卡人姓名（第4个输入框）
+        card_name = card_info.get('name', 'John Smith')
+        print(f"填写持卡人姓名: {card_name}")
+        try:
+            if input_count >= 4:
+                name_input = all_inputs.nth(3)
+                await name_input.click()
+                await name_input.fill(card_name)
+                print("✅ 持卡人姓名已填写 (第4个输入框)")
+                await asyncio.sleep(0.5)
+            else:
+                print("⚠️ 未找到持卡人姓名输入框")
+        except Exception as e:
+            print(f"⚠️ 填写持卡人姓名时出错: {e}")
+
+        # Step 6.6: 填写 Billing zip code（第5个输入框）
+        zip_code = card_info.get('zip_code', '10001')
+        print(f"填写 Billing zip code: {zip_code}")
+        try:
+            zip_filled = False
+
+            # 方法1：第5个输入框
+            if input_count >= 5:
+                try:
+                    zip_input = all_inputs.nth(4)
+                    await zip_input.click()
+                    await zip_input.fill(zip_code)
+                    print("✅ Billing zip code已填写 (第5个输入框)")
+                    zip_filled = True
+                except Exception as e:
+                    print(f"  第5个输入框填写失败: {e}")
+
+            # 方法2：通过选择器查找
+            if not zip_filled:
+                zip_selectors = [
+                    'input[autocomplete="postal-code"]',
+                    'input[name*="postal"]',
+                    'input[name*="zip"]',
+                    'input[placeholder*="ZIP"]',
+                    'input[placeholder*="zip"]',
+                    'input[aria-label*="ZIP"]',
+                    'input[aria-label*="zip"]',
+                    'input[aria-label*="postal"]',
+                ]
+
+                for selector in zip_selectors:
+                    try:
+                        zip_element = iframe_locator.locator(selector).first
+                        count = await zip_element.count()
+                        if count > 0:
+                            await zip_element.click()
+                            await zip_element.fill(zip_code)
+                            print(f"✅ Billing zip code已填写 (selector: {selector})")
+                            zip_filled = True
+                            break
+                    except:
+                        continue
+
+            if not zip_filled:
+                print("⚠️ 未找到邮编输入框")
+
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"⚠️ 填写邮编时出错: {e}")
+
+        # Step 7: 点击 "Save card" 按钮
         print("点击 'Save card' 按钮...")
         try:
             save_selectors = [
@@ -518,9 +711,40 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
             
             if not save_button:
                 return False, "未找到 Save card 按钮"
-            
+
             await save_button.click()
             print("✅ 已点击 'Save card'")
+
+            # 等待保存处理
+            await asyncio.sleep(5)
+
+            # 检测保存后的错误信息
+            print("检测是否有错误信息...")
+            error_selectors = [
+                ':text("Billing zip code required")',
+                ':text("zip code required")',
+                ':text("Invalid card")',
+                ':text("Card declined")',
+                ':text("Error")',
+                ':text("required")',
+                '.error-message',
+                '[class*="error"]',
+            ]
+
+            for selector in error_selectors:
+                try:
+                    error_element = iframe_locator.locator(selector).first
+                    count = await error_element.count()
+                    if count > 0:
+                        error_text = await error_element.text_content()
+                        print(f"❌ 检测到错误: {error_text}")
+                        await page.screenshot(path="error_save_card.png")
+                        return False, f"保存卡片失败: {error_text}"
+                except:
+                    continue
+
+            print("✅ 未检测到明显错误，继续...")
+
         except Exception as e:
             return False, f"点击 Save card 失败: {e}"
         
@@ -673,7 +897,7 @@ async def test_bind_card_with_browser(browser_id: str, account_info: dict = None
     # 如果没有提供账号信息，尝试从浏览器信息中获取
     if not account_info:
         print("未提供账号信息，尝试从浏览器remark中获取...")
-        from create_window import get_browser_info
+        from ix_window import get_browser_info
         
         target_browser = get_browser_info(browser_id)
         if target_browser:

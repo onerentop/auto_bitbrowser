@@ -1,5 +1,5 @@
 """
-比特浏览器窗口批量创建工具 - PyQt6 GUI版本
+ixBrowser 窗口批量创建工具 - PyQt6 GUI版本
 支持输入模板窗口ID，批量创建窗口，自动读取accounts.txt和proxies.txt
 支持自定义平台URL和额外URL
 支持列表显示现有窗口，并支持批量删除
@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
-from create_window import (
+from ix_window import (
     read_accounts, read_proxies, get_browser_list, get_browser_info,
     delete_browsers_by_name, delete_browser_by_id, open_browser_by_id, create_browser_window, get_next_window_name
 )
@@ -360,7 +360,7 @@ class WorkerThread(QThread):
                 
                 # 优先从备注获取密钥 (第4段)
                 secret = None
-                remark = browser.get('remark', '')
+                remark = browser.get('note', '')
                 if remark:
                     parts = remark.split('----')
                     if len(parts) >= 4:
@@ -368,7 +368,7 @@ class WorkerThread(QThread):
                 
                 # 如果备注没有，再尝试从字段获取
                 if not secret:
-                    secret = browser.get('faSecretKey')
+                    secret = browser.get('tfa_secret')
 
                 if secret and secret.strip():
                     try:
@@ -377,7 +377,7 @@ class WorkerThread(QThread):
                         totp = pyotp.TOTP(s)
                         code = totp.now()
                         
-                        bid = browser.get('id')
+                        bid = browser.get('profile_id')
                         codes_map[bid] = code
                         file_lines.append(f"{code}----{s}")
                         count += 1
@@ -431,7 +431,8 @@ class WorkerThread(QThread):
 
     def run_create(self):
         """执行创建任务"""
-        template_id = self.kwargs.get('template_id')
+        template_id_str = self.kwargs.get('template_id')
+        template_id = int(template_id_str) if template_id_str else None
         template_config = self.kwargs.get('template_config')
         
         platform_url = self.kwargs.get('platform_url')
@@ -694,7 +695,7 @@ class BrowserWindowCreatorGUI(QMainWindow):
 
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("比特浏览器窗口管理工具")
+        self.setWindowTitle("ixBrowser 窗口管理工具")
         self.setWindowIcon(QIcon(resource_path("beta-1.svg")))
         self.resize(1300, 800)
         
@@ -952,14 +953,14 @@ class BrowserWindowCreatorGUI(QMainWindow):
                 self.table.setItem(i, 1, QTableWidgetItem(name))
                 
                 # ID
-                bid = str(browser.get('id', ''))
+                bid = str(browser.get('profile_id', ''))
                 self.table.setItem(i, 2, QTableWidgetItem(bid))
                 
                 # 2FA (Initial empty)
                 self.table.setItem(i, 3, QTableWidgetItem(""))
                 
                 # Remark
-                remark = str(browser.get('remark', ''))
+                remark = str(browser.get('note', ''))
                 self.table.setItem(i, 4, QTableWidgetItem(remark))
             
             self.log(f"列表刷新完成，共 {len(browsers)} 个窗口")
@@ -1227,7 +1228,7 @@ def main():
     # Fix taskbar icon on Windows
     import ctypes
     try:
-        myappid = 'leclee.bitbrowser.automanager.1.0'
+        myappid = 'leclee.ixbrowser.automanager.1.0'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except:
         pass

@@ -1,21 +1,20 @@
-# BitBrowser Automation Tool (比特浏览器自动化管理工具)
+# ixBrowser Automation Tool (ixBrowser 自动化管理工具)
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 
-这是一个基于 Python/PyQt6 开发的比特浏览器（BitBrowser）自动化管理工具，支持批量创建窗口、自动分配代理、自动化提取 SheerID 验证链接以及账号资格检测等功能。
+这是一个基于 Python/PyQt6 开发的 ixBrowser 自动化管理工具，支持批量创建窗口、自动分配代理、自动化提取 SheerID 验证链接以及账号资格检测等功能。
 
 使用教程文档：https://docs.qq.com/doc/DSEVnZHprV0xMR05j?no_promotion=1&is_blank_or_template=blank
+
 ---
 
 ## 📢 广告 / Advertisement
 
-🏆 **推荐使用比特浏览器 (BitBrowser)** - 专为跨境电商/社媒营销设计的指纹浏览器
-👉 **[点击注册 / Register Here](https://www.bitbrowser.cn/?code=vl9b7j)**
+🏆 **推荐使用 ixBrowser** - 专业的指纹浏览器解决方案
+👉 **[官网访问 / Visit](https://www.ixbrowser.com/)**
 
 💳 **虚拟卡推荐 - HolyCard** - 支持Gemini订阅、GPT Team、0刀Plus，一张低至2R
 👉 **[立即申请 / Apply Now](https://www.holy-card.com/)**
-
-*(通过此链接注册可获得官方支持与优惠)*
 
 ---
 
@@ -58,7 +57,7 @@
 
 无需安装 Python 环境，直接下载 Release 中的 `.exe` 文件运行即可。
 
-1. 下载 `BitBrowserAutoManager.exe`。
+1. 下载 `ixBrowserAutoManager.exe`。
 2. 在同级目录下准备好配置文件 (见下文)。
 3. 双击运行程序。
 
@@ -66,13 +65,17 @@
 
 1. 克隆仓库:
    ```bash
-   git clone https://github.com/yourusername/bitbrowser-auto-manager.git
+   git clone https://github.com/yourusername/ixbrowser-auto-manager.git
    ```
 2. 安装依赖:
    ```bash
    pip install -r requirements.txt
    ```
-3. 运行:
+3. 安装 Playwright 浏览器驱动:
+   ```bash
+   playwright install chromium
+   ```
+4. 运行:
    ```bash
    python create_window_gui.py
    ```
@@ -170,7 +173,7 @@ http://user:pass@host:port
 * **sheerID_verified_failed.txt**: 验证失败的链接及原因。
 * **2fa_codes.txt**: 生成的 2FA 验证码。
 
-### 4. Web 管理界面
+### 5. Web 管理界面
 
 程序启动后，自动在后台启动 Web 服务器（端口 8080）。
 
@@ -187,14 +190,16 @@ http://user:pass@host:port
 |           ![Telegram QR](Telegram.png)           |       ![QQ QR](QQ.jpg)       |
 
 👤 **联系开发者**: QQ 2738552008
+
 赞赏：
 ![赞赏](zanshang.jpg)
+
 ---
 
 ## ⚠️ 免责声明 (Disclaimer)
 
 * 本工具仅供学习与技术交流使用，请勿用于非法用途。
-* 请遵守比特浏览器及相关平台的使用条款。
+* 请遵守 ixBrowser 及相关平台的使用条款。
 * 开发者不对因使用本工具产生的任何账号损失或法律责任负责。
 
 ## 📄 License

@@ -64,3 +64,12 @@ env/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Exclude AI/MCP tool cache directories
+.serena/
+.spec-workflow/
+.zcf/
+
+# Exclude backup files
+*.txtbak
+*.bak

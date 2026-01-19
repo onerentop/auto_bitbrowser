@@ -110,8 +110,8 @@ class DBManager:
         accounts_path = os.path.join(BASE_DIR, "accounts.txt")
         if os.path.exists(accounts_path):
             try:
-                # 使用create_window中的read_accounts函数
-                from create_window import read_accounts
+                # 使用ix_window中的read_accounts函数
+                from ix_window import read_accounts
                 accounts = read_accounts(accounts_path)
                 
                 print(f"从 accounts.txt 读取到 {len(accounts)} 个账号")
