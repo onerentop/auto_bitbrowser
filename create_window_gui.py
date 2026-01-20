@@ -709,7 +709,25 @@ class BrowserWindowCreatorGUI(QMainWindow):
         """)
         self.btn_auto_all.clicked.connect(self.action_auto_all)
         google_layout.addWidget(self.btn_auto_all)
-        
+
+        # 一键替换手机号按钮
+        self.btn_replace_phone = QPushButton("📱 一键替换手机号")
+        self.btn_replace_phone.setFixedHeight(40)
+        self.btn_replace_phone.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_replace_phone.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #00BCD4;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #0097A7; }
+        """)
+        self.btn_replace_phone.clicked.connect(self.action_replace_phone)
+        google_layout.addWidget(self.btn_replace_phone)
+
         google_layout.addStretch()
         google_page.setLayout(google_layout)
         self.toolbox.addItem(google_page, "Google 专区")
@@ -1210,6 +1228,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.auto_all_window.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开全自动处理窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_replace_phone(self):
+        """打开一键替换手机号窗口"""
+        try:
+            from replace_phone_gui import ReplacePhoneWindow
+
+            if not hasattr(self, 'replace_phone_window') or self.replace_phone_window is None:
+                self.replace_phone_window = ReplacePhoneWindow()
+
+            self.replace_phone_window.show()
+            self.replace_phone_window.raise_()
+            self.replace_phone_window.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开替换手机号窗口: {e}")
             import traceback
             traceback.print_exc()
 
