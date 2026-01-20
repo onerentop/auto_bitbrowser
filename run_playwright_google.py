@@ -10,6 +10,7 @@ from ix_api import openBrowser, closeBrowser
 from ix_window import get_browser_list, get_browser_info
 from deep_translator import GoogleTranslator
 from account_manager import AccountManager
+from core.config_manager import ConfigManager
 
 # Global lock for file writing safety
 file_write_lock = threading.Lock()
@@ -23,7 +24,9 @@ def get_base_path():
 async def _automate_login_and_extract(playwright: Playwright, browser_id: str, account_info: dict, ws_endpoint: str, log_callback=None):
     chromium = playwright.chromium
     try:
-        browser = await chromium.connect_over_cdp(ws_endpoint)
+        # 使用配置化的超时时间连接 CDP
+        cdp_timeout = ConfigManager.get("timeouts.page_load", 30) * 1000  # 转换为毫秒
+        browser = await chromium.connect_over_cdp(ws_endpoint, timeout=cdp_timeout)
         default_context = browser.contexts[0]
         page = default_context.pages[0] if default_context.pages else await default_context.new_page()
 
@@ -44,7 +47,7 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
 
         # 1. Enter Email (if input exists)
         email = account_info.get('email')
-        
+
         try:
              # Check if email input exists
              email_input = await page.wait_for_selector('input[type="email"]', timeout=5000)
@@ -52,15 +55,62 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                  print(f"Entering email: {email}")
                  if log_callback: log_callback(f"正在输入账号: {email}")
                  await email_input.fill(email)
-                 await page.click('#identifierNext >> button')
-                 
+
+                 # 改进选择器稳定性：使用多候选选择器
+                 next_selectors = [
+                     '#identifierNext >> button',
+                     '#identifierNext button',
+                     'button[jsname="LgbsSe"]',
+                     '[data-idom-class="nCP5yc"] button',
+                     'button:has-text("Next")',
+                     'button:has-text("下一步")',
+                     'button:has-text("Tiếp theo")',
+                 ]
+
+                 clicked = False
+                 for sel in next_selectors:
+                     try:
+                         btn = page.locator(sel).first
+                         if await btn.count() > 0 and await btn.is_visible():
+                             await btn.click()
+                             clicked = True
+                             break
+                     except:
+                         continue
+
+                 if not clicked:
+                     await page.keyboard.press('Enter')  # 兜底方案
+
                  # 2. Enter Password
                  print("Waiting for password input...")
                  await page.wait_for_selector('input[type="password"]', state='visible')
                  password = account_info.get('password')
                  print("Entering password...")
                  await page.fill('input[type="password"]', password)
-                 await page.click('#passwordNext >> button')
+
+                 # 改进选择器稳定性：密码下一步按钮
+                 pwd_next_selectors = [
+                     '#passwordNext >> button',
+                     '#passwordNext button',
+                     'button[jsname="LgbsSe"]',
+                     '[data-idom-class="nCP5yc"] button',
+                     'button:has-text("Next")',
+                     'button:has-text("下一步")',
+                 ]
+
+                 clicked = False
+                 for sel in pwd_next_selectors:
+                     try:
+                         btn = page.locator(sel).first
+                         if await btn.count() > 0 and await btn.is_visible():
+                             await btn.click()
+                             clicked = True
+                             break
+                     except:
+                         continue
+
+                 if not clicked:
+                     await page.keyboard.press('Enter')
 
                  # 3. Handle 2FA (TOTP)
                  print("Waiting for 2FA input...")
@@ -74,7 +124,29 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                               code = totp.now()
                               print(f"Generating 2FA code: {code}")
                               await totp_input.fill(code)
-                              await page.click('#totpNext >> button')
+
+                              # 改进选择器稳定性：2FA 下一步按钮
+                              totp_next_selectors = [
+                                  '#totpNext >> button',
+                                  '#totpNext button',
+                                  'button[jsname="LgbsSe"]',
+                                  'button:has-text("Next")',
+                                  'button:has-text("下一步")',
+                              ]
+
+                              clicked = False
+                              for sel in totp_next_selectors:
+                                  try:
+                                      btn = page.locator(sel).first
+                                      if await btn.count() > 0 and await btn.is_visible():
+                                          await btn.click()
+                                          clicked = True
+                                          break
+                                  except:
+                                      continue
+
+                              if not clicked:
+                                  await page.keyboard.press('Enter')
                           else:
                               print("2FA secret not found in account info!")
                  except Exception as e:
@@ -116,55 +188,158 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
         # 5. Extract "Verify eligibility" link or check for non-eligibility
         print("Checking for eligibility...")
         if log_callback: log_callback("正在检测学生资格...")
-        
+
         found_link = False
         is_invalid = False
-        
+
         # Phrases indicating the offer is not available in various languages
         not_available_phrases = [
+            # English
             "This offer is not available",
-            "Ưu đãi này hiện không dùng được", # Vietnamese
-            "Esta oferta no está disponible", # Spanish
-            "Cette offre n'est pas disponible", # French
-            "Esta oferta não está disponível", # Portuguese
-            "Tawaran ini tidak tersedia", # Indonesian
-            "此优惠目前不可用", # Chinese Simplified
-            "這項優惠目前無法使用", # Chinese Traditional
-            "Oferta niedostępna", # Polish
-            "Oferta nu este disponibilă", # Romanian
-            "Die Aktion ist nicht verfügbar", # German
-            "Il'offerta non è disponibile", # Italian
-            "Această ofertă nu este disponibilă", 
-            "Ez az ajánlat nem áll rendelkezésre", # Hungarian
-            "Tato nabídka není k dispozici", # Czech
-            "Bu teklif kullanılamıyor" # Turkish
+            "offer is not available",
+            "not eligible",
+            # Vietnamese
+            "Ưu đãi này hiện không dùng được",
+            "không đủ điều kiện",
+            # Spanish
+            "Esta oferta no está disponible",
+            "No eres elegible",
+            # French
+            "Cette offre n'est pas disponible",
+            "Vous n'êtes pas éligible",
+            # Portuguese
+            "Esta oferta não está disponível",
+            "Você não é elegível",
+            # Indonesian
+            "Tawaran ini tidak tersedia",
+            "Tidak memenuhi syarat",
+            # Chinese Simplified
+            "此优惠目前不可用",
+            "您不符合条件",
+            # Chinese Traditional
+            "這項優惠目前無法使用",
+            "您不符合資格",
+            # Polish
+            "Oferta niedostępna",
+            "Nie kwalifikujesz się",
+            # Romanian
+            "Oferta nu este disponibilă",
+            "Nu ești eligibil",
+            "Această ofertă nu este disponibilă",
+            # German
+            "Die Aktion ist nicht verfügbar",
+            "Dieses Angebot ist nicht verfügbar",
+            "Sie sind nicht berechtigt",
+            # Italian
+            "L'offerta non è disponibile",
+            "Non sei idoneo",
+            # Hungarian
+            "Ez az ajánlat nem áll rendelkezésre",
+            "Nem jogosult",
+            # Czech
+            "Tato nabídka není k dispozici",
+            "Nemáte nárok",
+            # Turkish
+            "Bu teklif kullanılamıyor",
+            "Uygun değilsiniz",
+            # Japanese
+            "このオファーは利用できません",
+            "対象外です",
+            # Korean
+            "이 혜택은 이용할 수 없습니다",
+            "자격이 없습니다",
+            # Thai
+            "ข้อเสนอนี้ไม่พร้อมใช้งาน",
+            # Russian
+            "Это предложение недоступно",
+            # Arabic
+            "هذا العرض غير متاح",
         ]
-        
+
         # Phrases indicating the account is already subscribed/verified
         subscribed_phrases = [
+            # English
             "You're already subscribed",
+            "Already subscribed",
+            "manage your plan",
+            "Your plan",
+            # Vietnamese
             "Bạn đã đăng ký",
-            "已订阅", 
-            "Ya estás suscrito"
+            "Đã đăng ký",
+            # Chinese
+            "已订阅",
+            "您已訂閱",
+            "管理方案",
+            # Spanish
+            "Ya estás suscrito",
+            "Administrar tu plan",
+            # French
+            "Vous êtes déjà abonné",
+            # Portuguese
+            "Você já está inscrito",
+            # Indonesian
+            "Anda sudah berlangganan",
+            # German
+            "Sie haben bereits ein Abo",
+            # Japanese
+            "すでに登録されています",
+            # Korean
+            "이미 구독 중입니다",
+            # Thai
+            "คุณสมัครสมาชิกแล้ว",
+            # Russian
+            "Вы уже подписаны",
         ]
-        
+
         # Phrases indicating verified but not bound ("Get student offer")
         verified_unbound_phrases = [
+            # English
             "Get student offer",
+            "Claim your offer",
+            "Start your free trial",
+            # Vietnamese
             "Nhận ưu đãi dành cho sinh viên",
+            "Nhận ưu đãi sinh viên",
+            # Spanish
             "Obtener oferta para estudiantes",
+            "Obtén la oferta de estudiante",
+            # Portuguese
             "Obter oferta de estudante",
+            # French
+            "Obtenir l'offre étudiante",
+            # Chinese Simplified
             "获取学生优惠",
+            "领取学生优惠",
+            # Chinese Traditional
             "獲取學生優惠",
+            "領取學生優惠",
+            # Indonesian
             "Dapatkan penawaran pelajar",
+            # German
+            "Studentenangebot nutzen",
+            # Japanese
+            "学生向け特典を利用",
+            # Korean
+            "학생 혜택 받기",
+            # Thai
+            "รับข้อเสนอสำหรับนักศึกษา",
+            # Russian
+            "Получить студенческое предложение",
+            # Italian
+            "Ottieni offerta studenti",
+            # Polish
+            "Skorzystaj z oferty dla studentów",
+            # Turkish
+            "Öğrenci teklifini al",
         ]
 
         try:
             start_time = time.time()
-            # Polling loop for 10 seconds (User requested strict 10s timeout)
-            print("Checking for eligibility (max 10s)...")
-            
-            while time.time() - start_time < 10:
+            # 使用配置化的超时时间
+            status_check_timeout = ConfigManager.get("timeouts.status_check", 20)
+            print(f"Checking for eligibility (max {status_check_timeout}s)...")
+
+            while time.time() - start_time < status_check_timeout:
                 # 1. Check for "Already Subscribed" phrases
                 is_subscribed = False
                 for phrase in subscribed_phrases:
@@ -343,7 +518,7 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                     print(f"Saved to ineligible file")
                     return False, f"无资格 ({reason})"
                 else:
-                    reason = "Timeout (10s allowed)"
+                    reason = f"Timeout ({status_check_timeout}s allowed)"
                     print(f"Account timed out: {reason}")
                     full_acc = account_info.get('email', '')
                     if 'password' in account_info: full_acc += f"----{account_info['password']}"

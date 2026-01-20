@@ -15,7 +15,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QSplitter,
-    QAbstractItemView, QSpinBox, QToolBox
+    QAbstractItemView, QSpinBox, QToolBox, QProgressBar, QDialog,
+    QFormLayout, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -26,8 +27,11 @@ from ix_window import (
 from run_playwright_google import process_browser
 from sheerid_verifier import SheerIDVerifier
 from sheerid_gui import SheerIDWindow
+from config_ui import ConfigManagerWidget
 import re
 from web_admin.server import run_server
+from core.config_manager import ConfigManager
+from core.retry_helper import FailedTaskQueue
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -109,18 +113,33 @@ class WorkerThread(QThread):
     """通用后台工作线程"""
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(dict)  # result data
+    progress_signal = pyqtSignal(int, int, float, float)  # current, total, eta_seconds, speed
 
     def __init__(self, task_type, **kwargs):
         super().__init__()
         self.task_type = task_type
         self.kwargs = kwargs
         self.is_running = True
+        self.start_time = None
+        self.processed_count = 0
 
     def stop(self):
         self.is_running = False
 
     def log(self, message):
         self.log_signal.emit(message)
+
+    def emit_progress(self, current, total):
+        """发送进度信号"""
+        if self.start_time is None:
+            self.start_time = time.time()
+
+        elapsed = time.time() - self.start_time
+        speed = current / elapsed if elapsed > 0 else 0  # 每秒处理数
+        remaining = total - current
+        eta = remaining / speed if speed > 0 else 0
+
+        self.progress_signal.emit(current, total, eta, speed * 60)  # speed 转换为每分钟
 
     def msleep(self, ms):
         """可中断的sleep"""
@@ -176,21 +195,27 @@ class WorkerThread(QThread):
                 future_to_id[future] = bid
             
             finished_tasks = 0
+            total_tasks = len(ids_to_process)
             for future in as_completed(future_to_id):
                 if not self.is_running:
                     self.log('[用户操作] 任务已停止 (等待当前线程完成)')
                     executor.shutdown(wait=False, cancel_futures=True)
                     break
-                
+
                 bid = future_to_id[future]
                 finished_tasks += 1
+
+                # 发送进度信号
+                self.emit_progress(finished_tasks, total_tasks)
+
                 try:
                     success, msg = future.result()
+                    pct = int(finished_tasks / total_tasks * 100)
                     if success:
-                        self.log(f"[成功] ({finished_tasks}/{len(ids_to_process)}) {bid}: {msg}")
+                        self.log(f"[成功] ({finished_tasks}/{total_tasks} - {pct}%) {bid}: {msg}")
                         success_count += 1
                     else:
-                        self.log(f"[失败] ({finished_tasks}/{len(ids_to_process)}) {bid}: {msg}")
+                        self.log(f"[失败] ({finished_tasks}/{total_tasks} - {pct}%) {bid}: {msg}")
                         
                     # Stats Logic
                     if "Verified Link" in msg or "Get Offer" in msg or "Offer Ready" in msg:
@@ -203,12 +228,21 @@ class WorkerThread(QThread):
                         stats['ineligible'] += 1
                     elif "超时" in msg or "Timeout" in msg:
                         stats['timeout'] += 1
+                        # 记录失败任务
+                        FailedTaskQueue.add(bid, 'sheerlink', {'msg': msg})
                     else:
                         stats['error'] += 1
-                        
+                        # 记录失败任务
+                        FailedTaskQueue.add(bid, 'sheerlink', {'msg': msg})
+
                 except Exception as e:
-                    self.log(f"[异常] ({finished_tasks}/{len(ids_to_process)}) {bid}: {e}")
+                    self.log(f"[异常] ({finished_tasks}/{total_tasks}) {bid}: {e}")
                     stats['error'] += 1
+                    # 记录失败任务
+                    FailedTaskQueue.add(bid, 'sheerlink', {'error': str(e)})
+
+        # 保存失败任务队列
+        FailedTaskQueue.save()
 
         # Final Report
         summary_msg = (
@@ -535,7 +569,10 @@ class WorkerThread(QThread):
 class BrowserWindowCreatorGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        
+
+        # 加载配置
+        self.config = ConfigManager.load()
+
         # 设置窗口图标
         try:
             icon_path = resource_path("beta-1.svg")
@@ -547,6 +584,9 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.ensure_data_files()
         self.worker_thread = None
         self.init_ui()
+
+        # 加载保存的配置到UI
+        self.load_config_to_ui()
 
     def ensure_data_files(self):
         """Ensure necessary data files exist"""
@@ -689,7 +729,33 @@ class BrowserWindowCreatorGUI(QMainWindow):
         tg_layout.addStretch()
         tg_page.setLayout(tg_layout)
         self.toolbox.addItem(tg_page, "Telegram 专区")
-        
+
+        # --- 配置管理分区 ---
+        config_page = QWidget()
+        config_layout = QVBoxLayout()
+        config_layout.setContentsMargins(5, 10, 5, 10)
+
+        self.btn_config_manager = QPushButton("⚙️ 打开配置管理")
+        self.btn_config_manager.setFixedHeight(40)
+        self.btn_config_manager.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_config_manager.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #607D8B;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #455A64; }
+        """)
+        self.btn_config_manager.clicked.connect(self.action_open_config_manager)
+        config_layout.addWidget(self.btn_config_manager)
+
+        config_layout.addStretch()
+        config_page.setLayout(config_layout)
+        self.toolbox.addItem(config_page, "配置管理")
+
         # 默认展开谷歌
         self.toolbox.setCurrentIndex(0)
 
@@ -755,7 +821,8 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.thread_spinbox.setStyleSheet("font-size: 14px; font-weight: bold; color: #E91E63;")
         self.thread_spinbox.setToolTip("所有多线程任务的并发数量 (1-50)")
         top_bar_layout.addWidget(self.thread_spinbox)
-        
+
+
         left_layout.addLayout(top_bar_layout)
         
         # 2. 配置区域
@@ -860,6 +927,13 @@ class BrowserWindowCreatorGUI(QMainWindow):
         list_action_layout.addWidget(self.btn_2fa)
         list_action_layout.addWidget(self.select_all_checkbox)
         list_action_layout.addStretch()
+
+        # 继续失败任务按钮
+        self.btn_retry_failed = QPushButton("🔄 继续失败任务")
+        self.btn_retry_failed.setStyleSheet("color: #FF5722; font-weight: bold;")
+        self.btn_retry_failed.clicked.connect(self.retry_failed_tasks)
+        list_action_layout.addWidget(self.btn_retry_failed)
+
         list_action_layout.addWidget(self.open_btn)
         list_action_layout.addWidget(self.delete_btn)
         list_layout.addLayout(list_action_layout)
@@ -890,12 +964,37 @@ class BrowserWindowCreatorGUI(QMainWindow):
         log_label = QLabel("运行状态日志")
         log_label.setFont(title_font)
         right_layout.addWidget(log_label)
-        
+
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 5px;
+                text-align: center;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: #4CAF50;
+                border-radius: 4px;
+            }
+        """)
+        right_layout.addWidget(self.progress_bar)
+
+        # 进度信息标签
+        self.progress_label = QLabel("就绪")
+        self.progress_label.setStyleSheet("color: #666; font-size: 12px;")
+        right_layout.addWidget(self.progress_label)
+
         self.status_text = QTextEdit()
         self.status_text.setReadOnly(True)
         self.status_text.setStyleSheet("background-color: #f5f5f5;")
         right_layout.addWidget(self.status_text)
-        
+
         # 添加清除日志按钮
         clear_log_btn = QPushButton("清除日志")
         clear_log_btn.clicked.connect(self.status_text.clear)
@@ -909,16 +1008,94 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.check_files()
 
     def check_files(self):
-        """检查文件是否存在并更新UI"""
+        """检查文件是否存在并验证格式"""
         accounts_exists = os.path.exists('accounts.txt')
         proxies_exists = os.path.exists('proxies.txt')
-        
+
+        # 检查 accounts.txt
         if not accounts_exists:
             self.accounts_label.setText("❌ accounts.txt 缺失")
             self.accounts_label.setStyleSheet("color: red;")
+            self.accounts_label.setToolTip("请创建 accounts.txt 文件\n格式: 邮箱----密码----辅助邮箱----2FA密钥")
+        else:
+            # 验证格式
+            valid_count, invalid_count, errors = self._validate_accounts_file('accounts.txt')
+            if invalid_count > 0:
+                self.accounts_label.setText(f"⚠️ accounts.txt ({valid_count}有效/{invalid_count}无效)")
+                self.accounts_label.setStyleSheet("color: orange;")
+                error_tip = "格式错误的行:\n" + "\n".join(errors[:5])
+                if len(errors) > 5:
+                    error_tip += f"\n... 还有 {len(errors) - 5} 处错误"
+                self.accounts_label.setToolTip(error_tip)
+            else:
+                self.accounts_label.setText(f"✅ accounts.txt ({valid_count}个账号)")
+                self.accounts_label.setStyleSheet("color: green;")
+                self.accounts_label.setToolTip("格式正确: 邮箱----密码----辅助邮箱----2FA密钥")
+
+        # 检查 proxies.txt
         if not proxies_exists:
             self.proxies_label.setText("⚠️ proxies.txt 未找到")
             self.proxies_label.setStyleSheet("color: orange;")
+            self.proxies_label.setToolTip("可选文件，不影响基本功能\n格式: host:port:user:pass 或 host:port")
+        else:
+            proxy_count = self._count_valid_proxies('proxies.txt')
+            if proxy_count > 0:
+                self.proxies_label.setText(f"✅ proxies.txt ({proxy_count}个代理)")
+                self.proxies_label.setStyleSheet("color: green;")
+            else:
+                self.proxies_label.setText("⚠️ proxies.txt (空或格式错误)")
+                self.proxies_label.setStyleSheet("color: orange;")
+
+    def _validate_accounts_file(self, file_path: str) -> tuple:
+        """
+        验证账号文件格式
+
+        Returns:
+            (valid_count, invalid_count, error_messages)
+        """
+        valid = 0
+        invalid = 0
+        errors = []
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+
+                    parts = line.split('----')
+                    if len(parts) >= 2:
+                        # 至少需要邮箱和密码
+                        email = parts[0].strip()
+                        if '@' in email and '.' in email:
+                            valid += 1
+                        else:
+                            invalid += 1
+                            errors.append(f"行{i}: 邮箱格式无效 '{email[:20]}...'")
+                    else:
+                        invalid += 1
+                        errors.append(f"行{i}: 分隔符不足 (需要 ---- 分隔)")
+        except Exception as e:
+            errors.append(f"读取文件错误: {e}")
+
+        return valid, invalid, errors
+
+    def _count_valid_proxies(self, file_path: str) -> int:
+        """统计有效代理数量"""
+        count = 0
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        # 支持 host:port 或 host:port:user:pass 格式
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            count += 1
+        except Exception:
+            pass
+        return count
 
     def log(self, message):
         """添加日志"""
@@ -1024,10 +1201,10 @@ class BrowserWindowCreatorGUI(QMainWindow):
         """打开一键全自动处理窗口"""
         try:
             from auto_all_in_one_gui import AutoAllInOneWindow
-            
+
             if not hasattr(self, 'auto_all_window') or self.auto_all_window is None:
                 self.auto_all_window = AutoAllInOneWindow()
-            
+
             self.auto_all_window.show()
             self.auto_all_window.raise_()
             self.auto_all_window.activateWindow()
@@ -1035,7 +1212,27 @@ class BrowserWindowCreatorGUI(QMainWindow):
             QMessageBox.warning(self, "错误", f"无法打开全自动处理窗口: {e}")
             import traceback
             traceback.print_exc()
-        
+
+    def action_open_config_manager(self):
+        """打开配置管理窗口"""
+        try:
+            if not hasattr(self, 'config_manager_dialog') or self.config_manager_dialog is None:
+                self.config_manager_dialog = QDialog(self)
+                self.config_manager_dialog.setWindowTitle("配置管理")
+                self.config_manager_dialog.setMinimumSize(900, 600)
+
+                layout = QVBoxLayout(self.config_manager_dialog)
+                layout.setContentsMargins(0, 0, 0, 0)
+                layout.addWidget(ConfigManagerWidget())
+
+            self.config_manager_dialog.show()
+            self.config_manager_dialog.raise_()
+            self.config_manager_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开配置管理窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
     def open_selected_browsers(self):
         """打开选中的窗口"""
         ids = self.get_selected_browser_ids()
@@ -1119,13 +1316,34 @@ class BrowserWindowCreatorGUI(QMainWindow):
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.warning(self, "提示", "当前有任务正在运行，请稍候...")
             return
-            
+
+        # 重置进度条
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("正在处理...")
+
         self.worker_thread = WorkerThread(task_type, **kwargs)
         self.worker_thread.log_signal.connect(self.log)
         self.worker_thread.finished_signal.connect(self.on_worker_finished)
+        self.worker_thread.progress_signal.connect(self.update_progress)
         self.worker_thread.start()
-        
+
         self.update_ui_state(running=True)
+
+    def update_progress(self, current, total, eta, speed):
+        """更新进度条和进度信息"""
+        if total > 0:
+            pct = int(current / total * 100)
+            self.progress_bar.setValue(pct)
+
+            # 格式化 ETA
+            if eta > 60:
+                eta_str = f"{int(eta / 60)}分{int(eta % 60)}秒"
+            else:
+                eta_str = f"{int(eta)}秒"
+
+            self.progress_label.setText(
+                f"进度: {current}/{total} ({pct}%) | 速度: {speed:.1f}个/分钟 | 剩余: 约{eta_str}"
+            )
 
     def update_ui_state(self, running):
         """更新UI按钮状态"""
@@ -1167,8 +1385,13 @@ class BrowserWindowCreatorGUI(QMainWindow):
     def on_worker_finished(self, result):
         """任务结束回调"""
         self.update_ui_state(running=False)
+
+        # 完成进度条
+        self.progress_bar.setValue(100)
+        self.progress_label.setText("任务完成")
+
         self.log(f"任务已结束")
-        
+
         # 如果是删除操作，完成后刷新列表
         if result.get('type') == 'delete':
             self.refresh_browser_list()
@@ -1212,6 +1435,79 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_verify_sheerid.setEnabled(not running)
         self.stop_btn.setEnabled(running)
         self.refresh_btn.setEnabled(not running)
+        self.btn_retry_failed.setEnabled(not running)
+
+    def retry_failed_tasks(self):
+        """继续执行失败的任务"""
+        failed_count = FailedTaskQueue.count('sheerlink')
+        if failed_count == 0:
+            QMessageBox.information(self, "提示", "没有失败的任务需要重试")
+            return
+
+        failed_ids = FailedTaskQueue.get_ids('sheerlink')
+
+        reply = QMessageBox.question(
+            self,
+            "继续失败任务",
+            f"发现 {failed_count} 个失败的任务，是否重新执行？\n\n"
+            f"任务ID: {', '.join(failed_ids[:5])}{'...' if len(failed_ids) > 5 else ''}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # 清空失败队列
+            FailedTaskQueue.clear('sheerlink')
+            FailedTaskQueue.save()
+
+            # 重新执行
+            thread_count = self.thread_spinbox.value()
+            self.start_worker_thread('sheerlink', ids=failed_ids, thread_count=thread_count)
+
+    def load_config_to_ui(self):
+        """从配置加载到UI控件"""
+        try:
+            # 模板ID
+            template_id = ConfigManager.get("last_used_template_id", "")
+            if template_id:
+                self.template_id_input.setText(str(template_id))
+
+            # 窗口前缀
+            prefix = ConfigManager.get("window_name_prefix", "")
+            if prefix:
+                self.name_prefix_input.setText(prefix)
+
+            # 并发数
+            thread_count = ConfigManager.get("default_thread_count", 3)
+            self.thread_spinbox.setValue(thread_count)
+
+            # 平台URL
+            platform_url = ConfigManager.get("platform_url", "")
+            if platform_url:
+                self.platform_url_input.setText(platform_url)
+
+            # 额外URL
+            extra_url = ConfigManager.get("extra_url", "")
+            if extra_url:
+                self.extra_url_input.setText(extra_url)
+
+        except Exception as e:
+            print(f"[Config] 加载配置到UI失败: {e}")
+
+    def save_config_from_ui(self):
+        """从UI控件保存到配置"""
+        try:
+            ConfigManager.set("last_used_template_id", self.template_id_input.text().strip())
+            ConfigManager.set("window_name_prefix", self.name_prefix_input.text().strip())
+            ConfigManager.set("default_thread_count", self.thread_spinbox.value())
+            ConfigManager.set("platform_url", self.platform_url_input.text().strip())
+            ConfigManager.set("extra_url", self.extra_url_input.text().strip())
+        except Exception as e:
+            print(f"[Config] 保存配置失败: {e}")
+
+    def closeEvent(self, event):
+        """窗口关闭时保存配置"""
+        self.save_config_from_ui()
+        event.accept()
 
 
 def main():

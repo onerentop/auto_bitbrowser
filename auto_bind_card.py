@@ -7,14 +7,16 @@ import pyotp
 from playwright.async_api import async_playwright, Page
 from ix_api import openBrowser, closeBrowser
 from account_manager import AccountManager
+from core.config_manager import ConfigManager
+from data_store import get_data_store
 
-# 卡片配置文件路径
+# 卡片配置文件路径（保留作为兜底）
 CARDS_FILE = 'cards.txt'
 
 # 当前卡片索引（用于轮换）
 _current_card_index = 0
 
-# 默认测试卡信息（当 cards.txt 不存在时使用）
+# 默认测试卡信息（当无其他数据源时使用）
 DEFAULT_CARD = {
     'number': '5481087170529907',
     'exp_month': '01',
@@ -27,21 +29,31 @@ DEFAULT_CARD = {
 
 def read_cards_from_file(file_path: str = CARDS_FILE) -> list:
     """
-    从文件读取卡片信息
+    从 DataStore 读取卡片信息（优先），如果为空则尝试从文件读取
 
     Args:
-        file_path: 卡片配置文件路径
+        file_path: 卡片配置文件路径（兜底）
 
     Returns:
-        卡片列表 [{'number', 'exp_month', 'exp_year', 'cvv'}, ...]
+        卡片列表 [{'number', 'exp_month', 'exp_year', 'cvv', 'name', 'zip_code'}, ...]
     """
-    cards = []
+    # 优先从 DataStore 读取
+    try:
+        data_store = get_data_store()
+        cards = data_store.get_cards_as_dicts()
+        if cards:
+            print(f"✅ 从 DataStore 读取到 {len(cards)} 张卡片")
+            return cards
+    except Exception as e:
+        print(f"⚠️ 从 DataStore 读取卡片失败: {e}")
 
+    # 兜底：从文件读取
     if not os.path.exists(file_path):
         print(f"⚠️ 卡片文件 {file_path} 不存在，使用默认卡片")
         return [DEFAULT_CARD]
 
     try:
+        cards = []
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
@@ -56,8 +68,8 @@ def read_cards_from_file(file_path: str = CARDS_FILE) -> list:
                         'exp_month': parts[1].strip(),
                         'exp_year': parts[2].strip(),
                         'cvv': parts[3].strip(),
-                        'name': parts[4].strip() if len(parts) >= 5 else 'John Smith',  # 持卡人姓名
-                        'zip_code': parts[5].strip() if len(parts) >= 6 else '10001'    # 账单邮编
+                        'name': parts[4].strip() if len(parts) >= 5 else 'John Smith',
+                        'zip_code': parts[5].strip() if len(parts) >= 6 else '10001'
                     }
                     cards.append(card)
                 else:
@@ -269,10 +281,11 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
             
             if not clicked:
                 print("⚠️ 未找到 'Get student offer' 按钮，可能已在付款页面")
-            
-            # 等待付款页面和 iframe 加载
-            print("等待付款页面和 iframe 加载...")
-            await asyncio.sleep(8)  # 增加延迟到5秒
+
+            # 等待付款页面和 iframe 加载 (使用配置化延迟)
+            after_offer_delay = ConfigManager.get("delays.after_offer", 8)
+            print(f"等待付款页面和 iframe 加载 ({after_offer_delay}秒)...")
+            await asyncio.sleep(after_offer_delay)
             await page.screenshot(path="step2_after_get_offer.png")
             print("截图已保存: step2_after_get_offer.png")
             
@@ -467,14 +480,15 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
         # Step 2: 切换到 iframe（付款表单在 iframe 中）
         print("\n检测并切换到 iframe...")
         try:
-            # 等待 iframe 加载
-            await asyncio.sleep(10)
+            # 等待 iframe 加载 (使用配置化延迟)
+            iframe_wait = ConfigManager.get("timeouts.iframe_wait", 15)
+            await asyncio.sleep(iframe_wait)
             iframe_locator = page.frame_locator('iframe[src*="tokenized.play.google.com"]')
             print("✅ 找到 tokenized.play.google.com iframe，已切换上下文")
-            
+
             # 等待 iframe 内部文档加载
             print("等待 iframe 内部文档加载...")
-            await asyncio.sleep(10)  # 让内部 #document 完全加载
+            await asyncio.sleep(iframe_wait)  # 使用同样的配置化延迟
             
         except Exception as e:
             print(f"❌ 未找到 iframe: {e}")
@@ -483,7 +497,8 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
         # Step 3: 在 iframe 中点击 "Add card"
         print("\n在 iframe 中等待并点击 'Add card' 按钮...")
         try:
-            await asyncio.sleep(10)  # 等待元素可点击
+            add_card_delay = ConfigManager.get("delays.after_add_card", 10)
+            await asyncio.sleep(add_card_delay)  # 等待元素可点击
             
             # 在 iframe 中查找 Add card
             selectors = [
@@ -510,10 +525,10 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
             
             if not clicked:
                 print("⚠️ 在 iframe 中未找到 'Add card'，尝试直接查找输入框...")
-            
+
             # 等待表单加载
             print("等待卡片输入表单加载...")
-            await asyncio.sleep(10)
+            await asyncio.sleep(add_card_delay)  # 使用配置化延迟
             await page.screenshot(path="step3_card_form_in_iframe.png")
             print("截图已保存: step3_card_form_in_iframe.png")
             
@@ -550,9 +565,9 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
                 else:
                     # 更新 iframe_locator 为内部的 iframe
                     iframe_locator = inner_iframe
-                    
+
                     print("等待第二层 iframe 加载...")
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(add_card_delay)  # 使用配置化延迟
                 
             except Exception as e:
                 print(f"⚠️ 查找第二层 iframe 时出错: {e}")
@@ -563,7 +578,7 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
         
         # Step 4: 填写卡号（在 iframe 中）
         print(f"\n填写卡号: {card_info['number']}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(add_card_delay)  # 使用配置化延迟
         
         try:
             # 简化策略：iframe 中有 3 个输入框，按顺序分别是：
@@ -750,7 +765,8 @@ async def auto_bind_card(page: Page, card_info: dict = None, account_info: dict 
         
         # Step 7: 点击订阅按钮完成流程
         print("\n等待订阅页面加载...")
-        await asyncio.sleep(18)  # 增加延迟到18秒，确保订阅弹窗完全显示
+        after_save_delay = ConfigManager.get("delays.after_save", 18)
+        await asyncio.sleep(after_save_delay)  # 使用配置化延迟
         await page.screenshot(path="step7_before_subscribe.png")
         print("截图已保存: step7_before_subscribe.png")
         
@@ -930,7 +946,9 @@ async def test_bind_card_with_browser(browser_id: str, account_info: dict = None
     async with async_playwright() as playwright:
         try:
             chromium = playwright.chromium
-            browser = await chromium.connect_over_cdp(ws_endpoint)
+            # 使用配置化的超时时间连接 CDP
+            cdp_timeout = ConfigManager.get("timeouts.page_load", 30) * 1000  # 转换为毫秒
+            browser = await chromium.connect_over_cdp(ws_endpoint, timeout=cdp_timeout)
             context = browser.contexts[0]
             page = context.pages[0] if context.pages else await context.new_page()
             

@@ -1,31 +1,13 @@
 from database import DBManager
+from core.data_parser import parse_account_line
 
 DBManager.init_db()
 
 class AccountManager:
     @staticmethod
     def _parse(line):
-        parts = [p.strip() for p in line.split('----') if p.strip()]
-        link = None
-        email = None
-        pwd = None
-        rec = None
-        sec = None
-        
-        # Check URL
-        if parts and "http" in parts[0]:
-            link = parts[0]
-            parts = parts[1:]
-            
-        # Find email
-        for i, p in enumerate(parts):
-            if '@' in p and '.' in p:
-                email = p
-                if i+1 < len(parts): pwd = parts[i+1]
-                if i+2 < len(parts): rec = parts[i+2]
-                if i+3 < len(parts): sec = parts[i+3]
-                break
-        
+        """使用统一解析器解析账号行"""
+        email, pwd, rec, sec, link = parse_account_line(line)
         return email, pwd, rec, sec, link
 
     @staticmethod
@@ -38,6 +20,28 @@ class AccountManager:
             DBManager.export_to_files()
         else:
             print(f"[AM] save_link: 无法解析邮箱，跳过")
+
+    @staticmethod
+    def move_to_pending(line):
+        """移动到 pending 状态（待处理）"""
+        print(f"[AM] move_to_pending 调用")
+        email, pwd, rec, sec, link = AccountManager._parse(line)
+        if email:
+            DBManager.upsert_account(email, pwd, rec, sec, link, status='pending')
+            DBManager.export_to_files()
+        else:
+            print(f"[AM] move_to_pending: 无法解析邮箱，跳过")
+
+    @staticmethod
+    def move_to_running(line):
+        """移动到 running 状态（处理中）"""
+        print(f"[AM] move_to_running 调用")
+        email, pwd, rec, sec, link = AccountManager._parse(line)
+        if email:
+            # running 状态不导出到文件，仅更新数据库
+            DBManager.upsert_account(email, pwd, rec, sec, link, status='running')
+        else:
+            print(f"[AM] move_to_running: 无法解析邮箱，跳过")
 
     @staticmethod
     def move_to_verified(line):

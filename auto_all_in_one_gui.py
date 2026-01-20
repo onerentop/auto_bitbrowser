@@ -16,6 +16,7 @@ from ix_api import openBrowser, closeBrowser
 from ix_window import get_browser_info, get_browser_list
 from database import DBManager
 from sheerid_verifier import SheerIDVerifier
+from data_store import get_data_store
 
 class AutoAllInOneWorker(QThread):
     """一键全自动工作线程"""
@@ -155,7 +156,10 @@ class AutoAllInOneWorker(QThread):
             async with async_playwright() as playwright:
                 try:
                     chromium = playwright.chromium
-                    browser = await chromium.connect_over_cdp(ws_endpoint)
+                    # 使用配置化的超时时间连接 CDP
+                    from core.config_manager import ConfigManager
+                    cdp_timeout = ConfigManager.get("timeouts.page_load", 30) * 1000
+                    browser = await chromium.connect_over_cdp(ws_endpoint, timeout=cdp_timeout)
                     context = browser.contexts[0]
                     page = context.pages[0] if context.pages else await context.new_page()
                     
@@ -479,55 +483,50 @@ class AutoAllInOneWindow(QWidget):
         self.setLayout(layout)
     
     def load_cards(self):
-        """加载 cards.txt"""
-        base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-        cards_path = os.path.join(base_path, "cards.txt")
-        
+        """从 DataStore 加载卡片"""
         self.cards = []
-        
-        if not os.path.exists(cards_path):
-            self.card_count_label.setText("卡片: 0")
-            return
-        
-        try:
-            with open(cards_path, 'r', encoding='utf-8') as f:
-                lines = [l.strip() for l in f.readlines() if l.strip() and not l.startswith('#')]
-            
-            for line in lines:
-                if line.startswith('分隔符='):
-                    continue
-                # 支持两种分隔符: ---- 或 空格
-                if '----' in line:
-                    parts = line.split('----')
-                else:
-                    parts = line.split()
-                if len(parts) >= 4:
-                    # 6字段格式: 卡号----月份----年份----CVV----姓名----邮编
-                    # 5字段格式(旧): 卡号----月份----年份----CVV----邮编
-                    if len(parts) >= 6:
-                        name = parts[4].strip()
-                        zip_code = parts[5].strip()
-                    elif len(parts) >= 5:
-                        name = 'John Smith'
-                        zip_code = parts[4].strip()
-                    else:
-                        name = 'John Smith'
-                        zip_code = '10001'
 
-                    card = {
-                        'number': parts[0].strip(),
-                        'exp_month': parts[1].strip(),
-                        'exp_year': parts[2].strip(),
-                        'cvv': parts[3].strip(),
-                        'name': name,
-                        'zip_code': zip_code
-                    }
-                    self.cards.append(card)
-            
+        try:
+            data_store = get_data_store()
+            data_store.reload()  # 刷新数据
+            cards = data_store.get_cards_as_dicts()
+
+            if not cards:
+                self.card_count_label.setText("卡片: 0")
+                self.log("⚠️ 未找到卡片数据，请在配置管理中添加卡片")
+                return
+
+            for card in cards:
+                number = card.get("number", "").strip()
+                exp_month = card.get("exp_month", "").strip()
+                exp_year = card.get("exp_year", "").strip()
+                cvv = card.get("cvv", "").strip()
+                name = card.get("name", "John Smith").strip()
+                zip_code = card.get("zip_code", "10001").strip()
+
+                # 简单校验
+                if not number or len(number) < 4:
+                    continue
+
+                if len(exp_month) == 1:
+                    exp_month = f"0{exp_month}"
+                if len(exp_year) == 4:
+                    exp_year = exp_year[-2:]
+
+                self.cards.append({
+                    'number': number,
+                    'exp_month': exp_month,
+                    'exp_year': exp_year,
+                    'cvv': cvv,
+                    'name': name,
+                    'zip_code': zip_code
+                })
+
             self.card_count_label.setText(f"卡片: {len(self.cards)}")
             self.log(f"✅ 加载了 {len(self.cards)} 张卡片")
-            
+
         except Exception as e:
+            self.card_count_label.setText("卡片: 0")
             self.log(f"❌ 加载卡片失败: {e}")
     
     def load_accounts(self):
