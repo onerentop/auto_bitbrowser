@@ -73,3 +73,4 @@ desktop.ini
 # Exclude backup files
 *.txtbak
 *.bak
+failed_tasks.json
