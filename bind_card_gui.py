@@ -303,6 +303,15 @@ class BindCardWindow(QDialog):
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
 
+        # 卡片信息显示区域（只读，来自配置管理）
+        card_info_layout = QHBoxLayout()
+        card_info_layout.addWidget(QLabel("卡片来源:"))
+        self.card_source_label = QLabel("配置管理 → 卡片管理")
+        self.card_source_label.setStyleSheet("color: #666; font-style: italic;")
+        card_info_layout.addWidget(self.card_source_label)
+        card_info_layout.addStretch()
+        layout.addLayout(card_info_layout)
+
         info_layout = QHBoxLayout()
         self.card_count_label = QLabel("卡片: 0")
         self.account_count_label = QLabel("账号: 0")
@@ -377,16 +386,18 @@ class BindCardWindow(QDialog):
                 return
 
             for card in cards:
-                number = card.get("number", "").strip()
+                # 清理卡号：移除空格、连字符等非数字字符
+                raw_number = card.get("number", "").strip()
+                number = "".join(c for c in raw_number if c.isdigit())
                 exp_month = card.get("exp_month", "").strip()
                 exp_year = card.get("exp_year", "").strip()
                 cvv = card.get("cvv", "").strip()
                 name = card.get("name", "John Smith").strip()
                 zip_code = card.get("zip_code", "10001").strip()
 
-                # 基础校验
-                if not number or not number.isdigit() or not (13 <= len(number) <= 19):
-                    self.log(f"⚠️ 跳过无效卡号: {_mask_card_number(number)}")
+                # 基础校验（number 已清理为纯数字）
+                if not number or not (13 <= len(number) <= 19):
+                    self.log(f"⚠️ 跳过无效卡号: {_mask_card_number(raw_number)}")
                     continue
                 if not exp_month.isdigit() or not (1 <= _safe_int(exp_month, 0) <= 12):
                     self.log(f"⚠️ 跳过无效月份: {exp_month} / {_mask_card_number(number)}")
@@ -526,7 +537,7 @@ class BindCardWindow(QDialog):
             return
 
         if not self.cards:
-            QMessageBox.warning(self, "提示", "cards.txt 没有可用卡片")
+            QMessageBox.warning(self, "提示", "没有可用卡片，请在「配置管理 → 卡片管理」中添加")
             return
 
         thread_count = self.thread_count_spin.value()

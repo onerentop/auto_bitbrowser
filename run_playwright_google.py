@@ -5,6 +5,7 @@ import re
 import os
 import sys
 import threading
+import random
 from playwright.async_api import async_playwright, Playwright
 from ix_api import openBrowser, closeBrowser
 from ix_window import get_browser_list, get_browser_info
@@ -19,6 +20,77 @@ def get_base_path():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
+
+
+# ============ 人类行为模拟函数 ============
+
+async def human_delay(min_ms=500, max_ms=2000):
+    """随机延迟，模拟人类思考时间"""
+    delay = random.randint(min_ms, max_ms) / 1000
+    await asyncio.sleep(delay)
+
+
+async def human_type(page, selector, text, min_delay=50, max_delay=150):
+    """模拟人类打字，逐字符输入带随机延迟"""
+    element = await page.wait_for_selector(selector, state='visible', timeout=10000)
+    await element.click()
+    await human_delay(200, 500)
+
+    for char in text:
+        await page.keyboard.type(char, delay=random.randint(min_delay, max_delay))
+        # 偶尔暂停一下，模拟思考
+        if random.random() < 0.1:
+            await human_delay(200, 500)
+
+
+async def human_move_and_click(page, selector):
+    """模拟人类移动鼠标并点击"""
+    try:
+        element = await page.wait_for_selector(selector, state='visible', timeout=5000)
+        if element:
+            # 获取元素位置
+            box = await element.bounding_box()
+            if box:
+                # 添加随机偏移，不要总是点击正中心
+                x = box['x'] + box['width'] / 2 + random.randint(-5, 5)
+                y = box['y'] + box['height'] / 2 + random.randint(-3, 3)
+
+                # 移动鼠标（模拟真实轨迹）
+                await page.mouse.move(x, y, steps=random.randint(5, 15))
+                await human_delay(100, 300)
+                await page.mouse.click(x, y)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+async def random_mouse_movement(page):
+    """随机移动鼠标，模拟人类浏览行为"""
+    try:
+        viewport = page.viewport_size
+        if viewport:
+            for _ in range(random.randint(2, 4)):
+                x = random.randint(100, viewport['width'] - 100)
+                y = random.randint(100, viewport['height'] - 100)
+                await page.mouse.move(x, y, steps=random.randint(10, 25))
+                await human_delay(200, 600)
+    except Exception:
+        pass
+
+
+async def random_scroll(page):
+    """随机滚动页面"""
+    try:
+        scroll_amount = random.randint(100, 300)
+        direction = random.choice([1, -1])
+        await page.mouse.wheel(0, scroll_amount * direction)
+        await human_delay(300, 800)
+    except Exception:
+        pass
+
+
+# ============ 主要自动化逻辑 ============
 
 # Helper function for automation logic
 async def _automate_login_and_extract(playwright: Playwright, browser_id: str, account_info: dict, ws_endpoint: str, log_callback=None):
@@ -37,13 +109,17 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
         print('Navigating to accounts.google.com...')
         # Retry logic for poor network
         max_retries = 3
-        
+
         # Check if we need to login or if we are already logged in
         # We try to go to accounts.google.com first.
         try:
             await page.goto('https://accounts.google.com', timeout=60000)
         except Exception as e:
             print(f"Initial navigation failed: {e}")
+
+        # === 人类行为模拟：页面加载后随机等待和移动 ===
+        await human_delay(1000, 2500)
+        await random_mouse_movement(page)
 
         # 1. Enter Email (if input exists)
         email = account_info.get('email')
@@ -54,7 +130,10 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
              if email_input:
                  print(f"Entering email: {email}")
                  if log_callback: log_callback(f"正在输入账号: {email}")
-                 await email_input.fill(email)
+
+                 # === 人类行为模拟：使用逐字符输入 ===
+                 await human_type(page, 'input[type="email"]', email)
+                 await human_delay(500, 1200)
 
                  # 改进选择器稳定性：使用多候选选择器
                  next_selectors = [
@@ -67,26 +146,32 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                      'button:has-text("Tiếp theo")',
                  ]
 
+                 # === 人类行为模拟：点击前移动鼠标 ===
                  clicked = False
                  for sel in next_selectors:
                      try:
-                         btn = page.locator(sel).first
-                         if await btn.count() > 0 and await btn.is_visible():
-                             await btn.click()
+                         if await human_move_and_click(page, sel):
                              clicked = True
                              break
                      except:
                          continue
 
                  if not clicked:
+                     await human_delay(300, 600)
                      await page.keyboard.press('Enter')  # 兜底方案
+
+                 # === 人类行为模拟：等待页面加载 ===
+                 await human_delay(1500, 3000)
 
                  # 2. Enter Password
                  print("Waiting for password input...")
                  await page.wait_for_selector('input[type="password"]', state='visible')
                  password = account_info.get('password')
                  print("Entering password...")
-                 await page.fill('input[type="password"]', password)
+
+                 # === 人类行为模拟：使用逐字符输入密码 ===
+                 await human_type(page, 'input[type="password"]', password)
+                 await human_delay(500, 1200)
 
                  # 改进选择器稳定性：密码下一步按钮
                  pwd_next_selectors = [
@@ -98,19 +183,22 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                      'button:has-text("下一步")',
                  ]
 
+                 # === 人类行为模拟：点击前移动鼠标 ===
                  clicked = False
                  for sel in pwd_next_selectors:
                      try:
-                         btn = page.locator(sel).first
-                         if await btn.count() > 0 and await btn.is_visible():
-                             await btn.click()
+                         if await human_move_and_click(page, sel):
                              clicked = True
                              break
                      except:
                          continue
 
                  if not clicked:
+                     await human_delay(300, 600)
                      await page.keyboard.press('Enter')
+
+                 # === 人类行为模拟：登录后等待 ===
+                 await human_delay(2000, 4000)
 
                  # 3. Handle 2FA (TOTP)
                  print("Waiting for 2FA input...")
@@ -123,7 +211,11 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                               totp = pyotp.TOTP(s)
                               code = totp.now()
                               print(f"Generating 2FA code: {code}")
-                              await totp_input.fill(code)
+
+                              # === 人类行为模拟：逐字符输入2FA码 ===
+                              await human_delay(500, 1000)
+                              await human_type(page, 'input[name="totpPin"], input[id="totpPin"], input[type="tel"]', code, min_delay=80, max_delay=200)
+                              await human_delay(500, 1200)
 
                               # 改进选择器稳定性：2FA 下一步按钮
                               totp_next_selectors = [
@@ -137,15 +229,14 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                               clicked = False
                               for sel in totp_next_selectors:
                                   try:
-                                      btn = page.locator(sel).first
-                                      if await btn.count() > 0 and await btn.is_visible():
-                                          await btn.click()
+                                      if await human_move_and_click(page, sel):
                                           clicked = True
                                           break
                                   except:
                                       continue
 
                               if not clicked:
+                                  await human_delay(300, 600)
                                   await page.keyboard.press('Enter')
                           else:
                               print("2FA secret not found in account info!")
@@ -156,7 +247,7 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
              print(f"Login flow might be skipped or failed (maybe already logged in): {e}")
 
         # Wait briefly after login attempt
-        await asyncio.sleep(3)
+        await human_delay(2000, 4000)
 
         # 4. Navigate to Google One AI page
         target_url = "https://one.google.com/ai-student?g1_landing_page=75&utm_source=antigravity&utm_campaign=argon_limit_reached"
@@ -194,10 +285,56 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
 
         # Phrases indicating the offer is not available in various languages
         not_available_phrases = [
-            # English
+            # English - Primary phrases
             "This offer is not available",
+            "This offer isn't available",
             "offer is not available",
+            "offer isn't available",
             "not eligible",
+            "You're not eligible",
+            "You are not eligible",
+            "aren't eligible",
+            "ineligible",
+            "Sorry, this offer",
+            "Sorry, you're not",
+            "Sorry, you are not",
+            "This offer is unavailable",
+            "offer is unavailable",
+            "Offer unavailable",
+            "not available in your",
+            "not available for your",
+            "isn't available in your",
+            "isn't available for your",
+            "This offer cannot be used",
+            "cannot be redeemed",
+            "can't be redeemed",
+            "doesn't qualify",
+            "does not qualify",
+            "don't qualify",
+            "do not qualify",
+            "You don't qualify",
+            "You do not qualify",
+            "not applicable",
+            "This promotion is not available",
+            "promotion is not available",
+            "This deal is not available",
+            "Unfortunately, this offer",
+            "Unfortunately, you",
+            "We're sorry, this offer",
+            "We are sorry, this offer",
+            "offer has expired",
+            "offer is expired",
+            "offer not valid",
+            "not valid for",
+            "Your account doesn't qualify",
+            "Your account does not qualify",
+            "account is not eligible",
+            "account isn't eligible",
+            "region is not supported",
+            "country is not supported",
+            "location is not supported",
+            "not supported in your",
+            "isn't supported in your",
             # Vietnamese
             "Ưu đãi này hiện không dùng được",
             "không đủ điều kiện",
@@ -216,9 +353,31 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
             # Chinese Simplified
             "此优惠目前不可用",
             "您不符合条件",
+            "此优惠不适用于您",
+            "此优惠在您所在的地区不可用",
+            "您没有资格",
+            "无法享受此优惠",
+            "您不符合资格",
+            "此优惠无法使用",
+            "优惠不可用",
+            "不符合享受资格",
+            "您目前不符合",
+            "此促销活动不可用",
+            "很抱歉，此优惠",
+            "此优惠已不可用",
+            "无法使用此优惠",
+            "您的帐号不符合",
+            "此优惠不适用",
+            "无资格",
             # Chinese Traditional
             "這項優惠目前無法使用",
             "您不符合資格",
+            "此優惠不適用於您",
+            "此優惠在您所在的地區不可用",
+            "您沒有資格",
+            "無法享受此優惠",
+            "無法使用此優惠",
+            "此優惠已無法使用",
             # Polish
             "Oferta niedostępna",
             "Nie kwalifikujesz się",
@@ -397,12 +556,26 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                     return True, "已过验证未绑卡 (Get Offer)"
 
                 # 2. Check for "This offer is not available" phrases
+                # 先用 locator 精确匹配
                 for phrase in not_available_phrases:
                     if await page.locator(f'text="{phrase}"').is_visible():
                         print(f"Detected invalid state with phrase: {phrase}")
                         is_invalid = True
                         break
-                
+
+                # 如果精确匹配失败，尝试检查页面文本中是否包含关键短语
+                if not is_invalid:
+                    try:
+                        page_text = await page.inner_text('body')
+                        if page_text:
+                            for phrase in not_available_phrases:
+                                if phrase in page_text:
+                                    print(f"Detected invalid state (body text) with phrase: {phrase}")
+                                    is_invalid = True
+                                    break
+                    except Exception:
+                        pass
+
                 if is_invalid:
                     break
 
@@ -454,7 +627,12 @@ async def _automate_login_and_extract(playwright: Playwright, browser_id: str, a
                                 if "already subscribed" in translated_lower or "manage plan" in translated_lower:
                                     print(f"Detected subscribed state via translation: {translated}")
                                     is_subscribed = True
-                                elif "not available" in translated_lower or "offer is invalid" in translated_lower:
+                                elif any(phrase in translated_lower for phrase in [
+                                    "not available", "offer is invalid", "not eligible",
+                                    "ineligible", "unavailable", "cannot use", "can't use",
+                                    "doesn't qualify", "does not qualify", "not qualify",
+                                    "not applicable", "is not available", "isn't available"
+                                ]):
                                     print(f"Detected invalid state via translation: {translated}")
                                     is_invalid = True
                     except Exception as e:

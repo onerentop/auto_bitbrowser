@@ -55,7 +55,7 @@ class BatchImportDialog(QDialog):
         layout.addWidget(preview_label)
 
         self.preview_table = QTableWidget()
-        self.preview_table.setColumnCount(len(columns) + 1)  # +1 状态列
+        self.preview_table.setColumnCount(len(columns) + 2)  # +2: "#" 列 + "状态" 列
         self.preview_table.setHorizontalHeaderLabels(["#"] + columns + ["状态"])
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -482,8 +482,7 @@ class AccountsTab(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             for row in sorted(rows, reverse=True):
                 email = self.table.item(row, 0).text()
-                # 这里需要添加 delete 方法，暂时用 update status
-                DBManager.update_status(email, 'deleted')
+                DBManager.delete_account(email)
             self.load_data()
 
     def batch_import(self):
@@ -975,6 +974,26 @@ class SettingsTab(QWidget):
         api_group.setLayout(api_layout)
         layout.addWidget(api_group)
 
+        # Gmail IMAP 设置（用于接收验证码）
+        gmail_group = QGroupBox("Gmail 验证码邮箱（替换辅助邮箱功能）")
+        gmail_layout = QFormLayout()
+
+        self.gmail_email_input = QLineEdit()
+        self.gmail_email_input.setPlaceholderText("example@gmail.com")
+        gmail_layout.addRow("Gmail 邮箱:", self.gmail_email_input)
+
+        self.gmail_password_input = QLineEdit()
+        self.gmail_password_input.setPlaceholderText("应用专用密码（非登录密码）")
+        self.gmail_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        gmail_layout.addRow("应用密码:", self.gmail_password_input)
+
+        gmail_hint = QLabel("提示: 需在 Google 账号设置中生成「应用专用密码」")
+        gmail_hint.setStyleSheet("color: #666; font-size: 11px;")
+        gmail_layout.addRow("", gmail_hint)
+
+        gmail_group.setLayout(gmail_layout)
+        layout.addWidget(gmail_group)
+
         # 超时设置
         timeout_group = QGroupBox("超时设置 (秒)")
         timeout_layout = QFormLayout()
@@ -1061,6 +1080,12 @@ class SettingsTab(QWidget):
             api_key = ConfigManager.get("sheerid_api_key", "")
             self.api_key_input.setText(api_key)
 
+            # Gmail IMAP
+            gmail_email = ConfigManager.get("gmail_imap_email", "")
+            gmail_password = ConfigManager.get("gmail_imap_password", "")
+            self.gmail_email_input.setText(gmail_email)
+            self.gmail_password_input.setText(gmail_password)
+
             # Timeouts
             self.page_load_spin.setValue(ConfigManager.get("timeouts.page_load", 30))
             self.status_check_spin.setValue(ConfigManager.get("timeouts.status_check", 20))
@@ -1082,6 +1107,10 @@ class SettingsTab(QWidget):
         try:
             # API
             ConfigManager.set("sheerid_api_key", self.api_key_input.text())
+
+            # Gmail IMAP
+            ConfigManager.set("gmail_imap_email", self.gmail_email_input.text().strip())
+            ConfigManager.set("gmail_imap_password", self.gmail_password_input.text())
 
             # Timeouts
             ConfigManager.set("timeouts.page_load", self.page_load_spin.value())
@@ -1111,6 +1140,8 @@ class SettingsTab(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.api_key_input.setText("")
+            self.gmail_email_input.setText("")
+            self.gmail_password_input.setText("")
             self.page_load_spin.setValue(30)
             self.status_check_spin.setValue(20)
             self.iframe_wait_spin.setValue(15)

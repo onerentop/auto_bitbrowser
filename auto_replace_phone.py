@@ -549,6 +549,71 @@ async def add_new_phone(page: Page, phone_number: str) -> tuple[bool, str]:
 
         await asyncio.sleep(3)
 
+        # 检测是否需要短信验证码（Google 可能发送验证码到新手机号）
+        sms_code_selectors = [
+            'input[type="tel"]:not([value])',
+            'input[name*="code"]',
+            'input[id*="code"]',
+            'input[autocomplete="one-time-code"]',
+            'input[placeholder*="code"]',
+            'input[placeholder*="Code"]',
+            'input[placeholder*="验证码"]',
+        ]
+
+        sms_code_input = None
+        for selector in sms_code_selectors:
+            try:
+                # 排除已经填过手机号的输入框
+                element = page.locator(selector).first
+                if await element.count() > 0 and await element.is_visible():
+                    current_value = await element.input_value()
+                    if not current_value or len(current_value) < 6:  # 排除已填写手机号的输入框
+                        sms_code_input = element
+                        print(f"⚠️ 检测到需要输入短信验证码: {selector}")
+                        break
+            except:
+                continue
+
+        if sms_code_input:
+            print("⚠️ 需要输入短信验证码，等待用户手动输入或自动跳过...")
+            # 等待更长时间，让用户有机会手动输入验证码
+            await asyncio.sleep(15)
+
+            # 尝试点击验证/确认按钮
+            for selector in next_selectors:
+                try:
+                    element = page.locator(selector).first
+                    if await element.count() > 0 and await element.is_visible():
+                        await element.click()
+                        print(f"已点击验证确认按钮: {selector}")
+                        await asyncio.sleep(3)
+                        break
+                except:
+                    continue
+
+        # 检测是否需要最终保存
+        save_selectors = [
+            'button:has-text("Save")',
+            'button:has-text("Done")',
+            'button:has-text("Confirm")',
+            'button:has-text("保存")',
+            'button:has-text("完成")',
+            'button:has-text("确认")',
+            'button:has-text("確認")',
+            'button[type="submit"]',
+        ]
+
+        for selector in save_selectors:
+            try:
+                element = page.locator(selector).first
+                if await element.count() > 0 and await element.is_visible():
+                    await element.click()
+                    print(f"✅ 已点击保存按钮: {selector}")
+                    await asyncio.sleep(3)
+                    break
+            except:
+                continue
+
         # 检测是否需要验证（可能跳过，因为用户说替换无需验证码）
         # 尝试点击跳过按钮
         skip_selectors = [
@@ -572,18 +637,17 @@ async def add_new_phone(page: Page, phone_number: str) -> tuple[bool, str]:
             except:
                 continue
 
-        # 检测是否成功
-        # 页面应该返回或显示成功信息
-        await asyncio.sleep(2)
+        # 等待页面稳定
+        await asyncio.sleep(3)
 
         # 检查是否有错误信息
         error_selectors = [
             'div[role="alert"]',
             '.error-message',
-            ':has-text("Invalid")',
-            ':has-text("Error")',
-            ':has-text("错误")',
-            ':has-text("无效")',
+            'div:has-text("Invalid phone")',
+            'div:has-text("Error")',
+            'div:has-text("错误")',
+            'div:has-text("无效")',
         ]
 
         for selector in error_selectors:

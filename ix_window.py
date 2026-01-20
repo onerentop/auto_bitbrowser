@@ -312,6 +312,10 @@ def create_browser_window(account: dict, reference_profile_id: int = None,
     Returns:
         (profile_id, error_message)
     """
+    # 确保 group_id 有效，None 时使用默认值 1
+    if group_id is None:
+        group_id = 1
+
     client = get_client()
 
     # 检查是否已存在该账号的窗口

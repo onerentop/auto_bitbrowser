@@ -73,9 +73,9 @@ class DBManager:
             conn.commit()
             conn.close()
 
-        # Release lock before importing to avoid deadlock if import calls methods that use lock
-        if count == 0:
-            DBManager.import_from_files()
+        # 不再自动从文件导入，用户需要通过配置管理手动导入
+        # if count == 0:
+        #     DBManager.import_from_files()
 
     @staticmethod
     def _simple_parse(line):
@@ -221,6 +221,22 @@ class DBManager:
             rows = cursor.fetchall()
             conn.close()
             return [dict(row) for row in rows]
+
+    @staticmethod
+    def delete_account(email: str) -> bool:
+        """从数据库删除账号"""
+        with lock:
+            try:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM accounts WHERE email = ?", (email,))
+                conn.commit()
+                deleted = cursor.rowcount > 0
+                conn.close()
+                return deleted
+            except Exception as e:
+                print(f"[DB] 删除账号失败: {e}")
+                return False
 
     @staticmethod
     def export_to_files():

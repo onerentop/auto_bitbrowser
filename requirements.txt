@@ -9,3 +9,4 @@ cairosvg
 ixbrowser-local-api
 deep-translator
 selenium
+imap_tools

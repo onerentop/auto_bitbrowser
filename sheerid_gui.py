@@ -12,6 +12,7 @@ from PyQt6.QtGui import QColor, QBrush
 
 from sheerid_verifier import SheerIDVerifier
 from account_manager import AccountManager
+from core.config_manager import ConfigManager
 
 class VerifyWorker(QThread):
     progress_signal = pyqtSignal(dict) # {vid: ..., status: ..., msg: ...}
@@ -84,11 +85,18 @@ class SheerIDWindow(QDialog):
         
         # 1. Top Control Bar
         top_layout = QHBoxLayout()
-        
+
+        # API Key 从配置管理读取，只读显示
         top_layout.addWidget(QLabel("API Key:"))
-        self.api_key_input = QLineEdit("")
-        self.api_key_input.setFixedWidth(250)
-        top_layout.addWidget(self.api_key_input)
+        self.api_key_display = QLineEdit()
+        self.api_key_display.setFixedWidth(280)
+        self.api_key_display.setReadOnly(True)
+        self.api_key_display.setStyleSheet("background-color: #f0f0f0; color: #666;")
+        self.api_key_display.setPlaceholderText("请在配置管理中设置")
+        top_layout.addWidget(self.api_key_display)
+
+        # 加载并显示 API Key
+        self.load_api_key()
         
         self.btn_load = QPushButton("刷新文件")
         self.btn_load.clicked.connect(self.load_data)
@@ -121,6 +129,26 @@ class SheerIDWindow(QDialog):
         layout.addWidget(self.table)
         
         self.setLayout(layout)
+
+    def load_api_key(self):
+        """从配置管理加载 API Key"""
+        try:
+            ConfigManager.load()
+            api_key = ConfigManager.get("sheerid_api_key", "")
+            if api_key:
+                # 显示脱敏的 API Key
+                if len(api_key) > 8:
+                    masked = api_key[:4] + "*" * (len(api_key) - 8) + api_key[-4:]
+                else:
+                    masked = "*" * len(api_key)
+                self.api_key_display.setText(masked)
+                self._api_key = api_key  # 保存完整的 key 用于验证
+            else:
+                self.api_key_display.setText("")
+                self._api_key = ""
+        except Exception as e:
+            print(f"加载 API Key 失败: {e}")
+            self._api_key = ""
 
     def load_data(self):
         base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
@@ -175,8 +203,13 @@ class SheerIDWindow(QDialog):
         if self.worker and self.worker.isRunning():
             QMessageBox.warning(self, "提示", "任务正在运行中")
             return
-            
-        api_key = self.api_key_input.text().strip()
+
+        # 从配置获取 API Key
+        api_key = getattr(self, '_api_key', '')
+        if not api_key:
+            QMessageBox.warning(self, "错误", "请先在「配置管理 → 全局设置」中设置 SheerID API Key")
+            return
+
         links_data = []
         
         # Gather Checked Rows
