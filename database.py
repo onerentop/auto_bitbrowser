@@ -3,6 +3,8 @@ import os
 import sys
 import threading
 
+from core.data_parser import parse_account_line, build_account_line
+
 # 数据库路径
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if getattr(sys, 'frozen', False):
@@ -36,14 +38,41 @@ class DBManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
+
+            # 创建卡片表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cards (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    number TEXT NOT NULL,
+                    exp_month TEXT,
+                    exp_year TEXT,
+                    cvv TEXT,
+                    name TEXT DEFAULT 'John Smith',
+                    zip_code TEXT DEFAULT '10001',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 创建代理表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS proxies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proxy_type TEXT DEFAULT 'socks5',
+                    username TEXT,
+                    password TEXT,
+                    host TEXT NOT NULL,
+                    port TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
             # Check for existing data
             cursor.execute("SELECT count(*) FROM accounts")
             count = cursor.fetchone()[0]
-            
+
             conn.commit()
             conn.close()
-        
+
         # Release lock before importing to avoid deadlock if import calls methods that use lock
         if count == 0:
             DBManager.import_from_files()
@@ -51,55 +80,10 @@ class DBManager:
     @staticmethod
     def _simple_parse(line):
         """
-        解析账号信息行（使用固定分隔符）
-        默认分隔符：----
+        解析账号信息行 - 委托给统一解析器
+        保留此方法以兼容现有调用
         """
-        import re
-        
-        # 移除注释
-        if '#' in line:
-            line = line.split('#')[0].strip()
-        
-        if not line:
-            return None, None, None, None, None
-        
-        # 识别HTTP链接
-        link = None
-        link_match = re.search(r'https?://[^\s]+', line)
-        if link_match:
-            link = link_match.group()
-            # 移除链接后继续解析
-            line = line.replace(link, '').strip()
-        
-        # 使用固定分隔符分割（默认 ----）
-        # 优先尝试 ----，如果没有则尝试其他常见分隔符
-        separator = '----'
-        if separator not in line:
-            # 尝试其他分隔符
-            for sep in ['---', '|', ',', ';', '\t']:
-                if sep in line:
-                    separator = sep
-                    break
-        
-        parts = line.split(separator)
-        parts = [p.strip() for p in parts if p.strip()]
-        
-        email = None
-        pwd = None
-        rec = None
-        sec = None
-        
-        # 按固定顺序分配
-        if len(parts) >= 1:
-            email = parts[0]
-        if len(parts) >= 2:
-            pwd = parts[1]
-        if len(parts) >= 3:
-            rec = parts[2]
-        if len(parts) >= 4:
-            sec = parts[3]
-        
-        return email, pwd, rec, sec, link
+        return parse_account_line(line)
 
     @staticmethod
     def import_from_files():
@@ -242,7 +226,7 @@ class DBManager:
     def export_to_files():
         """将数据库导出为传统文本文件，方便查看 (覆盖写入)"""
         print("[DB] 开始导出数据库到文本文件...")
-        
+
         files_map = {
             "link_ready": "sheerIDlink.txt",
             "verified": "已验证未绑卡.txt",
@@ -250,65 +234,233 @@ class DBManager:
             "ineligible": "无资格号.txt",
             "error": "超时或其他错误.txt"
         }
-        
+
         # link_ready 状态的账号同时也写入"有资格待验证号.txt"作为备份
         pending_file = "有资格待验证号.txt"
-        
+
         try:
+            # 优化：仅在数据库读取时持有锁，文件写入在锁外执行
             with lock:
                 conn = DBManager.get_connection()
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM accounts")
                 rows = cursor.fetchall()
                 conn.close()
-                
-                print(f"[DB] 从数据库读取了 {len(rows)} 条记录")
-                
-                # Group by status
-                data = {k: [] for k in files_map.keys()}
-                pending_data = []  # 单独处理 pending 文件
-                
-                for row in rows:
-                    st = row['status']
-                    if st == 'running' or st == 'processing': continue 
-                    
-                    # Base line construction
-                    email = row['email']
-                    line_acc = email
-                    if row['password']: line_acc += f"----{row['password']}"
-                    if row['recovery_email']: line_acc += f"----{row['recovery_email']}"
-                    if row['secret_key']: line_acc += f"----{row['secret_key']}"
 
-                    if st == 'link_ready':
-                        # Add to link file
-                        if row['verification_link']:
-                            line_link = f"{row['verification_link']}----{line_acc}"
-                            data['link_ready'].append(line_link)
-                        
-                        # ALSO Add to pending file (有资格待验证号.txt)
-                        pending_data.append(line_acc)
-                    
-                    elif st in data:
-                         data[st].append(line_acc)
-                
-                # Write main files
-                for status, filename in files_map.items():
-                    target_path = os.path.join(BASE_DIR, filename)
-                    lines = data[status]
-                    with open(target_path, 'w', encoding='utf-8') as f:
-                        for l in lines:
-                            f.write(l + "\n")
-                    print(f"[DB] 导出 {len(lines)} 条记录到 {filename}")
-                
-                # Write pending file separately
-                pending_path = os.path.join(BASE_DIR, pending_file)
-                with open(pending_path, 'w', encoding='utf-8') as f:
-                    for l in pending_data:
+            print(f"[DB] 从数据库读取了 {len(rows)} 条记录")
+
+            # 数据处理在锁外进行
+            data = {k: [] for k in files_map.keys()}
+            pending_data = []
+
+            for row in rows:
+                st = row['status']
+                if st == 'running' or st == 'processing': continue
+
+                # 使用统一的行构建函数
+                line_acc = build_account_line(
+                    email=row['email'],
+                    password=row['password'],
+                    recovery=row['recovery_email'],
+                    secret=row['secret_key']
+                )
+
+                if st == 'link_ready':
+                    if row['verification_link']:
+                        line_link = f"{row['verification_link']}----{line_acc}"
+                        data['link_ready'].append(line_link)
+                    pending_data.append(line_acc)
+
+                elif st in data:
+                     data[st].append(line_acc)
+
+            # 文件写入在锁外执行，避免长时间持有锁
+            for status, filename in files_map.items():
+                target_path = os.path.join(BASE_DIR, filename)
+                lines = data[status]
+                with open(target_path, 'w', encoding='utf-8') as f:
+                    for l in lines:
                         f.write(l + "\n")
-                print(f"[DB] 导出 {len(pending_data)} 条记录到 {pending_file}")
-                
-                print("[DB] 导出完成！")
+                print(f"[DB] 导出 {len(lines)} 条记录到 {filename}")
+
+            pending_path = os.path.join(BASE_DIR, pending_file)
+            with open(pending_path, 'w', encoding='utf-8') as f:
+                for l in pending_data:
+                    f.write(l + "\n")
+            print(f"[DB] 导出 {len(pending_data)} 条记录到 {pending_file}")
+
+            print("[DB] 导出完成！")
         except Exception as e:
             print(f"[DB ERROR] export_to_files 失败: {e}")
             import traceback
             traceback.print_exc()
+
+    # ==================== Cards CRUD ====================
+
+    @staticmethod
+    def get_all_cards():
+        """获取所有卡片"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM cards ORDER BY id")
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB] get_all_cards 失败: {e}")
+            return []
+
+    @staticmethod
+    def save_all_cards(cards: list):
+        """保存所有卡片（先清空再插入）"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 清空现有数据
+                cursor.execute("DELETE FROM cards")
+
+                # 插入新数据
+                for card in cards:
+                    cursor.execute('''
+                        INSERT INTO cards (number, exp_month, exp_year, cvv, name, zip_code)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (
+                        card.get('number', ''),
+                        card.get('exp_month', ''),
+                        card.get('exp_year', ''),
+                        card.get('cvv', ''),
+                        card.get('name', 'John Smith'),
+                        card.get('zip_code', '10001')
+                    ))
+
+                conn.commit()
+                conn.close()
+                print(f"[DB] 保存了 {len(cards)} 张卡片")
+        except Exception as e:
+            print(f"[DB ERROR] save_all_cards 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @staticmethod
+    def add_card(card: dict):
+        """添加单张卡片"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO cards (number, exp_month, exp_year, cvv, name, zip_code)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    card.get('number', ''),
+                    card.get('exp_month', ''),
+                    card.get('exp_year', ''),
+                    card.get('cvv', ''),
+                    card.get('name', 'John Smith'),
+                    card.get('zip_code', '10001')
+                ))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"[DB ERROR] add_card 失败: {e}")
+
+    @staticmethod
+    def delete_card(card_id: int):
+        """删除卡片"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"[DB ERROR] delete_card 失败: {e}")
+
+    # ==================== Proxies CRUD ====================
+
+    @staticmethod
+    def get_all_proxies():
+        """获取所有代理"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM proxies ORDER BY id")
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB] get_all_proxies 失败: {e}")
+            return []
+
+    @staticmethod
+    def save_all_proxies(proxies: list):
+        """保存所有代理（先清空再插入）"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 清空现有数据
+                cursor.execute("DELETE FROM proxies")
+
+                # 插入新数据
+                for proxy in proxies:
+                    cursor.execute('''
+                        INSERT INTO proxies (proxy_type, username, password, host, port)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (
+                        proxy.get('proxy_type', 'socks5'),
+                        proxy.get('username', ''),
+                        proxy.get('password', ''),
+                        proxy.get('host', ''),
+                        proxy.get('port', '')
+                    ))
+
+                conn.commit()
+                conn.close()
+                print(f"[DB] 保存了 {len(proxies)} 个代理")
+        except Exception as e:
+            print(f"[DB ERROR] save_all_proxies 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    @staticmethod
+    def add_proxy(proxy: dict):
+        """添加单个代理"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO proxies (proxy_type, username, password, host, port)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    proxy.get('proxy_type', 'socks5'),
+                    proxy.get('username', ''),
+                    proxy.get('password', ''),
+                    proxy.get('host', ''),
+                    proxy.get('port', '')
+                ))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"[DB ERROR] add_proxy 失败: {e}")
+
+    @staticmethod
+    def delete_proxy(proxy_id: int):
+        """删除代理"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM proxies WHERE id = ?", (proxy_id,))
+                conn.commit()
+                conn.close()
+        except Exception as e:
+            print(f"[DB ERROR] delete_proxy 失败: {e}")
