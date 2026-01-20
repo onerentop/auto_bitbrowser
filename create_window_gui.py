@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QTextEdit, QPushButton, QMessageBox, QGroupBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QSplitter,
     QAbstractItemView, QSpinBox, QToolBox, QProgressBar, QDialog,
-    QFormLayout, QDialogButtonBox
+    QFormLayout, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
@@ -24,6 +24,8 @@ from ix_window import (
     read_accounts, read_proxies, get_browser_list, get_browser_info,
     delete_browsers_by_name, delete_browser_by_id, open_browser_by_id, create_browser_window, get_next_window_name
 )
+from ix_api import get_group_list
+from database import DBManager
 from run_playwright_google import process_browser
 from sheerid_verifier import SheerIDVerifier
 from sheerid_gui import SheerIDWindow
@@ -468,29 +470,48 @@ class WorkerThread(QThread):
         template_id_str = self.kwargs.get('template_id')
         template_id = int(template_id_str) if template_id_str else None
         template_config = self.kwargs.get('template_config')
-        
+
         platform_url = self.kwargs.get('platform_url')
         extra_url = self.kwargs.get('extra_url')
         name_prefix = self.kwargs.get('name_prefix')
+        group_id = self.kwargs.get('group_id')  # 获取目标分组ID
 
         try:
-            # 读取账户信息
-            accounts_file = 'accounts.txt'
-            accounts = read_accounts(accounts_file)
-            
+            # 从数据库读取账户信息
+            db_accounts = DBManager.get_all_accounts()
+            # 过滤状态为 pending 的账号（未处理的）
+            accounts = []
+            for acc in db_accounts:
+                if acc.get('status') == 'pending':
+                    accounts.append({
+                        'email': acc.get('email', ''),
+                        'password': acc.get('password', ''),
+                        'recovery_email': acc.get('recovery_email', ''),
+                        '2fa_secret': acc.get('secret_key', ''),
+                        'full_line': f"{acc.get('email', '')}----{acc.get('password', '')}----{acc.get('recovery_email', '')}----{acc.get('secret_key', '')}"
+                    })
+
             if not accounts:
                 self.log("[错误] 未找到有效的账户信息")
-                self.log("请确保 accounts.txt 文件存在且格式正确")
-                self.log("格式：邮箱----密码----辅助邮箱----2FA密钥")
+                self.log("请在配置管理 -> 账号管理中添加账号")
+                self.log("或者确保有状态为 'pending' 的账号")
                 self.finished_signal.emit({'type': 'create', 'success_count': 0})
                 return
-            
-            self.log(f"[信息] 找到 {len(accounts)} 个账户")
-            
-            # 读取代理信息
-            proxies_file = 'proxies.txt'
-            proxies = read_proxies(proxies_file)
-            self.log(f"[信息] 找到 {len(proxies)} 个代理")
+
+            self.log(f"[信息] 从数据库找到 {len(accounts)} 个待处理账户")
+
+            # 从数据库读取代理信息
+            db_proxies = DBManager.get_all_proxies()
+            proxies = []
+            for p in db_proxies:
+                proxies.append({
+                    'type': p.get('proxy_type', 'socks5'),
+                    'host': p.get('host', ''),
+                    'port': p.get('port', ''),
+                    'username': p.get('username', ''),
+                    'password': p.get('password', '')
+                })
+            self.log(f"[信息] 从数据库找到 {len(proxies)} 个代理")
             
             # 获取参考窗口信息
             if template_config:
@@ -539,13 +560,14 @@ class WorkerThread(QThread):
                 proxy = proxies[i - 1] if i - 1 < len(proxies) else None
                 
                 browser_id, error_msg = create_browser_window(
-                    account, 
+                    account,
                     template_id if not template_config else None,
                     proxy,
                     platform=platform_url if platform_url else None,
                     extra_url=extra_url if extra_url else None,
                     template_config=template_config,
-                    name_prefix=name_prefix
+                    name_prefix=name_prefix,
+                    group_id=group_id
                 )
                 
                 if browser_id:
@@ -728,6 +750,42 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_replace_phone.clicked.connect(self.action_replace_phone)
         google_layout.addWidget(self.btn_replace_phone)
 
+        # 一键替换辅助邮箱按钮
+        self.btn_replace_email = QPushButton("📧 一键替换辅助邮箱")
+        self.btn_replace_email.setFixedHeight(40)
+        self.btn_replace_email.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_replace_email.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #FF5722;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #E64A19; }
+        """)
+        self.btn_replace_email.clicked.connect(self.action_replace_email)
+        google_layout.addWidget(self.btn_replace_email)
+
+        # 一键修改2SV手机号按钮
+        self.btn_modify_2sv_phone = QPushButton("📱 一键修改2SV手机号")
+        self.btn_modify_2sv_phone.setFixedHeight(40)
+        self.btn_modify_2sv_phone.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_modify_2sv_phone.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #9C27B0;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #7B1FA2; }
+        """)
+        self.btn_modify_2sv_phone.clicked.connect(self.action_modify_2sv_phone)
+        google_layout.addWidget(self.btn_modify_2sv_phone)
+
         google_layout.addStretch()
         google_page.setLayout(google_layout)
         self.toolbox.addItem(google_page, "Google 专区")
@@ -862,7 +920,19 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.name_prefix_input.setPlaceholderText("可选，默认按模板名或'默认模板'命名")
         input_layout_prefix.addWidget(self.name_prefix_input)
         config_layout.addLayout(input_layout_prefix)
-        
+
+        # 目标分组选择
+        input_layout_group = QHBoxLayout()
+        input_layout_group.addWidget(QLabel("目标分组:"))
+        self.group_combo = QComboBox()
+        self.group_combo.setMinimumWidth(200)
+        input_layout_group.addWidget(self.group_combo)
+        self.refresh_group_btn = QPushButton("刷新")
+        self.refresh_group_btn.clicked.connect(self.refresh_group_list)
+        input_layout_group.addWidget(self.refresh_group_btn)
+        input_layout_group.addStretch()
+        config_layout.addLayout(input_layout_group)
+
         # URL配置
         input_layout2 = QHBoxLayout()
         input_layout2.addWidget(QLabel("平台URL:"))
@@ -955,18 +1025,19 @@ class BrowserWindowCreatorGUI(QMainWindow):
         list_action_layout.addWidget(self.open_btn)
         list_action_layout.addWidget(self.delete_btn)
         list_layout.addLayout(list_action_layout)
-        
-        # 表格控件
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["选择", "名称", "窗口ID", "2FA验证码", "备注"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents) # Checkbox
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)      # Name
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)      # ID
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)      # 2FA
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)          # Remark
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        list_layout.addWidget(self.table)
+
+        # 树形控件（按分组显示）
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["选择", "名称", "窗口ID", "2FA验证码", "备注"])
+        self.tree.setColumnWidth(0, 80)    # 选择列（包含展开箭头+复选框）
+        self.tree.setColumnWidth(1, 180)   # 名称
+        self.tree.setColumnWidth(2, 100)   # ID
+        self.tree.setColumnWidth(3, 100)   # 2FA
+        self.tree.header().setStretchLastSection(True)  # 备注列自适应
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setRootIsDecorated(True)  # 显示展开/折叠箭头
+        self.tree.setIndentation(15)  # 减小缩进宽度
+        list_layout.addWidget(self.tree)
         
         list_group.setLayout(list_layout)
         left_layout.addWidget(list_group)
@@ -1020,10 +1091,33 @@ class BrowserWindowCreatorGUI(QMainWindow):
         
         # 添加右侧到主布局
         main_layout.addWidget(right_widget, 2)
-        
+
         # 初始加载
         QTimer.singleShot(100, self.refresh_browser_list)
+        QTimer.singleShot(150, self.refresh_group_list)
         self.check_files()
+
+    def refresh_group_list(self):
+        """刷新分组下拉列表"""
+        self.group_combo.clear()
+        try:
+            groups = get_group_list() or []
+            # 添加默认选项（仅当 API 返回的分组中没有 id=1 时）
+            has_default = any(g.get('id') == 1 for g in groups)
+            if not has_default:
+                self.group_combo.addItem("默认分组", 1)
+
+            for g in groups:
+                gid = g.get('id')
+                title = g.get('title', '')
+                # 清理乱码
+                clean_title = ''.join(c for c in str(title) if c.isprintable())
+                if not clean_title or '\ufffd' in clean_title:
+                    clean_title = f"分组 {gid}"
+                self.group_combo.addItem(f"{clean_title} (ID: {gid})", gid)
+        except Exception as e:
+            self.log(f"[警告] 获取分组列表失败: {e}")
+            self.group_combo.addItem("默认分组", 1)
 
     def check_files(self):
         """检查文件是否存在并验证格式"""
@@ -1123,44 +1217,93 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.status_text.setTextCursor(cursor)
 
     def refresh_browser_list(self):
-        """刷新窗口列表到表格"""
-        self.table.setRowCount(0)
+        """刷新窗口列表到树形控件（按分组显示）"""
+        self.tree.clear()
         self.select_all_checkbox.setChecked(False)
         self.log("正在刷新窗口列表...")
         QApplication.processEvents()
-        
+
+        def clean_text(text):
+            """清理文本，移除不可显示字符"""
+            if not text:
+                return ""
+            # 只保留可打印字符
+            return ''.join(c for c in str(text) if c.isprintable())
+
         try:
-            browsers = get_browser_list()
-            if not browsers:
-                self.log("未获取到窗口列表")
-                return
-            
-            self.table.setRowCount(len(browsers))
-            for i, browser in enumerate(browsers):
-                # Checkbox
-                chk_item = QTableWidgetItem()
-                chk_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-                chk_item.setCheckState(Qt.CheckState.Unchecked)
-                self.table.setItem(i, 0, chk_item)
-                
-                # Name
-                name = str(browser.get('name', ''))
-                self.table.setItem(i, 1, QTableWidgetItem(name))
-                
-                # ID
-                bid = str(browser.get('profile_id', ''))
-                self.table.setItem(i, 2, QTableWidgetItem(bid))
-                
-                # 2FA (Initial empty)
-                self.table.setItem(i, 3, QTableWidgetItem(""))
-                
-                # Remark
-                remark = str(browser.get('note', ''))
-                self.table.setItem(i, 4, QTableWidgetItem(remark))
-            
-            self.log(f"列表刷新完成，共 {len(browsers)} 个窗口")
-            
+            # 1. 获取所有分组（包括空分组）
+            all_groups = get_group_list() or []
+            # API 返回 {id, title}，转换为 {group_id: group_name}
+            group_names = {}
+            for g in all_groups:
+                gid = g.get('id')
+                title = clean_text(g.get('title', ''))
+                # 如果标题是乱码（包含替换字符），使用 ID 作为名称
+                if not title or '\ufffd' in title or any(ord(c) > 0xFFFF for c in title):
+                    title = f"分组 {gid}"
+                group_names[gid] = title
+            group_names[0] = "未分组"  # 确保有未分组
+
+            # 2. 获取所有窗口
+            browsers = get_browser_list() or []
+
+            # 3. 按 group_id 分组
+            grouped = {gid: [] for gid in group_names.keys()}  # 初始化所有分组为空列表
+            for b in browsers:
+                gid = b.get('group_id', 0) or 0
+                if gid not in grouped:
+                    grouped[gid] = []
+                    # 从浏览器数据获取分组名
+                    gname = clean_text(b.get('group_name', ''))
+                    if not gname or '\ufffd' in gname:
+                        gname = f"分组 {gid}"
+                    group_names[gid] = gname
+                grouped[gid].append(b)
+
+            # 4. 创建树形结构（所有分组，包括空的）
+            total_count = 0
+            for gid in sorted(grouped.keys()):
+                browser_list = grouped[gid]
+                group_name = group_names.get(gid, f"分组 {gid}")
+
+                # 分组节点
+                group_item = QTreeWidgetItem(self.tree)
+                group_item.setText(0, "")
+                group_item.setText(1, f"📁 {group_name} ({len(browser_list)})")
+                group_item.setFlags(
+                    group_item.flags() |
+                    Qt.ItemFlag.ItemIsAutoTristate |
+                    Qt.ItemFlag.ItemIsUserCheckable
+                )
+                group_item.setCheckState(0, Qt.CheckState.Unchecked)
+                group_item.setExpanded(True)
+                group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
+
+                # 设置分组行样式
+                font = group_item.font(1)
+                font.setBold(True)
+                group_item.setFont(1, font)
+
+                # 窗口子节点
+                for browser in browser_list:
+                    child = QTreeWidgetItem(group_item)
+                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.CheckState.Unchecked)
+                    child.setText(1, clean_text(browser.get('name', '')))
+                    child.setText(2, str(browser.get('profile_id', '')))
+                    child.setText(3, "")  # 2FA 初始为空
+                    child.setText(4, clean_text(browser.get('note', '')))
+                    child.setData(0, Qt.ItemDataRole.UserRole, {
+                        "type": "browser",
+                        "id": browser.get('profile_id')
+                    })
+                    total_count += 1
+
+            self.log(f"列表刷新完成，共 {len(grouped)} 个分组，{total_count} 个窗口")
+
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.log(f"[错误] 刷新列表失败: {e}")
 
     def action_refresh_2fa(self):
@@ -1247,6 +1390,38 @@ class BrowserWindowCreatorGUI(QMainWindow):
             import traceback
             traceback.print_exc()
 
+    def action_replace_email(self):
+        """打开一键替换辅助邮箱窗口"""
+        try:
+            from replace_email_gui import ReplaceEmailWindow
+
+            if not hasattr(self, 'replace_email_window') or self.replace_email_window is None:
+                self.replace_email_window = ReplaceEmailWindow()
+
+            self.replace_email_window.show()
+            self.replace_email_window.raise_()
+            self.replace_email_window.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开替换辅助邮箱窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_modify_2sv_phone(self):
+        """打开一键修改2SV手机号窗口"""
+        try:
+            from modify_2sv_phone_gui import Modify2SVPhoneDialog
+
+            if not hasattr(self, 'modify_2sv_phone_dialog') or self.modify_2sv_phone_dialog is None:
+                self.modify_2sv_phone_dialog = Modify2SVPhoneDialog()
+
+            self.modify_2sv_phone_dialog.show()
+            self.modify_2sv_phone_dialog.raise_()
+            self.modify_2sv_phone_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开修改2SV手机号窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
     def action_open_config_manager(self):
         """打开配置管理窗口"""
         try:
@@ -1277,29 +1452,25 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.start_worker_thread('open', ids=ids)
 
     def toggle_select_all(self, state):
-        """全选/取消全选"""
-        is_checked = (state == Qt.CheckState.Checked.value)  # value of Qt.CheckState.Checked is 2
-        # 注意：Qt6中 state 是 int
-        # 实际上 stateChanged 发出的是 int
-        # Qt.CheckState.Checked.value 是 2
-        
-        row_count = self.table.rowCount()
-        for i in range(row_count):
-            item = self.table.item(i, 0)
-            if item:
-                item.setCheckState(Qt.CheckState.Checked if state == 2 else Qt.CheckState.Unchecked)
+        """全选/取消全选（适配树形控件）"""
+        check_state = Qt.CheckState.Checked if state == 2 else Qt.CheckState.Unchecked
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            group_item = root.child(i)
+            group_item.setCheckState(0, check_state)
 
     def get_selected_browser_ids(self):
-        """获取选中的窗口ID列表"""
+        """获取选中的窗口ID列表（适配树形控件）"""
         ids = []
-        row_count = self.table.rowCount()
-        for i in range(row_count):
-            item = self.table.item(i, 0)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                # ID is in column 2
-                id_item = self.table.item(i, 2)
-                if id_item:
-                    ids.append(id_item.text())
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            group_item = root.child(i)
+            for j in range(group_item.childCount()):
+                child = group_item.child(j)
+                if child.checkState(0) == Qt.CheckState.Checked:
+                    data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if data and data.get("type") == "browser":
+                        ids.append(str(data.get("id")))
         return ids
 
     def delete_selected_browsers(self):
@@ -1326,20 +1497,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
         if not template_id:
             QMessageBox.warning(self, "警告", "请输入模板窗口ID")
             return
-            
+
         platform_url = self.platform_url_input.text().strip()
         extra_url = self.extra_url_input.text().strip()
         name_prefix = self.name_prefix_input.text().strip()
-        
+        group_id = self.group_combo.currentData()  # 获取选中分组ID
+
         self.update_ui_state(True)
-        self.log(f"启动创建任务... 模板ID: {template_id}")
-        
+        self.log(f"启动创建任务... 模板ID: {template_id}, 目标分组ID: {group_id}")
+
         self.worker_thread = WorkerThread(
-            'create', 
+            'create',
             template_id=template_id,
-            platform_url=platform_url, 
+            platform_url=platform_url,
             extra_url=extra_url,
-            name_prefix=name_prefix
+            name_prefix=name_prefix,
+            group_id=group_id
         )
         self.worker_thread.log_signal.connect(self.log)
         self.worker_thread.finished_signal.connect(self.on_worker_finished)
@@ -1397,16 +1570,18 @@ class BrowserWindowCreatorGUI(QMainWindow):
         platform_url = self.platform_url_input.text().strip()
         extra_url = self.extra_url_input.text().strip()
         name_prefix = self.name_prefix_input.text().strip()
-        
+        group_id = self.group_combo.currentData()  # 获取选中分组ID
+
         self.update_ui_state(True)
-        self.log(f"启动创建任务... 使用默认配置模板")
-        
+        self.log(f"启动创建任务... 使用默认配置模板, 目标分组ID: {group_id}")
+
         self.start_worker_thread(
-            'create', 
+            'create',
             template_config=DEFAULT_TEMPLATE_CONFIG,
-            platform_url=platform_url, 
+            platform_url=platform_url,
             extra_url=extra_url,
-            name_prefix=name_prefix
+            name_prefix=name_prefix,
+            group_id=group_id
         )
 
     def stop_task(self):
@@ -1435,13 +1610,17 @@ class BrowserWindowCreatorGUI(QMainWindow):
         # 2FA刷新结果
         elif result.get('type') == '2fa':
             codes = result.get('codes', {})
-            row_count = self.table.rowCount()
-            for i in range(row_count):
-                id_item = self.table.item(i, 2) # ID Column
-                if id_item:
-                    bid = id_item.text()
-                    if bid in codes:
-                        self.table.setItem(i, 3, QTableWidgetItem(str(codes[bid])))
+            # 遍历树形控件更新 2FA 验证码
+            root = self.tree.invisibleRootItem()
+            for i in range(root.childCount()):
+                group_item = root.child(i)
+                for j in range(group_item.childCount()):
+                    child = group_item.child(j)
+                    data = child.data(0, Qt.ItemDataRole.UserRole)
+                    if data and data.get("type") == "browser":
+                        bid = str(data.get("id"))
+                        if bid in codes:
+                            child.setText(3, str(codes[bid]))
             QMessageBox.information(self, "完成", "2FA验证码已更新并保存")
         # 打开操作
         elif result.get('type') == 'open':
