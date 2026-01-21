@@ -296,6 +296,12 @@ class ActionExecutor:
             "スキャン", "스캔", "scanner", "escanear", "digitalizar"
         ])
 
+        # 检测是否是删除/移除相关的描述
+        is_delete = any(kw in desc_lower for kw in [
+            "delete", "remove", "trash", "bin", "garbage",
+            "删除", "移除", "移除电话", "删除电话", "删除手机"
+        ])
+
         # 定位策略列表
         strategies = []
 
@@ -327,6 +333,35 @@ class ActionExecutor:
                 lambda: self.page.locator('[class*="link"], [class*="Link"]').filter(has_text=re.compile(r"scan", re.I)).first,
                 # 通过样式查找（蓝色文本通常是链接）
                 lambda: self.page.locator('span[style*="color"], a[style*="color"]').filter(has_text=re.compile(r"scan", re.I)).first,
+            ])
+
+        # 如果是删除/移除按钮，使用特殊的定位策略
+        if is_delete:
+            strategies.extend([
+                # aria-label 包含 remove/delete（最可靠，用于图标按钮）
+                lambda: self.page.locator('[aria-label*="remove" i], [aria-label*="delete" i], [aria-label*="Remove" i], [aria-label*="Delete" i]').first,
+                # 垃圾桶/删除图标按钮
+                lambda: self.page.locator('button[aria-label*="trash" i], button[aria-label*="bin" i]').first,
+                # Material Icons 删除图标
+                lambda: self.page.locator('[class*="delete" i], [class*="trash" i], [class*="remove" i]').first,
+                # Google Material Design 图标
+                lambda: self.page.locator('i:has-text("delete"), span:has-text("delete_forever"), span:has-text("remove_circle")').first,
+                # SVG 图标按钮（常见于 Google 页面）
+                lambda: self.page.locator('button:has(svg), [role="button"]:has(svg)').filter(has_text=re.compile(r"remove|delete|删除|移除", re.I)).first,
+                # 带 role=button 的删除按钮
+                lambda: self.page.locator('[role="button"]').filter(has_text=re.compile(r"remove|delete|删除|移除", re.I)).first,
+                # button 标签包含删除文本
+                lambda: self.page.locator('button').filter(has_text=re.compile(r"remove|delete|删除|移除", re.I)).first,
+                # Google 特有：带 jsaction 的删除按钮
+                lambda: self.page.locator('[jsaction]').filter(has_text=re.compile(r"remove|delete|删除|移除", re.I)).first,
+                # 精确文本匹配 "Remove" / "Delete"
+                lambda: self.page.get_by_role("button", name=re.compile(r"remove|delete", re.I)),
+                # 带 data-* 属性的删除按钮
+                lambda: self.page.locator('[data-action*="delete" i], [data-action*="remove" i]').first,
+                # 链接形式的删除按钮
+                lambda: self.page.get_by_role("link", name=re.compile(r"remove|delete|删除|移除", re.I)),
+                # 最后尝试：任何包含删除/移除文本的可点击元素
+                lambda: self.page.locator('button, a, [role="button"], [role="link"]').filter(has_text=re.compile(r"remove|delete|删除|移除", re.I)).first,
             ])
 
         # 如果是验证码输入，优先使用验证码输入框定位策略
