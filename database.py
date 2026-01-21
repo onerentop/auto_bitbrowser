@@ -480,3 +480,327 @@ class DBManager:
                 conn.close()
         except Exception as e:
             print(f"[DB ERROR] delete_proxy 失败: {e}")
+
+    # ==================== Phone Modification History ====================
+
+    @staticmethod
+    def init_phone_modification_table():
+        """初始化手机号修改历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS phone_modification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    new_phone TEXT NOT NULL,
+                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_phone_modification_history() -> dict:
+        """获取所有手机号修改历史记录，返回 {email: {new_phone, modified_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, new_phone, modified_at FROM phone_modification_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {'new_phone': row['new_phone'], 'modified_at': row['modified_at']} for row in rows}
+        except Exception as e:
+            print(f"[DB] get_phone_modification_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_phone_modification(email: str, new_phone: str):
+        """添加或更新手机号修改记录"""
+        try:
+            # 确保表存在
+            DBManager.init_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO phone_modification_history (email, new_phone, modified_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        new_phone = excluded.new_phone,
+                        modified_at = CURRENT_TIMESTAMP
+                ''', (email, new_phone))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录手机号修改: {email} -> {new_phone}")
+        except Exception as e:
+            print(f"[DB ERROR] add_phone_modification 失败: {e}")
+
+    @staticmethod
+    def clear_phone_modification_history():
+        """清除所有手机号修改历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM phone_modification_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条手机号修改记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_phone_modification_history 失败: {e}")
+            return 0
+
+    # ==================== Email Modification History ====================
+
+    @staticmethod
+    def init_email_modification_table():
+        """初始化邮箱修改历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS email_modification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    new_recovery_email TEXT NOT NULL,
+                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_email_modification_history() -> dict:
+        """获取所有邮箱修改历史记录，返回 {email: {new_recovery_email, modified_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_email_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, new_recovery_email, modified_at FROM email_modification_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {'new_recovery_email': row['new_recovery_email'], 'modified_at': row['modified_at']} for row in rows}
+        except Exception as e:
+            print(f"[DB] get_email_modification_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_email_modification(email: str, new_recovery_email: str):
+        """添加或更新邮箱修改记录"""
+        try:
+            # 确保表存在
+            DBManager.init_email_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO email_modification_history (email, new_recovery_email, modified_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        new_recovery_email = excluded.new_recovery_email,
+                        modified_at = CURRENT_TIMESTAMP
+                ''', (email, new_recovery_email))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录邮箱修改: {email} -> {new_recovery_email}")
+        except Exception as e:
+            print(f"[DB ERROR] add_email_modification 失败: {e}")
+
+    @staticmethod
+    def clear_email_modification_history():
+        """清除所有邮箱修改历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_email_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM email_modification_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条邮箱修改记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_email_modification_history 失败: {e}")
+            return 0
+
+    # ==================== 2SV Phone Modification History ====================
+
+    @staticmethod
+    def init_2sv_phone_modification_table():
+        """初始化2SV手机号修改历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS sv2_phone_modification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    new_phone TEXT NOT NULL,
+                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_2sv_phone_modification_history() -> dict:
+        """获取所有2SV手机号修改历史记录，返回 {email: {new_phone, modified_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_2sv_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, new_phone, modified_at FROM sv2_phone_modification_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {'new_phone': row['new_phone'], 'modified_at': row['modified_at']} for row in rows}
+        except Exception as e:
+            print(f"[DB] get_2sv_phone_modification_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_2sv_phone_modification(email: str, new_phone: str):
+        """添加或更新2SV手机号修改记录"""
+        try:
+            # 确保表存在
+            DBManager.init_2sv_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO sv2_phone_modification_history (email, new_phone, modified_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        new_phone = excluded.new_phone,
+                        modified_at = CURRENT_TIMESTAMP
+                ''', (email, new_phone))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录2SV手机号修改: {email} -> {new_phone}")
+        except Exception as e:
+            print(f"[DB ERROR] add_2sv_phone_modification 失败: {e}")
+
+    @staticmethod
+    def clear_2sv_phone_modification_history():
+        """清除所有2SV手机号修改历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_2sv_phone_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM sv2_phone_modification_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条2SV手机号修改记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_2sv_phone_modification_history 失败: {e}")
+            return 0
+
+    # ==================== Authenticator Modification History ====================
+
+    @staticmethod
+    def init_authenticator_modification_table():
+        """初始化身份验证器修改历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS authenticator_modification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    new_secret TEXT NOT NULL,
+                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_authenticator_modification_history() -> dict:
+        """获取所有身份验证器修改历史记录，返回 {email: {new_secret, modified_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_authenticator_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, new_secret, modified_at FROM authenticator_modification_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {'new_secret': row['new_secret'], 'modified_at': row['modified_at']} for row in rows}
+        except Exception as e:
+            print(f"[DB] get_authenticator_modification_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_authenticator_modification(email: str, new_secret: str):
+        """添加或更新身份验证器修改记录"""
+        try:
+            # 确保表存在
+            DBManager.init_authenticator_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO authenticator_modification_history (email, new_secret, modified_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        new_secret = excluded.new_secret,
+                        modified_at = CURRENT_TIMESTAMP
+                ''', (email, new_secret))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录身份验证器修改: {email} -> {new_secret[:16]}...")
+        except Exception as e:
+            print(f"[DB ERROR] add_authenticator_modification 失败: {e}")
+
+    @staticmethod
+    def clear_authenticator_modification_history():
+        """清除所有身份验证器修改历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_authenticator_modification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM authenticator_modification_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条身份验证器修改记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_authenticator_modification_history 失败: {e}")
+            return 0

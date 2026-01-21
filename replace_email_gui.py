@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QBrush
 
 from ix_api import get_group_list
 from ix_window import get_browser_list
@@ -143,6 +144,8 @@ class ReplaceEmailWindow(QDialog):
         self.worker = None
         self.db_manager = DBManager()
         self.accounts = []
+        self.modification_history = {}  # 保存已修改账户的历史记录
+        self.current_new_email = ""  # 当前操作的新邮箱
 
         self._init_ui()
         self._load_accounts()
@@ -209,6 +212,11 @@ class ReplaceEmailWindow(QDialog):
         self.refresh_btn.clicked.connect(self._load_accounts)
         toolbar.addWidget(self.refresh_btn)
 
+        self.clear_history_btn = QPushButton("清除已修改记录")
+        self.clear_history_btn.clicked.connect(self._clear_modification_history)
+        self.clear_history_btn.setStyleSheet("color: #e65100;")
+        toolbar.addWidget(self.clear_history_btn)
+
         toolbar.addStretch()
 
         self.selected_label = QLabel("已选择: 0 个账号")
@@ -265,6 +273,9 @@ class ReplaceEmailWindow(QDialog):
         """从浏览器列表加载账号（按分组显示）"""
         self.tree.clear()
         self.accounts = []
+
+        # 加载已修改历史记录
+        self.modification_history = self.db_manager.get_email_modification_history()
 
         try:
             # 获取数据库账号
@@ -327,6 +338,7 @@ class ReplaceEmailWindow(QDialog):
 
             # 创建树形结构
             total_count = 0
+            modified_count = 0
             for gid in sorted(grouped.keys()):
                 account_list = grouped[gid]
                 if not account_list:
@@ -359,8 +371,26 @@ class ReplaceEmailWindow(QDialog):
                     child.setCheckState(0, Qt.CheckState.Unchecked)  # 默认不选中
                     child.setText(1, account["email"])
                     child.setText(2, account["browser_id"])
-                    child.setText(3, "待处理")
-                    child.setText(4, "")
+
+                    # 检查是否已修改过
+                    email = account["email"]
+                    if email in self.modification_history:
+                        history = self.modification_history[email]
+                        child.setText(3, "已修改")
+                        # 显示修改后的新邮箱
+                        child.setText(4, f"→ {history['new_recovery_email']}")
+
+                        # 设置置灰样式
+                        gray_color = QColor(150, 150, 150)
+                        gray_brush = QBrush(gray_color)
+                        for col in range(5):
+                            child.setForeground(col, gray_brush)
+
+                        modified_count += 1
+                    else:
+                        child.setText(3, "待处理")
+                        child.setText(4, "")
+
                     child.setData(0, Qt.ItemDataRole.UserRole, {
                         "type": "browser",
                         "account": account
@@ -369,7 +399,7 @@ class ReplaceEmailWindow(QDialog):
                     total_count += 1
 
             self._update_selection_count()
-            self._log(f"已加载 {total_count} 个账号（按分组显示）")
+            self._log(f"已加载 {total_count} 个账号（已修改: {modified_count} 个）")
 
         except Exception as e:
             self._log(f"❌ 加载账号失败: {e}")
@@ -494,6 +524,9 @@ class ReplaceEmailWindow(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # 保存当前操作的新邮箱
+        self.current_new_email = new_email
+
         # 重置状态
         root = self.tree.invisibleRootItem()
         for i in range(root.childCount()):
@@ -558,6 +591,26 @@ class ReplaceEmailWindow(QDialog):
                     # 根据状态设置颜色
                     if status == "成功":
                         child.setBackground(3, Qt.GlobalColor.green)
+
+                        # 保存修改记录到数据库
+                        data = child.data(0, Qt.ItemDataRole.UserRole)
+                        if data and data.get("type") == "browser":
+                            email = data.get("account", {}).get("email", "")
+                            if email and self.current_new_email:
+                                self.db_manager.add_email_modification(email, self.current_new_email)
+                                # 更新本地缓存
+                                self.modification_history[email] = {
+                                    'new_recovery_email': self.current_new_email,
+                                    'modified_at': 'now'
+                                }
+                                # 更新显示
+                                child.setText(4, f"→ {self.current_new_email}")
+                                # 设置置灰样式（跳过状态列，保留绿色背景的可读性）
+                                gray_color = QColor(150, 150, 150)
+                                gray_brush = QBrush(gray_color)
+                                for col in [0, 1, 2, 4]:  # 跳过状态列(3)
+                                    child.setForeground(col, gray_brush)
+
                     elif status == "失败" or status == "错误":
                         child.setBackground(3, Qt.GlobalColor.red)
                     return
@@ -570,6 +623,30 @@ class ReplaceEmailWindow(QDialog):
 
         self._log("✅ 处理完成")
         self.worker = None
+
+    def _clear_modification_history(self):
+        """清除已修改记录"""
+        if not self.modification_history:
+            QMessageBox.information(self, "提示", "没有已修改的记录")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "确认清除",
+            f"确定要清除 {len(self.modification_history)} 条已修改记录？\n\n"
+            "这将重置所有账号的修改状态，但不会撤销已完成的邮箱修改。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # 清除数据库记录
+        deleted = self.db_manager.clear_email_modification_history()
+        self.modification_history = {}
+
+        # 刷新列表
+        self._load_accounts()
+        self._log(f"✅ 已清除 {deleted} 条修改记录")
 
     def closeEvent(self, event):
         """关闭窗口时停止工作线程"""
