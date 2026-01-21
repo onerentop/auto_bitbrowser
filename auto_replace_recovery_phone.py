@@ -1,5 +1,5 @@
 """
-自动修改 Google 2-Step Verification 手机号
+自动替换 Google 辅助手机号 (Recovery Phone)
 
 使用 Gemini Vision AI Agent 自动完成操作
 """
@@ -11,22 +11,22 @@ from core.ai_browser_agent import AIBrowserAgent, TaskResult
 from core.ai_browser_agent.agent import run_with_ixbrowser
 
 
-# 目标 URL - 2-Step Verification 设置页面
-TWO_STEP_PHONE_URL = "https://myaccount.google.com/signinoptions/two-step-verification"
+# 目标 URL - 辅助手机号设置页面
+RECOVERY_PHONE_URL = "https://myaccount.google.com/signinoptions/rescuephone"
 
 
-async def auto_modify_2sv_phone(
+async def auto_replace_recovery_phone(
     browser_id: str,
     account_info: dict,
     new_phone: str,
-    close_after: bool = True,
+    close_after: bool = False,
     max_steps: int = 25,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     model: str = "gemini-2.5-flash",
 ) -> Tuple[bool, str]:
     """
-    修改 Google 2-Step Verification 手机号
+    替换 Google 辅助手机号
 
     Args:
         browser_id: ixBrowser 窗口 ID
@@ -46,18 +46,18 @@ async def auto_modify_2sv_phone(
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
-    print(f"修改 2SV 手机号")
+    print(f"替换辅助手机号 (Recovery Phone)")
     print(f"账号: {email}")
     print(f"新手机号: {new_phone}")
     print(f"{'='*50}")
 
     result: TaskResult = await run_with_ixbrowser(
         browser_id=browser_id,
-        goal=f"将 Google 账号 {email} 的 2-Step Verification 手机号修改为 {new_phone}",
-        start_url=TWO_STEP_PHONE_URL,
+        goal=f"将 Google 账号 {email} 的辅助手机号修改为 {new_phone}",
+        start_url=RECOVERY_PHONE_URL,
         account=account_info,
         params={"new_phone": new_phone},
-        task_type="modify_2sv_phone",
+        task_type="replace_recovery_phone",
         max_steps=max_steps,
         close_after=close_after,
         api_key=api_key,
@@ -66,10 +66,10 @@ async def auto_modify_2sv_phone(
     )
 
     if result.success:
-        print(f"\n✅ 2SV 手机号修改成功!")
+        print(f"\n✅ 辅助手机号替换成功!")
         print(f"总步骤数: {result.total_steps}")
     else:
-        print(f"\n❌ 2SV 手机号修改失败")
+        print(f"\n❌ 辅助手机号替换失败")
         print(f"原因: {result.message}")
         if result.error_details:
             print(f"详情: {result.error_details[:500]}")
@@ -89,11 +89,11 @@ if __name__ == "__main__":
         }
         test_phone = "+1234567890"
 
-        success, msg = await auto_modify_2sv_phone(
+        success, msg = await auto_replace_recovery_phone(
             test_browser_id,
             test_account,
             test_phone,
-            close_after=True,
+            close_after=False,
         )
         print(f"\nResult: {success}, {msg}")
 

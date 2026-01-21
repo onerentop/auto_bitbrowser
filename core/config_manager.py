@@ -42,7 +42,14 @@ class ConfigManager:
         "last_used_template_id": "",
         "window_name_prefix": "",
         "platform_url": "",
-        "extra_url": ""
+        "extra_url": "",
+        # AI Agent 配置 (Gemini Vision)
+        "ai_agent": {
+            "api_key": "",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "model": "gemini-2.5-flash",
+            "max_steps": 25
+        }
     }
 
     # 混淆密钥 (简单混淆，非高安全性加密)
@@ -188,6 +195,72 @@ class ConfigManager:
         """加密保存 API Key"""
         encrypted = cls.encrypt_sensitive(api_key)
         cls.set("sheerid_api_key", encrypted)
+
+    # ============ AI Agent 配置方法 ============
+
+    @classmethod
+    def get_ai_api_key(cls) -> str:
+        """获取解密后的 AI Agent API Key"""
+        encrypted = cls.get("ai_agent.api_key", "")
+        return cls.decrypt_sensitive(encrypted)
+
+    @classmethod
+    def set_ai_api_key(cls, api_key: str):
+        """加密保存 AI Agent API Key"""
+        encrypted = cls.encrypt_sensitive(api_key)
+        cls.set("ai_agent.api_key", encrypted)
+
+    @classmethod
+    def get_ai_base_url(cls) -> str:
+        """获取 AI Agent Base URL"""
+        return cls.get("ai_agent.base_url", "")
+
+    @classmethod
+    def set_ai_base_url(cls, base_url: str):
+        """设置 AI Agent Base URL"""
+        cls.set("ai_agent.base_url", base_url)
+
+    @classmethod
+    def get_ai_model(cls) -> str:
+        """获取 AI Agent 模型名称"""
+        return cls.get("ai_agent.model", "gemini-2.5-flash")
+
+    @classmethod
+    def set_ai_model(cls, model: str):
+        """设置 AI Agent 模型名称"""
+        cls.set("ai_agent.model", model)
+
+    @classmethod
+    def get_ai_max_steps(cls) -> int:
+        """获取 AI Agent 最大步骤数"""
+        return cls.get("ai_agent.max_steps", 25)
+
+    @classmethod
+    def set_ai_max_steps(cls, max_steps: int):
+        """设置 AI Agent 最大步骤数"""
+        cls.set("ai_agent.max_steps", max_steps)
+
+    # ============ Gmail IMAP 配置方法 ============
+
+    @classmethod
+    def get_gmail_imap_email(cls) -> str:
+        """获取 Gmail IMAP 邮箱（用于接收验证码）"""
+        return cls.get("gmail_imap_email", "")
+
+    @classmethod
+    def set_gmail_imap_email(cls, email: str):
+        """设置 Gmail IMAP 邮箱"""
+        cls.set("gmail_imap_email", email)
+
+    @classmethod
+    def get_gmail_imap_password(cls) -> str:
+        """获取 Gmail IMAP 应用密码"""
+        return cls.get("gmail_imap_password", "")
+
+    @classmethod
+    def set_gmail_imap_password(cls, password: str):
+        """设置 Gmail IMAP 应用密码"""
+        cls.set("gmail_imap_password", password)
 
     @classmethod
     def reload(cls):

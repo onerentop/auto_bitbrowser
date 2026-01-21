@@ -786,6 +786,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_modify_2sv_phone.clicked.connect(self.action_modify_2sv_phone)
         google_layout.addWidget(self.btn_modify_2sv_phone)
 
+        # 一键修改身份验证器按钮
+        self.btn_modify_authenticator = QPushButton("🔐 一键修改身份验证器")
+        self.btn_modify_authenticator.setFixedHeight(40)
+        self.btn_modify_authenticator.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_modify_authenticator.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                background-color: #00796B;
+                color: white;
+                border: none;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #00695C; }
+        """)
+        self.btn_modify_authenticator.clicked.connect(self.action_modify_authenticator)
+        google_layout.addWidget(self.btn_modify_authenticator)
+
         google_layout.addStretch()
         google_page.setLayout(google_layout)
         self.toolbox.addItem(google_page, "Google 专区")
@@ -1419,6 +1437,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.modify_2sv_phone_dialog.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开修改2SV手机号窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_modify_authenticator(self):
+        """打开一键修改身份验证器窗口"""
+        try:
+            from modify_authenticator_gui import ModifyAuthenticatorDialog
+
+            if not hasattr(self, 'modify_authenticator_dialog') or self.modify_authenticator_dialog is None:
+                self.modify_authenticator_dialog = ModifyAuthenticatorDialog()
+
+            self.modify_authenticator_dialog.show()
+            self.modify_authenticator_dialog.raise_()
+            self.modify_authenticator_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开修改身份验证器窗口: {e}")
             import traceback
             traceback.print_exc()
 

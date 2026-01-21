@@ -7,14 +7,61 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPushButton, QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QFormLayout, QGroupBox, QSpinBox,
-    QComboBox, QTextEdit, QDialog, QDialogButtonBox
+    QComboBox, QTextEdit, QDialog, QDialogButtonBox, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QFont
 
 from database import DBManager
 from data_store import DataStore, CardInfo, ProxyInfo, get_data_store
 from core.config_manager import ConfigManager
+
+# 尝试导入 AI Agent 模块
+try:
+    from core.ai_browser_agent import VisionAnalyzer
+    AI_AGENT_AVAILABLE = True
+except ImportError:
+    AI_AGENT_AVAILABLE = False
+    VisionAnalyzer = None
+
+
+class TestAIConnectionWorker(QThread):
+    """测试 AI 连接的后台线程"""
+    finished_signal = pyqtSignal(bool, str, dict)  # success, message, details
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+    ):
+        super().__init__()
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+
+    def run(self):
+        try:
+            if not VisionAnalyzer:
+                self.finished_signal.emit(False, "AI Agent 模块不可用", {})
+                return
+
+            if not self.api_key:
+                self.finished_signal.emit(False, "请输入 API Key", {})
+                return
+
+            # 创建 VisionAnalyzer 并测试连接
+            analyzer = VisionAnalyzer(
+                api_key=self.api_key,
+                base_url=self.base_url or None,
+                model=self.model,
+            )
+
+            success, message, details = analyzer.test_connection()
+            self.finished_signal.emit(success, message, details)
+
+        except Exception as e:
+            self.finished_signal.emit(False, f"测试失败: {str(e)}", {"error": str(e)})
 
 
 # ============================================================
@@ -956,11 +1003,22 @@ class SettingsTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.test_worker = None  # AI 连接测试线程
         self._init_ui()
         self.load_settings()
 
     def _init_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        # 滚动区域内容容器
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
 
         # API 设置
         api_group = QGroupBox("API 设置")
@@ -973,6 +1031,56 @@ class SettingsTab(QWidget):
 
         api_group.setLayout(api_layout)
         layout.addWidget(api_group)
+
+        # AI Agent 配置区域
+        ai_group = QGroupBox("🤖 AI Agent 配置 (Gemini)")
+        ai_layout = QFormLayout()
+
+        # API Key
+        self.ai_api_key_input = QLineEdit()
+        self.ai_api_key_input.setPlaceholderText("Gemini API Key（或从环境变量 GEMINI_API_KEY 读取）")
+        self.ai_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        ai_layout.addRow("API Key:", self.ai_api_key_input)
+
+        # Base URL
+        self.ai_base_url_input = QLineEdit()
+        self.ai_base_url_input.setPlaceholderText("留空使用 Gemini 官方 API")
+        ai_layout.addRow("Base URL:", self.ai_base_url_input)
+
+        # 模型选择
+        self.ai_model_input = QComboBox()
+        self.ai_model_input.setEditable(True)
+        self.ai_model_input.addItems([
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.5-flash-lite",
+        ])
+        ai_layout.addRow("模型:", self.ai_model_input)
+
+        # 最大步骤数
+        self.ai_max_steps_spin = QSpinBox()
+        self.ai_max_steps_spin.setRange(5, 50)
+        self.ai_max_steps_spin.setValue(25)
+        ai_layout.addRow("最大步骤:", self.ai_max_steps_spin)
+
+        # 测试连接按钮
+        ai_btn_layout = QHBoxLayout()
+        self.test_connection_btn = QPushButton("🔗 测试连接")
+        self.test_connection_btn.clicked.connect(self._test_ai_connection)
+        self.test_connection_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 15px;")
+        ai_btn_layout.addWidget(self.test_connection_btn)
+        ai_btn_layout.addStretch()
+        ai_layout.addRow("", ai_btn_layout)
+
+        # 提示信息
+        ai_hint = QLabel("提示: AI Agent 用于智能浏览器自动化任务（修改2SV手机、替换辅助邮箱等）")
+        ai_hint.setStyleSheet("color: #666; font-size: 11px;")
+        ai_hint.setWordWrap(True)
+        ai_layout.addRow("", ai_hint)
+
+        ai_group.setLayout(ai_layout)
+        layout.addWidget(ai_group)
 
         # Gmail IMAP 设置（用于接收验证码）
         gmail_group = QGroupBox("Gmail 验证码邮箱（替换辅助邮箱功能）")
@@ -1071,6 +1179,52 @@ class SettingsTab(QWidget):
 
         layout.addLayout(btn_layout)
 
+        # 设置滚动区域
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area)
+
+    def _test_ai_connection(self):
+        """测试 AI 连接"""
+        api_key = self.ai_api_key_input.text().strip() or ConfigManager.get_ai_api_key()
+        base_url = self.ai_base_url_input.text().strip() or ConfigManager.get_ai_base_url()
+        model = self.ai_model_input.currentText().strip() or ConfigManager.get_ai_model()
+
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请先输入 API Key")
+            return
+
+        # 禁用按钮，显示进度
+        self.test_connection_btn.setEnabled(False)
+        self.test_connection_btn.setText("测试中...")
+
+        # 创建测试线程
+        self.test_worker = TestAIConnectionWorker(api_key, base_url, model)
+        self.test_worker.finished_signal.connect(self._on_test_connection_finished)
+        self.test_worker.start()
+
+    def _on_test_connection_finished(self, success: bool, message: str, details: dict):
+        """测试连接完成回调"""
+        # 恢复按钮状态
+        self.test_connection_btn.setEnabled(True)
+        self.test_connection_btn.setText("🔗 测试连接")
+
+        if success:
+            # 显示详细信息
+            detail_msg = f"连接测试成功!\n\n"
+            detail_msg += f"模型: {details.get('model', 'N/A')}\n"
+            detail_msg += f"响应时间: {details.get('response_time_ms', 0)}ms\n"
+            if details.get('response_preview'):
+                detail_msg += f"AI 回复: {details.get('response_preview')}\n"
+            if details.get('usage'):
+                usage = details['usage']
+                detail_msg += f"Token 使用: 输入 {usage.get('input_tokens', 0)}, 输出 {usage.get('output_tokens', 0)}\n"
+            QMessageBox.information(self, "测试成功", detail_msg)
+        else:
+            error_msg = f"连接测试失败\n\n{message}"
+            if details.get('error_detail'):
+                error_msg += f"\n\n详情: {details['error_detail'][:200]}"
+            QMessageBox.critical(self, "测试失败", error_msg)
+
     def load_settings(self):
         """加载设置"""
         try:
@@ -1079,6 +1233,12 @@ class SettingsTab(QWidget):
             # API
             api_key = ConfigManager.get("sheerid_api_key", "")
             self.api_key_input.setText(api_key)
+
+            # AI Agent 配置
+            self.ai_api_key_input.setText(ConfigManager.get_ai_api_key())
+            self.ai_base_url_input.setText(ConfigManager.get_ai_base_url())
+            self.ai_model_input.setCurrentText(ConfigManager.get_ai_model())
+            self.ai_max_steps_spin.setValue(ConfigManager.get_ai_max_steps())
 
             # Gmail IMAP
             gmail_email = ConfigManager.get("gmail_imap_email", "")
@@ -1107,6 +1267,14 @@ class SettingsTab(QWidget):
         try:
             # API
             ConfigManager.set("sheerid_api_key", self.api_key_input.text())
+
+            # AI Agent 配置
+            ai_api_key = self.ai_api_key_input.text().strip()
+            if ai_api_key:
+                ConfigManager.set_ai_api_key(ai_api_key)
+            ConfigManager.set_ai_base_url(self.ai_base_url_input.text().strip())
+            ConfigManager.set_ai_model(self.ai_model_input.currentText().strip())
+            ConfigManager.set_ai_max_steps(self.ai_max_steps_spin.value())
 
             # Gmail IMAP
             ConfigManager.set("gmail_imap_email", self.gmail_email_input.text().strip())
@@ -1140,15 +1308,24 @@ class SettingsTab(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.api_key_input.setText("")
+            # AI Agent
+            self.ai_api_key_input.setText("")
+            self.ai_base_url_input.setText("")
+            self.ai_model_input.setCurrentText("gemini-2.5-flash")
+            self.ai_max_steps_spin.setValue(25)
+            # Gmail
             self.gmail_email_input.setText("")
             self.gmail_password_input.setText("")
+            # Timeouts
             self.page_load_spin.setValue(30)
             self.status_check_spin.setValue(20)
             self.iframe_wait_spin.setValue(15)
+            # Delays
             self.delay_login_spin.setValue(3)
             self.delay_offer_spin.setValue(8)
             self.delay_add_card_spin.setValue(10)
             self.delay_save_spin.setValue(18)
+            # Other
             self.thread_count_spin.setValue(3)
 
 

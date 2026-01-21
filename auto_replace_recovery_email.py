@@ -1,5 +1,5 @@
 """
-自动修改 Google 2-Step Verification 手机号
+自动替换 Google 辅助邮箱 (Recovery Email)
 
 使用 Gemini Vision AI Agent 自动完成操作
 """
@@ -11,32 +11,35 @@ from core.ai_browser_agent import AIBrowserAgent, TaskResult
 from core.ai_browser_agent.agent import run_with_ixbrowser
 
 
-# 目标 URL - 2-Step Verification 设置页面
-TWO_STEP_PHONE_URL = "https://myaccount.google.com/signinoptions/two-step-verification"
+# 目标 URL - 辅助邮箱设置页面
+RECOVERY_EMAIL_URL = "https://myaccount.google.com/signinoptions/rescueemail"
 
 
-async def auto_modify_2sv_phone(
+async def auto_replace_recovery_email(
     browser_id: str,
     account_info: dict,
-    new_phone: str,
-    close_after: bool = True,
+    new_email: str,
+    close_after: bool = False,
     max_steps: int = 25,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
     model: str = "gemini-2.5-flash",
+    email_imap_config: dict = None,
 ) -> Tuple[bool, str]:
     """
-    修改 Google 2-Step Verification 手机号
+    替换 Google 辅助邮箱
 
     Args:
         browser_id: ixBrowser 窗口 ID
         account_info: 账号信息 {'email', 'password', 'secret'}
-        new_phone: 新手机号
+        new_email: 新辅助邮箱
         close_after: 完成后是否关闭浏览器
         max_steps: 最大执行步骤数
         api_key: API Key（可选，默认从环境变量 GEMINI_API_KEY 读取）
         base_url: API Base URL（可选，默认使用 Gemini OpenAI 兼容 API）
         model: 使用的模型（默认 gemini-2.5-flash）
+        email_imap_config: 邮箱 IMAP 配置 {'email': str, 'password': str}
+                          用于自动读取邮箱验证码
 
     Returns:
         (success: bool, message: str)
@@ -46,30 +49,31 @@ async def auto_modify_2sv_phone(
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
-    print(f"修改 2SV 手机号")
+    print(f"替换辅助邮箱 (Recovery Email)")
     print(f"账号: {email}")
-    print(f"新手机号: {new_phone}")
+    print(f"新辅助邮箱: {new_email}")
     print(f"{'='*50}")
 
     result: TaskResult = await run_with_ixbrowser(
         browser_id=browser_id,
-        goal=f"将 Google 账号 {email} 的 2-Step Verification 手机号修改为 {new_phone}",
-        start_url=TWO_STEP_PHONE_URL,
+        goal=f"将 Google 账号 {email} 的辅助邮箱修改为 {new_email}",
+        start_url=RECOVERY_EMAIL_URL,
         account=account_info,
-        params={"new_phone": new_phone},
-        task_type="modify_2sv_phone",
+        params={"new_email": new_email},
+        task_type="replace_recovery_email",
         max_steps=max_steps,
         close_after=close_after,
         api_key=api_key,
         base_url=base_url,
         model=model,
+        email_imap_config=email_imap_config,
     )
 
     if result.success:
-        print(f"\n✅ 2SV 手机号修改成功!")
+        print(f"\n✅ 辅助邮箱替换成功!")
         print(f"总步骤数: {result.total_steps}")
     else:
-        print(f"\n❌ 2SV 手机号修改失败")
+        print(f"\n❌ 辅助邮箱替换失败")
         print(f"原因: {result.message}")
         if result.error_details:
             print(f"详情: {result.error_details[:500]}")
@@ -87,13 +91,13 @@ if __name__ == "__main__":
             "password": "test_password",
             "secret": "test_secret",
         }
-        test_phone = "+1234567890"
+        test_new_email = "backup@example.com"
 
-        success, msg = await auto_modify_2sv_phone(
+        success, msg = await auto_replace_recovery_email(
             test_browser_id,
             test_account,
-            test_phone,
-            close_after=True,
+            test_new_email,
+            close_after=False,
         )
         print(f"\nResult: {success}, {msg}")
 

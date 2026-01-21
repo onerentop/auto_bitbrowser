@@ -1,6 +1,6 @@
 """
-一键修改 2-Step Verification 手机号 GUI 窗口
-支持批量修改 Google 账号的 2SV 手机号
+一键修改身份验证器 (Authenticator App) GUI 窗口
+支持批量修改 Google 账号的身份验证器并提取新密钥
 
 使用 AI Agent 模式（Gemini Vision）
 AI 配置请在「配置管理 → 全局设置」中设置
@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
-    QLineEdit,
     QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
@@ -32,29 +31,31 @@ from ix_api import get_group_list
 from ix_window import get_browser_list
 from database import DBManager
 from core.config_manager import ConfigManager
-from auto_modify_2sv_phone import auto_modify_2sv_phone
+from auto_modify_authenticator import auto_modify_authenticator
 
 
-class Modify2SVPhoneWorker(QThread):
+class ModifyAuthenticatorWorker(QThread):
     """后台工作线程"""
-    progress_signal = pyqtSignal(str, str, str)  # browser_id, status, message
+    progress_signal = pyqtSignal(str, str, str, str)  # browser_id, status, message, new_secret
     finished_signal = pyqtSignal()
     log_signal = pyqtSignal(str)
 
     def __init__(
         self,
         accounts: list[dict],
-        new_phone: str,
         thread_count: int,
         close_after: bool,
         ai_config: dict = None,
+        save_to_file: bool = True,
+        output_file: str = "已修改密钥.txt",
     ):
         super().__init__()
         self.accounts = accounts
-        self.new_phone = new_phone
         self.thread_count = max(1, thread_count)
         self.close_after = close_after
         self.ai_config = ai_config or {}
+        self.save_to_file = save_to_file
+        self.output_file = output_file
         self.is_running = True
 
     def stop(self):
@@ -90,8 +91,8 @@ class Modify2SVPhoneWorker(QThread):
                 browser_id = account.get('browser_id', '')
                 email = account.get('email', 'Unknown')
 
-                self._log(f"[{index + 1}] 开始修改 2SV 手机号: {email} ({browser_id})")
-                self.progress_signal.emit(browser_id, "处理中", "正在修改...")
+                self._log(f"[{index + 1}] 开始修改身份验证器: {email} ({browser_id})")
+                self.progress_signal.emit(browser_id, "处理中", "正在修改...", "")
 
                 try:
                     account_info = {
@@ -100,27 +101,29 @@ class Modify2SVPhoneWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg = await auto_modify_2sv_phone(
+                    success, msg, new_secret = await auto_modify_authenticator(
                         browser_id,
                         account_info,
-                        self.new_phone,
                         self.close_after,
                         api_key=self.ai_config.get('api_key'),
                         base_url=self.ai_config.get('base_url'),
                         model=self.ai_config.get('model', 'gemini-2.5-flash'),
-                        max_steps=self.ai_config.get('max_steps', 25),
+                        max_steps=self.ai_config.get('max_steps', 30),
+                        save_to_file=self.save_to_file,
+                        output_file=self.output_file,
                     )
 
                     if success:
-                        self._log(f"[{index + 1}] ✅ {email}: {msg}")
-                        self.progress_signal.emit(browser_id, "成功", msg)
+                        secret_display = f"新密钥: {new_secret[:16]}..." if new_secret and len(new_secret) > 16 else (new_secret or "")
+                        self._log(f"[{index + 1}] ✅ {email}: {msg} ({secret_display})")
+                        self.progress_signal.emit(browser_id, "成功", msg, new_secret or "")
                     else:
                         self._log(f"[{index + 1}] ❌ {email}: {msg}")
-                        self.progress_signal.emit(browser_id, "失败", msg)
+                        self.progress_signal.emit(browser_id, "失败", msg, "")
 
                 except Exception as e:
                     self._log(f"[{index + 1}] ❌ {email}: {e}")
-                    self.progress_signal.emit(browser_id, "错误", str(e))
+                    self.progress_signal.emit(browser_id, "错误", str(e), "")
 
         # 并发执行
         tasks = [process_one(i, acc) for i, acc in enumerate(self.accounts)]
@@ -129,13 +132,13 @@ class Modify2SVPhoneWorker(QThread):
         self._log("✅ 所有账号处理完成")
 
 
-class Modify2SVPhoneDialog(QDialog):
-    """修改 2SV 手机号主对话框"""
+class ModifyAuthenticatorDialog(QDialog):
+    """修改身份验证器主对话框"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("一键修改 2-Step Verification 手机号")
-        self.setMinimumSize(900, 700)
+        self.setWindowTitle("一键修改身份验证器 (Authenticator App)")
+        self.setMinimumSize(950, 700)
 
         self.worker = None
         self.db_manager = DBManager()
@@ -147,14 +150,22 @@ class Modify2SVPhoneDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
 
+        # 说明区域
+        info_group = QGroupBox("功能说明")
+        info_layout = QVBoxLayout(info_group)
+        info_label = QLabel(
+            "🔐 此功能用于批量修改 Google 账号的身份验证器（Authenticator App）\n"
+            "• 自动提取新的 TOTP 密钥并保存到数据库和文件\n"
+            "• 支持已有身份验证器的更换和新增设置\n"
+            "• 新密钥会自动用于生成验证码完成验证"
+        )
+        info_label.setStyleSheet("color: #333; padding: 5px;")
+        info_layout.addWidget(info_label)
+        layout.addWidget(info_group)
+
         # 设置区域
         settings_group = QGroupBox("设置")
         settings_layout = QFormLayout(settings_group)
-
-        # 新手机号输入
-        self.phone_input = QLineEdit()
-        self.phone_input.setPlaceholderText("输入新的 2SV 手机号（如 +1234567890）")
-        settings_layout.addRow("新手机号:", self.phone_input)
 
         # 并发数
         self.thread_spin = QSpinBox()
@@ -166,6 +177,11 @@ class Modify2SVPhoneDialog(QDialog):
         self.close_after_check = QCheckBox("完成后关闭浏览器")
         self.close_after_check.setChecked(False)
         settings_layout.addRow("", self.close_after_check)
+
+        # 保存到文件
+        self.save_to_file_check = QCheckBox("同时保存到文件 (已修改密钥.txt)")
+        self.save_to_file_check.setChecked(True)
+        settings_layout.addRow("", self.save_to_file_check)
 
         # AI 配置提示
         ai_hint = QLabel("💡 AI 配置请在「配置管理 → 全局设置」中设置")
@@ -202,7 +218,7 @@ class Modify2SVPhoneDialog(QDialog):
 
         # 树形控件（按分组显示）
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["选择", "邮箱", "窗口ID", "状态", "消息"])
+        self.tree.setHeaderLabels(["选择", "邮箱", "窗口ID", "状态", "新密钥"])
         self.tree.setColumnWidth(0, 60)
         self.tree.setColumnWidth(1, 250)
         self.tree.setColumnWidth(2, 120)
@@ -416,11 +432,6 @@ class Modify2SVPhoneDialog(QDialog):
 
     def _start_process(self):
         """开始执行"""
-        new_phone = self.phone_input.text().strip()
-        if not new_phone:
-            QMessageBox.warning(self, "警告", "请输入新的 2SV 手机号")
-            return
-
         accounts = self._get_selected_accounts()
         if not accounts:
             QMessageBox.warning(self, "警告", "请选择要处理的账号")
@@ -430,7 +441,9 @@ class Modify2SVPhoneDialog(QDialog):
         reply = QMessageBox.question(
             self,
             "确认",
-            f"确定要修改 {len(accounts)} 个账号的 2SV 手机号为 {new_phone}？",
+            f"确定要修改 {len(accounts)} 个账号的身份验证器？\n\n"
+            "⚠️ 此操作会更换身份验证器密钥，旧密钥将失效！\n"
+            "新密钥会自动保存到数据库和文件。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
@@ -453,12 +466,12 @@ class Modify2SVPhoneDialog(QDialog):
         self._log(f"模型: {ai_config.get('model', 'default')}")
 
         # 创建工作线程
-        self.worker = Modify2SVPhoneWorker(
+        self.worker = ModifyAuthenticatorWorker(
             accounts,
-            new_phone,
             self.thread_spin.value(),
             self.close_after_check.isChecked(),
             ai_config=ai_config,
+            save_to_file=self.save_to_file_check.isChecked(),
         )
         self.worker.progress_signal.connect(self._on_progress)
         self.worker.finished_signal.connect(self._on_finished)
@@ -467,7 +480,6 @@ class Modify2SVPhoneDialog(QDialog):
         # 更新 UI 状态
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.phone_input.setEnabled(False)
 
         self._log(f"开始处理 {len(accounts)} 个账号...")
         self.worker.start()
@@ -478,7 +490,7 @@ class Modify2SVPhoneDialog(QDialog):
             self.worker.stop()
             self._log("⚠️ 正在停止...")
 
-    def _on_progress(self, browser_id: str, status: str, message: str):
+    def _on_progress(self, browser_id: str, status: str, message: str, new_secret: str):
         """处理进度更新"""
         root = self.tree.invisibleRootItem()
         for i in range(root.childCount()):
@@ -487,7 +499,12 @@ class Modify2SVPhoneDialog(QDialog):
                 child = group_item.child(j)
                 if child.text(2) == browser_id:
                     child.setText(3, status)
-                    child.setText(4, message)
+                    # 显示新密钥（截取显示）
+                    if new_secret:
+                        display_secret = f"{new_secret[:12]}..." if len(new_secret) > 12 else new_secret
+                        child.setText(4, display_secret)
+                    else:
+                        child.setText(4, message[:30] if len(message) > 30 else message)
 
                     # 根据状态设置颜色
                     if status == "成功":
@@ -500,7 +517,6 @@ class Modify2SVPhoneDialog(QDialog):
         """处理完成"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.phone_input.setEnabled(True)
 
         self._log("✅ 处理完成")
         self.worker = None
@@ -518,6 +534,6 @@ if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
-    dialog = Modify2SVPhoneDialog()
+    dialog = ModifyAuthenticatorDialog()
     dialog.show()
     sys.exit(app.exec())

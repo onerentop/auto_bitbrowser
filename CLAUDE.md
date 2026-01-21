@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Last Updated**: 2026-01-19 21:09:19
+> **Last Updated**: 2026-01-20 18:03:27
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -90,6 +90,14 @@ graph TB
 | **sheerid_verifier** | `sheerid_verifier.py` | SheerID API 调用 (SheerIDVerifier 类) |
 | **create_window_gui** | `create_window_gui.py` | PyQt6 主界面 + WorkerThread |
 | **web_admin** | `web_admin/` | Web 管理界面 (Port 8080) |
+| **core** | `core/` | 核心工具模块 (ConfigManager, RetryHelper, DataParser) |
+
+## Submodule Navigation
+
+| Module | CLAUDE.md |
+|--------|-----------|
+| core | [`core/CLAUDE.md`](core/CLAUDE.md) |
+| web_admin | [`web_admin/CLAUDE.md`](web_admin/CLAUDE.md) |
 
 ## Quick Start
 
