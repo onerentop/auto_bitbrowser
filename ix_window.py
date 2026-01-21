@@ -23,7 +23,7 @@ def get_client() -> IXBrowserClient:
     return _client
 
 
-def get_browser_list(page: int = 1, limit: int = 50, group_id: int = 0) -> list:
+def get_browser_list(page: int = 1, limit: int = 100, group_id: int = 0, fetch_all: bool = True) -> list:
     """
     获取所有窗口列表
 
@@ -31,18 +31,45 @@ def get_browser_list(page: int = 1, limit: int = 50, group_id: int = 0) -> list:
         page: 页码 (从1开始)
         limit: 每页数量
         group_id: 分组ID (0=全部)
+        fetch_all: 是否自动获取全部数据 (分页遍历)
 
     Returns:
         窗口列表
     """
     client = get_client()
-    data = client.get_profile_list(page=page, limit=limit, group_id=group_id)
 
-    if data is None:
-        print(f"获取列表失败: {client.message}")
-        return []
+    if not fetch_all:
+        # 只获取指定页
+        data = client.get_profile_list(page=page, limit=limit, group_id=group_id)
+        if data is None:
+            print(f"获取列表失败: {client.message}")
+            return []
+        return data
 
-    return data
+    # 自动分页获取全部数据
+    all_browsers = []
+    current_page = 1
+
+    while True:
+        data = client.get_profile_list(page=current_page, limit=limit, group_id=group_id)
+
+        if data is None:
+            print(f"获取列表失败: {client.message}")
+            break
+
+        if not data:
+            # 没有更多数据
+            break
+
+        all_browsers.extend(data)
+
+        if len(data) < limit:
+            # 当前页数据不足，说明已是最后一页
+            break
+
+        current_page += 1
+
+    return all_browsers
 
 
 def get_browser_info(profile_id: int) -> dict:
