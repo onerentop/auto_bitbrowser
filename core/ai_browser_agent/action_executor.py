@@ -118,6 +118,20 @@ class ActionExecutor:
                     await self._wait_for_page_stable()
                     return True, f"点击元素: {action.target_description}"
                 except Exception as e1:
+                    error_msg = str(e1)
+                    # 检查是否是被遮罩层阻止（对话框场景）
+                    if "intercepts pointer events" in error_msg:
+                        print(f"[AI Agent] 检测到遮罩层阻止点击，尝试在对话框中查找按钮...")
+                        # 尝试在对话框中查找相同含义的按钮
+                        dialog_element = await self._find_dialog_button(action.target_description)
+                        if dialog_element:
+                            try:
+                                await dialog_element.click(timeout=self.timeout)
+                                await self._wait_for_page_stable()
+                                return True, f"点击对话框按钮: {action.target_description}"
+                            except Exception as dialog_err:
+                                print(f"[AI Agent] 对话框按钮点击失败: {dialog_err}")
+
                     print(f"[AI Agent] 普通点击失败: {e1}, 尝试 force click...")
                     try:
                         # 尝试强制点击
@@ -156,6 +170,121 @@ class ActionExecutor:
             return False, f"未找到元素: {action.target_description}"
 
         return False, "未指定点击目标"
+
+    async def _find_dialog_button(self, original_target: str) -> Optional[Locator]:
+        """
+        在对话框中查找按钮
+
+        当检测到遮罩层阻止点击时，尝试在对话框中查找相同含义的按钮。
+        支持多语言按钮文字映射。
+
+        Args:
+            original_target: 原始目标按钮文字
+
+        Returns:
+            找到的 Locator 或 None
+        """
+        # 按钮文字的多语言映射（用于 Sign out / 退出账号 等场景）
+        button_translations = {
+            # Sign out 类
+            "sign out": ["退出账号", "登出", "退出", "ログアウト", "로그아웃", "Đăng xuất", "Cerrar sesión", "Se déconnecter", "Abmelden", "Sair"],
+            "退出账号": ["Sign out", "登出", "退出", "ログアウト", "로그아웃"],
+            "登出": ["Sign out", "退出账号", "退出", "ログアウト"],
+            # Remove 类
+            "remove": ["删除", "移除", "移除电话", "削除", "삭제", "Xóa", "Eliminar", "Supprimer", "Entfernen", "Remover"],
+            "删除": ["Remove", "Delete", "移除", "削除", "삭제"],
+            # OK/Confirm 类
+            "ok": ["确定", "确认", "好", "好的", "知道了", "OK", "確定"],
+            "确定": ["OK", "确认", "好", "Got it"],
+            "got it": ["知道了", "确定", "好的", "OK"],
+        }
+
+        original_lower = original_target.lower().strip()
+
+        # 获取可能的翻译
+        possible_texts = [original_target]
+        for key, translations in button_translations.items():
+            if key in original_lower or original_lower in key:
+                possible_texts.extend(translations)
+                break
+
+        # 去重
+        possible_texts = list(dict.fromkeys(possible_texts))
+        print(f"[AI Agent] 对话框按钮查找候选: {possible_texts[:5]}...")
+
+        # 对话框通常是最前面的可见元素，使用更具体的选择器
+        dialog_selectors = [
+            '[role="dialog"]',
+            '[role="alertdialog"]',
+            '[class*="dialog" i]',
+            '[class*="modal" i]',
+            '[class*="overlay" i]',
+            'div[jsaction*="dismiss"]',  # Google 特有
+            'div[class*="pZzBJe"]',  # Google 对话框容器类
+        ]
+
+        for text in possible_texts:
+            if not text or len(text) < 2:
+                continue
+
+            # 首先尝试在对话框容器内查找
+            for dialog_sel in dialog_selectors:
+                try:
+                    dialog = self.page.locator(dialog_sel)
+                    count = await dialog.count()
+                    if count > 0:
+                        print(f"[AI Agent] 找到对话框容器: {dialog_sel}, 数量: {count}")
+                        # 在对话框内查找按钮 - 使用更宽松的匹配（包含匹配而非精确匹配）
+                        button = dialog.locator('button, [role="button"], a').filter(has_text=text)
+                        btn_count = await button.count()
+                        print(f"[AI Agent] 在对话框中搜索 '{text}', 找到 {btn_count} 个按钮")
+                        if btn_count > 0:
+                            # 遍历所有匹配的按钮，找第一个可见的
+                            for i in range(btn_count):
+                                btn = button.nth(i)
+                                try:
+                                    if await btn.is_visible():
+                                        # 尝试获取按钮文本用于调试
+                                        try:
+                                            btn_text = await btn.inner_text()
+                                            print(f"[AI Agent] 在对话框中找到按钮: '{btn_text.strip()}'")
+                                        except Exception:
+                                            print(f"[AI Agent] 在对话框中找到按钮: {text}")
+                                        return btn
+                                except Exception:
+                                    continue
+                except Exception as e:
+                    print(f"[AI Agent] 对话框选择器 {dialog_sel} 查找失败: {e}")
+                    continue
+
+            # 直接查找可见的按钮（对话框中的按钮应该在最上层可见）
+            try:
+                # 使用宽松匹配（包含匹配）
+                button = self.page.locator('button, [role="button"]').filter(has_text=text)
+                count = await button.count()
+                print(f"[AI Agent] 全局搜索 '{text}' 按钮, 找到 {count} 个")
+
+                # 从后往前遍历（对话框中的按钮通常在 DOM 后面）
+                for i in range(count - 1, -1, -1):
+                    btn = button.nth(i)
+                    try:
+                        if await btn.is_visible():
+                            # 检查是否被遮挡（获取边界框来判断）
+                            box = await btn.bounding_box()
+                            if box:
+                                try:
+                                    btn_text = await btn.inner_text()
+                                    print(f"[AI Agent] 找到可见按钮 (从后往前): '{btn_text.strip()}'")
+                                except Exception:
+                                    print(f"[AI Agent] 找到可见按钮: {text}")
+                                return btn
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"[AI Agent] 全局按钮搜索失败: {e}")
+                continue
+
+        return None
 
     async def _execute_fill(self, action: AgentAction) -> Tuple[bool, str]:
         """执行填写操作"""

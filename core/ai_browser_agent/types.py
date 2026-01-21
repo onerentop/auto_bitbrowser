@@ -78,6 +78,8 @@ class AgentAction:
     extracted_link: Optional[str] = None
     # 结果状态（用于 get_sheerlink 等任务返回状态分类）
     result_status: Optional[str] = None
+    # 踢出设备数量（用于 kick_devices 任务）
+    kicked_count: Optional[int] = None
 
     def __str__(self) -> str:
         if self.action_type == ActionType.CLICK:

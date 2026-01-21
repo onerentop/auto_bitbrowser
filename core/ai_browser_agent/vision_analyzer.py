@@ -250,6 +250,7 @@ class VisionAnalyzer:
                 extracted_secret=data.get("extracted_secret"),
                 extracted_link=data.get("extracted_link"),
                 result_status=data.get("result_status"),
+                kicked_count=data.get("kicked_count"),
             )
 
         except json.JSONDecodeError as e:

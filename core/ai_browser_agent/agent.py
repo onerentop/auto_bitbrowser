@@ -192,6 +192,9 @@ class AIBrowserAgent:
                     result_data = {"action_type": "done"}
                     if action.result_status:
                         result_data["result_status"] = action.result_status
+                    # 传递 kicked_count（用于 kick_devices 任务）
+                    if action.kicked_count is not None:
+                        result_data["kicked_count"] = action.kicked_count
                     return TaskResult(
                         success=True,
                         message=action.reasoning,
