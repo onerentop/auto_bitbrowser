@@ -1,0 +1,26 @@
+{
+  "sheerid_api_key": "",
+  "default_thread_count": 3,
+  "timeouts": {
+    "page_load": 30,
+    "status_check": 20,
+    "iframe_wait": 15
+  },
+  "delays": {
+    "after_login": 3,
+    "after_offer": 8,
+    "after_add_card": 10,
+    "after_save": 18
+  },
+  "card_rotation_index": 0,
+  "last_used_template_id": "",
+  "window_name_prefix": "",
+  "ai_agent": {
+    "api_key": "",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "model": "gemini-2.5-flash",
+    "max_steps": 25
+  },
+  "gmail_imap_email": "",
+  "gmail_imap_password": ""
+}

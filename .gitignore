@@ -10,6 +10,8 @@ sheerIDlink.txt
 sheerID_verified_failed.txt
 2fa_codes.txt
 sheerid_tool/
+config.json
+已修改密钥.txt
 
 # Exclude database files
 *.db
