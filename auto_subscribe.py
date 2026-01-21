@@ -289,7 +289,7 @@ class AutoSubscriber:
                 # 记录绑卡历史
                 card_number = card_info.get("number", "")
                 if card_number:
-                    DBManager.add_bind_card_history(email, card_number[-4:])
+                    DBManager.add_bind_card_history(email, card_number[-4:] if len(card_number) >= 4 else card_number)
 
                 return SubscribeResult(
                     success=True,

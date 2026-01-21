@@ -909,6 +909,7 @@ class DBManager:
             DBManager.init_2sv_phone_modification_table()
             DBManager.init_authenticator_modification_table()
             DBManager.init_sheerid_verification_table()
+            DBManager.init_bind_card_history_table()
 
             with lock:
                 conn = DBManager.get_connection()
@@ -936,13 +937,16 @@ class DBManager:
                         sh.verification_id as sheerid_id,
                         sh.verification_result as sheerid_result,
                         sh.message as sheerid_message,
-                        sh.verified_at as sheerid_verified_at
+                        sh.verified_at as sheerid_verified_at,
+                        bc.card_number as bind_card_number,
+                        bc.bound_at as bind_card_at
                     FROM accounts a
                     LEFT JOIN phone_modification_history p ON a.email = p.email
                     LEFT JOIN email_modification_history e ON a.email = e.email
                     LEFT JOIN sv2_phone_modification_history sv ON a.email = sv.email
                     LEFT JOIN authenticator_modification_history auth ON a.email = auth.email
                     LEFT JOIN sheerid_verification_history sh ON a.email = sh.email
+                    LEFT JOIN bind_card_history bc ON a.email = bc.email
                     ORDER BY a.updated_at DESC
                 ''')
                 rows = cursor.fetchall()
@@ -981,6 +985,10 @@ class DBManager:
                         'sheerid_result': row['sheerid_result'],
                         'sheerid_message': row['sheerid_message'],
                         'sheerid_verified_at': row['sheerid_verified_at'],
+                        # 绑卡记录
+                        'bind_card': row['bind_card_number'] is not None,
+                        'bind_card_number': row['bind_card_number'],
+                        'bind_card_at': row['bind_card_at'],
                     })
                 return result
         except Exception as e:

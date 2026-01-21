@@ -95,12 +95,14 @@ class ComprehensiveQueryWindow(QDialog):
         self.cb_sv2_modified = QCheckBox("2SV手机号已修改")
         self.cb_auth_modified = QCheckBox("验证器已修改")
         self.cb_sheerid_verified = QCheckBox("SheerID已验证")
+        self.cb_bind_card = QCheckBox("已绑卡")
 
         history_layout.addWidget(self.cb_phone_modified)
         history_layout.addWidget(self.cb_email_modified)
         history_layout.addWidget(self.cb_sv2_modified)
         history_layout.addWidget(self.cb_auth_modified)
         history_layout.addWidget(self.cb_sheerid_verified)
+        history_layout.addWidget(self.cb_bind_card)
 
         history_group.setLayout(history_layout)
         layout.addWidget(history_group)
@@ -167,7 +169,7 @@ class ComprehensiveQueryWindow(QDialog):
         # 定义列
         columns = [
             "邮箱", "密码", "辅助邮箱", "2FA密钥", "主状态", "更新时间",
-            "辅助手机号", "辅助邮箱状态", "2SV手机号", "验证器状态", "SheerID状态"
+            "辅助手机号", "辅助邮箱状态", "2SV手机号", "验证器状态", "SheerID状态", "绑卡状态"
         ]
         table.setColumnCount(len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -184,6 +186,7 @@ class ComprehensiveQueryWindow(QDialog):
         table.setColumnWidth(8, 120)  # 2SV手机号
         table.setColumnWidth(9, 100)  # 验证器状态
         table.setColumnWidth(10, 100) # SheerID状态
+        table.setColumnWidth(11, 100) # 绑卡状态
 
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -255,6 +258,8 @@ class ComprehensiveQueryWindow(QDialog):
                 continue
             if self.cb_sheerid_verified.isChecked() and not row.get('sheerid_verified'):
                 continue
+            if self.cb_bind_card.isChecked() and not row.get('bind_card'):
+                continue
 
             # 时间筛选
             if enable_time and row.get('updated_at'):
@@ -281,7 +286,8 @@ class ComprehensiveQueryWindow(QDialog):
                     str(row.get('phone_new', '')),
                     str(row.get('email_new', '')),
                     str(row.get('sv2_phone_new', '')),
-                    str(row.get('message', ''))
+                    str(row.get('message', '')),
+                    str(row.get('bind_card_number', ''))
                 ]).lower()
                 if keyword not in searchable:
                     continue
@@ -299,6 +305,7 @@ class ComprehensiveQueryWindow(QDialog):
         self.cb_sv2_modified.setChecked(False)
         self.cb_auth_modified.setChecked(False)
         self.cb_sheerid_verified.setChecked(False)
+        self.cb_bind_card.setChecked(False)
         self.cb_enable_time_filter.setChecked(False)
         self.search_input.clear()
 
@@ -390,6 +397,14 @@ class ComprehensiveQueryWindow(QDialog):
                 sheerid_status = "—"
             self.table.setItem(row_idx, 10, QTableWidgetItem(sheerid_status))
 
+            # 绑卡状态
+            if data.get('bind_card'):
+                card_num = data.get('bind_card_number', '')
+                bind_card_status = f"✅ {card_num}" if card_num else "✅ 已绑卡"
+            else:
+                bind_card_status = "—"
+            self.table.setItem(row_idx, 11, QTableWidgetItem(bind_card_status))
+
     def _get_status_color(self, status: str) -> QBrush:
         """根据状态返回背景颜色"""
         colors = {
@@ -443,7 +458,8 @@ class ComprehensiveQueryWindow(QDialog):
                     headers = [
                         "邮箱", "密码", "辅助邮箱", "2FA密钥", "主状态", "更新时间",
                         "辅助手机号已修改", "新辅助手机号", "辅助邮箱已修改", "新辅助邮箱",
-                        "2SV手机号已修改", "新2SV手机号", "验证器已修改", "SheerID结果"
+                        "2SV手机号已修改", "新2SV手机号", "验证器已修改", "SheerID结果",
+                        "已绑卡", "绑卡卡号"
                     ]
                     f.write(",".join(headers) + "\n")
 
@@ -462,7 +478,9 @@ class ComprehensiveQueryWindow(QDialog):
                             "是" if row.get('sv2_phone_modified') else "否",
                             row.get('sv2_phone_new', '') or '',
                             "是" if row.get('auth_modified') else "否",
-                            row.get('sheerid_result', '') or ''
+                            row.get('sheerid_result', '') or '',
+                            "是" if row.get('bind_card') else "否",
+                            row.get('bind_card_number', '') or ''
                         ]
                         # 转义逗号和双引号 (CSV标准: 双引号需要转义为两个双引号)
                         escaped = []

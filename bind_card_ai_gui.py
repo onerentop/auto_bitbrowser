@@ -597,6 +597,9 @@ class BindCardAIDialog(QDialog):
                         # 更新账号状态为 subscribed
                         email = child.text(1)
                         DBManager.update_status(email, "subscribed", "绑卡成功")
+                        # 记录绑卡历史（供综合查询使用）
+                        if card_number:
+                            DBManager.add_bind_card_history(email, card_number[-4:] if len(card_number) >= 4 else card_number)
                         # 设置置灰样式（跳过状态列，保留绿色背景的可读性）
                         gray_color = QColor(150, 150, 150)
                         gray_brush = QBrush(gray_color)
