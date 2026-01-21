@@ -623,6 +623,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_modify_authenticator.clicked.connect(self.action_modify_authenticator)
         google_layout.addWidget(self.btn_modify_authenticator)
 
+        # 一键踢出非本机设备按钮
+        self.btn_kick_devices = QPushButton("🚫 一键踢出非本机设备")
+        self.btn_kick_devices.setFixedHeight(40)
+        self.btn_kick_devices.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_kick_devices.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #795548;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #5D4037; }
+        """)
+        self.btn_kick_devices.clicked.connect(self.action_kick_devices)
+        google_layout.addWidget(self.btn_kick_devices)
+
         # 综合查询按钮
         self.btn_comprehensive_query = QPushButton("🔍 综合查询")
         self.btn_comprehensive_query.setFixedHeight(40)
@@ -1153,6 +1171,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.modify_authenticator_dialog.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开修改身份验证器窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_kick_devices(self):
+        """打开一键踢出非本机设备窗口"""
+        try:
+            from kick_devices_gui import KickDevicesDialog
+
+            if not hasattr(self, 'kick_devices_dialog') or self.kick_devices_dialog is None:
+                self.kick_devices_dialog = KickDevicesDialog()
+
+            self.kick_devices_dialog.show()
+            self.kick_devices_dialog.raise_()
+            self.kick_devices_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开踢出设备窗口: {e}")
             import traceback
             traceback.print_exc()
 
