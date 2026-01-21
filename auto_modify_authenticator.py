@@ -18,6 +18,9 @@ from database import DBManager
 # 目标 URL - 身份验证器设置页面
 AUTHENTICATOR_URL = "https://myaccount.google.com/two-step-verification/authenticator"
 
+# 常量定义
+MIN_REMAINING_STEPS = 15  # 提取密钥后最少保留的步骤数
+
 
 async def auto_modify_authenticator(
     browser_id: str,
@@ -103,6 +106,8 @@ async def auto_modify_authenticator(
         navigate_first = True
         params = {}
 
+        # 主循环：执行直到成功、失败或被中断
+        # 注意：remaining_steps 由 max() 保证 >= MIN_REMAINING_STEPS，循环通过 return 退出
         while remaining_steps > 0:
             task_result = await agent.execute_task(
                 page=page,
@@ -121,7 +126,7 @@ async def auto_modify_authenticator(
                 print(f"总步骤数: {task_result.total_steps}")
 
                 # 如果有新密钥，保存到数据库和文件
-                if new_secret:
+                if new_secret and len(new_secret.strip()) > 0:
                     _save_new_secret(
                         email=email,
                         password=account_info.get("password", ""),
@@ -132,6 +137,9 @@ async def auto_modify_authenticator(
                     )
                     return True, f"身份验证器修改成功，新密钥已保存", new_secret
 
+                # 任务成功但无密钥（异常情况）
+                if not new_secret:
+                    print("⚠️ 任务成功但未提取到密钥，可能是 AI 流程异常")
                 return True, "身份验证器修改成功", new_secret
 
             # 检查是否提取到密钥
@@ -153,17 +161,16 @@ async def auto_modify_authenticator(
                         print(f"🔐 生成 TOTP 验证码: {verification_code}")
 
                         # 将验证码添加到 params 供 AI 使用
-                        params["new_secret"] = new_secret
+                        params["new_secret_raw"] = new_secret  # 原始版本（供显示）
+                        params["new_secret"] = clean_secret    # 清理版本（供使用）
                         params["verification_code"] = verification_code
                         params["new_totp_code"] = verification_code
 
-                        # 更新账号信息中的 secret，让 AI 可以使用新密钥生成的验证码
-                        account_info["secret"] = clean_secret
+                        # 创建 account_info 副本，避免修改原始字典
+                        account_info = {**account_info, "secret": clean_secret}
 
                         # 更新剩余步骤数
-                        remaining_steps = max_steps - task_result.total_steps
-                        if remaining_steps <= 0:
-                            remaining_steps = 15  # 保证至少有 15 步继续执行
+                        remaining_steps = max(MIN_REMAINING_STEPS, max_steps - task_result.total_steps)
 
                         # 下次不需要导航
                         navigate_first = False
@@ -173,7 +180,7 @@ async def auto_modify_authenticator(
 
                     except Exception as e:
                         print(f"❌ 生成 TOTP 验证码失败: {e}")
-                        return False, f"生成 TOTP 验证码失败: {e}", new_secret
+                        return False, f"生成 TOTP 验证码失败: {e}", None  # 密钥格式无效，不返回
 
             # 任务失败
             print(f"\n❌ 身份验证器修改失败")
@@ -181,14 +188,14 @@ async def auto_modify_authenticator(
             if task_result.error_details:
                 print(f"详情: {task_result.error_details[:500]}")
 
-            return False, task_result.message, new_secret
+            return False, task_result.message, None  # 失败时不返回未确认的密钥
 
         # 超过最大步骤数
-        return False, f"达到最大步骤数限制 ({max_steps})", new_secret
+        return False, f"达到最大步骤数限制 ({max_steps})", None  # 未确认的密钥不返回
 
     except Exception as e:
         traceback.print_exc()
-        return False, f"运行失败: {str(e)}", new_secret
+        return False, f"运行失败: {str(e)}", None  # 异常时不返回未确认的密钥
 
     finally:
         # 清理资源
@@ -219,7 +226,7 @@ def _save_new_secret(
     browser_id: str = None,
     save_to_file: bool = True,
     output_file: str = "已修改密钥.txt",
-):
+) -> bool:
     """
     保存新密钥到数据库、文件和 ixBrowser 窗口备注
 
@@ -230,69 +237,91 @@ def _save_new_secret(
         browser_id: ixBrowser 窗口 ID（用于更新备注）
         save_to_file: 是否保存到文件
         output_file: 输出文件名
+
+    Returns:
+        bool: 数据库是否保存成功
     """
     # 清理密钥（移除空格）
     clean_secret = new_secret.replace(" ", "").replace("-", "").upper()
+    db_success = False
 
-    # 1. 更新数据库
+    # 1. 更新数据库（最重要，优先执行）
     try:
         DBManager.upsert_account(
             email=email,
             password=password,
             secret_key=clean_secret,
         )
-        print(f"✅ 数据库已更新: {email}")
+        print(f"✅ 数据库已更新: {email} -> {clean_secret[:8]}...")
+        db_success = True
+
+        # 记录修改历史（用于显示修改时间和筛选）
+        try:
+            DBManager.add_authenticator_modification(email, clean_secret)
+        except Exception as history_err:
+            print(f"⚠️ 记录修改历史失败（不影响主功能）: {history_err}")
     except Exception as e:
         print(f"❌ 更新数据库失败: {e}")
+        import traceback
+        traceback.print_exc()
 
-    # 2. 保存到文件
+    # 2. 保存到文件（仅在数据库保存成功后才保存，保持一致性）
     if save_to_file:
-        try:
-            # 格式: 邮箱----密码----新密钥
-            line = f"{email}----{password}----{clean_secret}\n"
-            with open(output_file, "a", encoding="utf-8") as f:
-                f.write(line)
-            print(f"✅ 已保存到文件: {output_file}")
-        except Exception as e:
-            print(f"❌ 保存到文件失败: {e}")
+        if db_success:
+            try:
+                # 格式: 邮箱----密码----新密钥
+                line = f"{email}----{password}----{clean_secret}\n"
+                with open(output_file, "a", encoding="utf-8") as f:
+                    f.write(line)
+                print(f"✅ 已保存到文件: {output_file}")
+            except Exception as e:
+                print(f"❌ 保存到文件失败: {e}")
+        else:
+            print(f"⚠️ 数据库保存失败，跳过文件保存以保持一致性")
 
     # 3. 更新 ixBrowser 窗口备注
     if browser_id:
-        try:
-            from ix_api import update_profile, get_profile_info
+        # 检查 browser_id 是否是有效的数字字符串
+        if not str(browser_id).isdigit():
+            print(f"⚠️ browser_id 格式无效，跳过窗口备注更新: {browser_id}")
+        else:
+            try:
+                from ix_api import update_profile, get_profile_info
 
-            # 获取当前窗口信息
-            profile = get_profile_info(int(browser_id))
-            if profile:
-                current_note = profile.get("note", "") or ""
+                # 获取当前窗口信息
+                profile = get_profile_info(int(browser_id))
+                if profile:
+                    current_note = profile.get("note", "") or ""
 
-                # 解析备注格式：邮箱----密码----辅助邮箱----2FA密钥
-                parts = current_note.split("----")
-                if len(parts) >= 4:
-                    # 更新第4段（2FA密钥）
-                    parts[3] = clean_secret
-                    new_note = "----".join(parts)
-                elif len(parts) == 3:
-                    # 只有3段，添加2FA密钥
-                    new_note = f"{current_note}----{clean_secret}"
+                    # 解析备注格式：邮箱----密码----辅助邮箱----2FA密钥
+                    parts = current_note.split("----")
+                    if len(parts) >= 4:
+                        # 更新第4段（2FA密钥）
+                        parts[3] = clean_secret
+                        new_note = "----".join(parts)
+                    elif len(parts) == 3:
+                        # 只有3段，添加2FA密钥
+                        new_note = f"{current_note}----{clean_secret}"
+                    else:
+                        # 备注格式不标准，重新构建
+                        new_note = f"{email}----{password}--------{clean_secret}"
+
+                    # 更新窗口备注和 tfa_secret 字段
+                    success = update_profile(
+                        int(browser_id),
+                        note=new_note,
+                        tfa_secret=clean_secret
+                    )
+                    if success:
+                        print(f"✅ ixBrowser 窗口备注已更新: {browser_id}")
+                    else:
+                        print(f"❌ ixBrowser 窗口备注更新失败: {browser_id}")
                 else:
-                    # 备注格式不标准，重新构建
-                    new_note = f"{email}----{password}--------{clean_secret}"
+                    print(f"⚠️ 未找到 ixBrowser 窗口: {browser_id}")
+            except Exception as e:
+                print(f"❌ 更新 ixBrowser 窗口备注失败: {e}")
 
-                # 更新窗口备注和 tfa_secret 字段
-                success = update_profile(
-                    int(browser_id),
-                    note=new_note,
-                    tfa_secret=clean_secret
-                )
-                if success:
-                    print(f"✅ ixBrowser 窗口备注已更新: {browser_id}")
-                else:
-                    print(f"❌ ixBrowser 窗口备注更新失败: {browser_id}")
-            else:
-                print(f"⚠️ 未找到 ixBrowser 窗口: {browser_id}")
-        except Exception as e:
-            print(f"❌ 更新 ixBrowser 窗口备注失败: {e}")
+    return db_success
 
 
 # 测试入口

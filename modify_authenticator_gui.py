@@ -24,9 +24,12 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QFormLayout,
     QAbstractItemView,
+    QComboBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
+
+from datetime import datetime, timedelta
 
 from ix_api import get_group_list
 from ix_window import get_browser_list
@@ -216,6 +219,31 @@ class ModifyAuthenticatorDialog(QDialog):
         self.clear_history_btn.setStyleSheet("color: #e65100;")
         toolbar.addWidget(self.clear_history_btn)
 
+        # 筛选下拉菜单
+        toolbar.addWidget(QLabel("筛选:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems([
+            "全部",
+            "7天内未修改",
+            "30天内未修改",
+            "90天内未修改",
+            "从未修改",
+            "自定义天数",
+        ])
+        self.filter_combo.setMinimumWidth(120)
+        self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        toolbar.addWidget(self.filter_combo)
+
+        # 自定义天数输入框
+        self.custom_days_spin = QSpinBox()
+        self.custom_days_spin.setRange(1, 365)
+        self.custom_days_spin.setValue(14)
+        self.custom_days_spin.setSuffix(" 天")
+        self.custom_days_spin.setMinimumWidth(80)
+        self.custom_days_spin.setVisible(False)  # 默认隐藏
+        self.custom_days_spin.valueChanged.connect(self._apply_filter)
+        toolbar.addWidget(self.custom_days_spin)
+
         toolbar.addStretch()
 
         self.selected_label = QLabel("已选择: 0 个账号")
@@ -225,11 +253,12 @@ class ModifyAuthenticatorDialog(QDialog):
 
         # 树形控件（按分组显示）
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["选择", "邮箱", "窗口ID", "状态", "新密钥"])
+        self.tree.setHeaderLabels(["选择", "邮箱", "窗口ID", "状态", "上次修改", "新密钥"])
         self.tree.setColumnWidth(0, 60)
         self.tree.setColumnWidth(1, 250)
         self.tree.setColumnWidth(2, 120)
         self.tree.setColumnWidth(3, 80)
+        self.tree.setColumnWidth(4, 130)  # 上次修改列宽
         self.tree.header().setStretchLastSection(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setRootIsDecorated(True)
@@ -275,6 +304,24 @@ class ModifyAuthenticatorDialog(QDialog):
 
         # 加载已修改历史记录
         self.modification_history = self.db_manager.get_authenticator_modification_history()
+
+        # 获取筛选条件
+        filter_index = self.filter_combo.currentIndex()
+        filter_days = None  # None 表示不筛选
+        filter_never_modified = False
+
+        if filter_index == 1:  # 7天内未修改
+            filter_days = 7
+        elif filter_index == 2:  # 30天内未修改
+            filter_days = 30
+        elif filter_index == 3:  # 90天内未修改
+            filter_days = 90
+        elif filter_index == 4:  # 从未修改
+            filter_never_modified = True
+        elif filter_index == 5:  # 自定义天数
+            filter_days = self.custom_days_spin.value()
+
+        now = datetime.now()
 
         try:
             # 获取数据库账号
@@ -338,6 +385,8 @@ class ModifyAuthenticatorDialog(QDialog):
             # 创建树形结构
             total_count = 0
             modified_count = 0
+            filtered_count = 0
+
             for gid in sorted(grouped.keys()):
                 account_list = grouped[gid]
                 if not account_list:
@@ -345,26 +394,63 @@ class ModifyAuthenticatorDialog(QDialog):
 
                 group_name = group_names.get(gid, f"分组 {gid}")
 
-                # 分组节点
-                group_item = QTreeWidgetItem(self.tree)
-                group_item.setText(0, "")
-                group_item.setText(1, f"📁 {group_name} ({len(account_list)})")
-                group_item.setFlags(
-                    group_item.flags() |
-                    Qt.ItemFlag.ItemIsAutoTristate |
-                    Qt.ItemFlag.ItemIsUserCheckable
-                )
-                group_item.setCheckState(0, Qt.CheckState.Unchecked)
-                group_item.setExpanded(True)
-                group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
-
-                # 设置分组行样式
-                font = group_item.font(1)
-                font.setBold(True)
-                group_item.setFont(1, font)
+                # 分组节点（延迟创建，只有有符合筛选条件的账号才创建）
+                group_item = None
+                group_account_count = 0
 
                 # 账号子节点
                 for account in account_list:
+                    email = account["email"]
+
+                    # 获取修改历史
+                    history = self.modification_history.get(email)
+                    modified_at = None
+                    modified_time_str = ""
+
+                    if history:
+                        # 解析修改时间
+                        modified_at_str = history.get('modified_at', '')
+                        if modified_at_str:
+                            try:
+                                modified_at = datetime.fromisoformat(modified_at_str.replace('Z', '+00:00').replace(' ', 'T'))
+                                # 转换为 naive datetime（移除时区信息以便与 now 比较）
+                                if modified_at.tzinfo is not None:
+                                    modified_at = modified_at.replace(tzinfo=None)
+                                # 转换为本地时间显示
+                                modified_time_str = modified_at.strftime("%Y-%m-%d %H:%M")
+                            except Exception:
+                                modified_time_str = modified_at_str[:16] if len(modified_at_str) > 16 else modified_at_str
+
+                    # 应用筛选条件
+                    if filter_never_modified:
+                        # 只显示从未修改过的
+                        if history:
+                            continue  # 跳过已修改的
+                    elif filter_days is not None:
+                        # 显示 X 天内未修改的（包括从未修改的）
+                        if history and modified_at:
+                            days_since_modified = (now - modified_at).days
+                            if days_since_modified < filter_days:
+                                continue  # 跳过近期修改过的
+
+                    # 创建分组节点（延迟创建）
+                    if group_item is None:
+                        group_item = QTreeWidgetItem(self.tree)
+                        group_item.setText(0, "")
+                        group_item.setFlags(
+                            group_item.flags() |
+                            Qt.ItemFlag.ItemIsAutoTristate |
+                            Qt.ItemFlag.ItemIsUserCheckable
+                        )
+                        group_item.setCheckState(0, Qt.CheckState.Unchecked)
+                        group_item.setExpanded(True)
+                        group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
+
+                        # 设置分组行样式
+                        font = group_item.font(1)
+                        font.setBold(True)
+                        group_item.setFont(1, font)
+
                     child = QTreeWidgetItem(group_item)
                     child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     child.setCheckState(0, Qt.CheckState.Unchecked)  # 默认不选中
@@ -372,25 +458,25 @@ class ModifyAuthenticatorDialog(QDialog):
                     child.setText(2, account["browser_id"])
 
                     # 检查是否已修改过
-                    email = account["email"]
-                    if email in self.modification_history:
-                        history = self.modification_history[email]
+                    if history:
                         child.setText(3, "已修改")
+                        child.setText(4, modified_time_str)
                         # 显示修改后的新密钥（截取显示）
                         new_secret = history['new_secret']
                         display_secret = f"{new_secret[:12]}..." if len(new_secret) > 12 else new_secret
-                        child.setText(4, display_secret)
+                        child.setText(5, display_secret)
 
                         # 设置置灰样式
                         gray_color = QColor(150, 150, 150)
                         gray_brush = QBrush(gray_color)
-                        for col in range(5):
+                        for col in range(6):
                             child.setForeground(col, gray_brush)
 
                         modified_count += 1
                     else:
                         child.setText(3, "待处理")
                         child.setText(4, "")
+                        child.setText(5, "")
 
                     child.setData(0, Qt.ItemDataRole.UserRole, {
                         "type": "browser",
@@ -398,13 +484,36 @@ class ModifyAuthenticatorDialog(QDialog):
                     })
                     self.accounts.append(account)
                     total_count += 1
+                    group_account_count += 1
+
+                # 更新分组标题（显示筛选后的数量）
+                if group_item is not None:
+                    group_item.setText(1, f"📁 {group_name} ({group_account_count})")
 
             self._update_selection_count()
-            self._log(f"已加载 {total_count} 个账号（已修改: {modified_count} 个）")
+            filter_desc = self.filter_combo.currentText()
+            if filter_index == 5:  # 自定义天数
+                filter_desc = f"{self.custom_days_spin.value()}天内未修改"
+            if filter_index > 0:
+                self._log(f"已加载 {total_count} 个账号（筛选: {filter_desc}，已修改: {modified_count} 个）")
+            else:
+                self._log(f"已加载 {total_count} 个账号（已修改: {modified_count} 个）")
 
         except Exception as e:
             self._log(f"❌ 加载账号失败: {e}")
             traceback.print_exc()
+
+    def _on_filter_changed(self, index: int):
+        """筛选下拉菜单变化时的处理"""
+        # 显示/隐藏自定义天数输入框
+        is_custom = (index == 5)  # "自定义天数" 选项索引
+        self.custom_days_spin.setVisible(is_custom)
+        # 应用筛选
+        self._apply_filter()
+
+    def _apply_filter(self):
+        """应用筛选条件"""
+        self._load_accounts()
 
     def _select_all(self):
         """全选"""
@@ -488,7 +597,8 @@ class ModifyAuthenticatorDialog(QDialog):
                 child = group_item.child(j)
                 if child.checkState(0) == Qt.CheckState.Checked:
                     child.setText(3, "等待中")
-                    child.setText(4, "")
+                    child.setText(4, "")  # 上次修改列
+                    child.setText(5, "")  # 新密钥列
 
         # 获取 AI 配置
         ai_config = self._get_ai_config()
@@ -533,9 +643,9 @@ class ModifyAuthenticatorDialog(QDialog):
                     # 显示新密钥（截取显示）
                     if new_secret:
                         display_secret = f"{new_secret[:12]}..." if len(new_secret) > 12 else new_secret
-                        child.setText(4, display_secret)
+                        child.setText(5, display_secret)  # 新密钥列索引5
                     else:
-                        child.setText(4, message[:30] if len(message) > 30 else message)
+                        child.setText(5, message[:30] if len(message) > 30 else message)
 
                     # 根据状态设置颜色
                     if status == "成功":
@@ -549,14 +659,17 @@ class ModifyAuthenticatorDialog(QDialog):
                                 if email:
                                     self.db_manager.add_authenticator_modification(email, new_secret)
                                     # 更新本地缓存
+                                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                                     self.modification_history[email] = {
                                         'new_secret': new_secret,
-                                        'modified_at': 'now'
+                                        'modified_at': datetime.now().isoformat()
                                     }
+                                    # 更新上次修改列
+                                    child.setText(4, now_str)
                                     # 设置置灰样式（跳过状态列，保留绿色背景的可读性）
                                     gray_color = QColor(150, 150, 150)
                                     gray_brush = QBrush(gray_color)
-                                    for col in [0, 1, 2, 4]:  # 跳过状态列(3)
+                                    for col in [0, 1, 2, 4, 5]:  # 跳过状态列(3)
                                         child.setForeground(col, gray_brush)
 
                     elif status == "失败" or status == "错误":

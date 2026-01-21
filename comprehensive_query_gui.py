@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QWidget, QAbstractItemView, QComboBox,
-    QGroupBox, QDateEdit, QFileDialog, QCheckBox, QSplitter
+    QGroupBox, QDateEdit, QFileDialog, QCheckBox, QSplitter, QSpinBox
 )
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor, QBrush
@@ -104,6 +104,28 @@ class ComprehensiveQueryWindow(QDialog):
         history_layout.addWidget(self.cb_sheerid_verified)
         history_layout.addWidget(self.cb_bind_card)
 
+        # 验证器未修改天数筛选
+        history_layout.addWidget(QLabel("验证器未修改筛选:"))
+        self.auth_days_combo = QComboBox()
+        self.auth_days_combo.addItems([
+            "不筛选",
+            "7天内未修改",
+            "30天内未修改",
+            "90天内未修改",
+            "从未修改",
+            "自定义天数",
+        ])
+        self.auth_days_combo.currentIndexChanged.connect(self._on_auth_days_changed)
+        history_layout.addWidget(self.auth_days_combo)
+
+        # 自定义天数输入框
+        self.auth_custom_days_spin = QSpinBox()
+        self.auth_custom_days_spin.setRange(1, 365)
+        self.auth_custom_days_spin.setValue(14)
+        self.auth_custom_days_spin.setSuffix(" 天")
+        self.auth_custom_days_spin.setVisible(False)  # 默认隐藏
+        history_layout.addWidget(self.auth_custom_days_spin)
+
         history_group.setLayout(history_layout)
         layout.addWidget(history_group)
 
@@ -169,7 +191,7 @@ class ComprehensiveQueryWindow(QDialog):
         # 定义列
         columns = [
             "邮箱", "密码", "辅助邮箱", "2FA密钥", "主状态", "更新时间",
-            "辅助手机号", "辅助邮箱状态", "2SV手机号", "验证器状态", "SheerID状态", "绑卡状态"
+            "辅助手机号", "辅助邮箱状态", "2SV手机号", "验证器修改时间", "SheerID状态", "绑卡状态"
         ]
         table.setColumnCount(len(columns))
         table.setHorizontalHeaderLabels(columns)
@@ -184,7 +206,7 @@ class ComprehensiveQueryWindow(QDialog):
         table.setColumnWidth(6, 120)  # 辅助手机号
         table.setColumnWidth(7, 120)  # 辅助邮箱状态
         table.setColumnWidth(8, 120)  # 2SV手机号
-        table.setColumnWidth(9, 100)  # 验证器状态
+        table.setColumnWidth(9, 130)  # 验证器修改时间
         table.setColumnWidth(10, 100) # SheerID状态
         table.setColumnWidth(11, 100) # 绑卡状态
 
@@ -226,6 +248,12 @@ class ComprehensiveQueryWindow(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"加载数据失败: {e}")
 
+    def _on_auth_days_changed(self, index: int):
+        """验证器未修改筛选下拉菜单变化时的处理"""
+        # 显示/隐藏自定义天数输入框
+        is_custom = (index == 5)  # "自定义天数" 选项索引
+        self.auth_custom_days_spin.setVisible(is_custom)
+
     def apply_filter(self):
         """应用筛选条件"""
         self.filtered_data = []
@@ -260,6 +288,48 @@ class ComprehensiveQueryWindow(QDialog):
                 continue
             if self.cb_bind_card.isChecked() and not row.get('bind_card'):
                 continue
+
+            # 验证器未修改天数筛选
+            auth_days_index = self.auth_days_combo.currentIndex()
+            if auth_days_index > 0:
+                auth_modified_at = row.get('auth_modified_at')
+                if auth_days_index == 4:  # 从未修改
+                    if auth_modified_at:
+                        continue  # 跳过已修改的
+                elif auth_days_index == 5:  # 自定义天数
+                    filter_days = self.auth_custom_days_spin.value()
+                    if auth_modified_at:
+                        try:
+                            auth_str = str(auth_modified_at)
+                            if 'T' in auth_str or '+' in auth_str:
+                                auth_dt = datetime.fromisoformat(auth_str.replace('Z', '+00:00'))
+                                if auth_dt.tzinfo is not None:
+                                    auth_dt = auth_dt.replace(tzinfo=None)
+                            else:
+                                auth_dt = datetime.strptime(auth_str[:19], '%Y-%m-%d %H:%M:%S')
+                            days_since = (datetime.now() - auth_dt).days
+                            if days_since < filter_days:
+                                continue  # 跳过近期修改过的
+                        except Exception:
+                            pass  # 解析失败，保留该记录
+                else:
+                    # 7/30/90天内未修改
+                    filter_days = {1: 7, 2: 30, 3: 90}.get(auth_days_index, 0)
+                    if auth_modified_at:
+                        try:
+                            auth_str = str(auth_modified_at)
+                            if 'T' in auth_str or '+' in auth_str:
+                                auth_dt = datetime.fromisoformat(auth_str.replace('Z', '+00:00'))
+                                # 转换为 naive datetime（移除时区信息以便与 now 比较）
+                                if auth_dt.tzinfo is not None:
+                                    auth_dt = auth_dt.replace(tzinfo=None)
+                            else:
+                                auth_dt = datetime.strptime(auth_str[:19], '%Y-%m-%d %H:%M:%S')
+                            days_since = (datetime.now() - auth_dt).days
+                            if days_since < filter_days:
+                                continue  # 跳过近期修改过的
+                        except Exception:
+                            pass  # 解析失败，保留该记录
 
             # 时间筛选
             if enable_time and row.get('updated_at'):
@@ -306,6 +376,9 @@ class ComprehensiveQueryWindow(QDialog):
         self.cb_auth_modified.setChecked(False)
         self.cb_sheerid_verified.setChecked(False)
         self.cb_bind_card.setChecked(False)
+        self.auth_days_combo.setCurrentIndex(0)  # 重置验证器天数筛选
+        self.auth_custom_days_spin.setVisible(False)  # 隐藏自定义天数输入框
+        self.auth_custom_days_spin.setValue(14)  # 重置默认值
         self.cb_enable_time_filter.setChecked(False)
         self.search_input.clear()
 
@@ -378,8 +451,20 @@ class ComprehensiveQueryWindow(QDialog):
             )
             self.table.setItem(row_idx, 8, QTableWidgetItem(sv2_status))
 
-            # 验证器状态
-            auth_status = "✅ 已修改" if data.get('auth_modified') else "—"
+            # 验证器修改时间
+            auth_modified_at = data.get('auth_modified_at')
+            if auth_modified_at:
+                try:
+                    auth_str = str(auth_modified_at)
+                    if 'T' in auth_str or '+' in auth_str:
+                        auth_dt = datetime.fromisoformat(auth_str.replace('Z', '+00:00'))
+                    else:
+                        auth_dt = datetime.strptime(auth_str[:19], '%Y-%m-%d %H:%M:%S')
+                    auth_status = auth_dt.strftime('%Y-%m-%d %H:%M')
+                except Exception:
+                    auth_status = str(auth_modified_at)[:16]
+            else:
+                auth_status = "—"
             self.table.setItem(row_idx, 9, QTableWidgetItem(auth_status))
 
             # SheerID状态
