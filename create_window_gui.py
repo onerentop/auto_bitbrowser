@@ -1,9 +1,9 @@
 """
 ixBrowser 窗口批量创建工具 - PyQt6 GUI版本
-支持输入模板窗口ID，批量创建窗口，自动读取accounts.txt和proxies.txt
-支持自定义平台URL和额外URL
+支持输入模板窗口ID，批量创建窗口
 支持列表显示现有窗口，并支持批量删除
 UI布局调整：左侧操作区，右侧日志区
+账号和代理数据完全从数据库读取（配置管理界面管理）
 """
 import sys
 import os
@@ -14,14 +14,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QMessageBox, QGroupBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QSplitter,
-    QAbstractItemView, QSpinBox, QToolBox, QProgressBar, QDialog,
-    QFormLayout, QDialogButtonBox, QTreeWidget, QTreeWidgetItem, QComboBox
+    QCheckBox, QAbstractItemView, QSpinBox, QToolBox, QProgressBar,
+    QDialog, QTreeWidget, QTreeWidgetItem, QComboBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QIcon
 from ix_window import (
-    read_accounts, read_proxies, get_browser_list, get_browser_info,
+    get_browser_list, get_browser_info,
     delete_browsers_by_name, delete_browser_by_id, open_browser_by_id, create_browser_window, get_next_window_name
 )
 from ix_api import get_group_list
@@ -370,8 +369,6 @@ class WorkerThread(QThread):
         template_id = int(template_id_str) if template_id_str else None
         template_config = self.kwargs.get('template_config')
 
-        platform_url = self.kwargs.get('platform_url')
-        extra_url = self.kwargs.get('extra_url')
         name_prefix = self.kwargs.get('name_prefix')
         group_id = self.kwargs.get('group_id')  # 获取目标分组ID
 
@@ -425,13 +422,7 @@ class WorkerThread(QThread):
                     return
                 ref_name = reference_config.get('name', '未知')
                 self.log(f"[信息] 使用模板窗口: {ref_name} (ID: {template_id})")
-            
-            # 显示平台和URL信息
-            if platform_url:
-                self.log(f"[信息] 平台URL: {platform_url}")
-            if extra_url:
-                self.log(f"[信息] 额外URL: {extra_url}")
-            
+
             # 删除名称为"本地代理_2"的所有窗口（如果参考窗口是"本地代理_1"）
             if ref_name.startswith('本地代理_'):
                 try:
@@ -462,8 +453,6 @@ class WorkerThread(QThread):
                     account,
                     template_id if not template_config else None,
                     proxy,
-                    platform=platform_url if platform_url else None,
-                    extra_url=extra_url if extra_url else None,
                     template_config=template_config,
                     name_prefix=name_prefix,
                     group_id=group_id
@@ -868,35 +857,9 @@ class BrowserWindowCreatorGUI(QMainWindow):
         input_layout_group.addStretch()
         config_layout.addLayout(input_layout_group)
 
-        # URL配置
-        input_layout2 = QHBoxLayout()
-        input_layout2.addWidget(QLabel("平台URL:"))
-        self.platform_url_input = QLineEdit()
-        self.platform_url_input.setPlaceholderText("可选，平台URL")
-        input_layout2.addWidget(self.platform_url_input)
-        config_layout.addLayout(input_layout2)
-        
-        input_layout3 = QHBoxLayout()
-        input_layout3.addWidget(QLabel("额外URL:"))
-        self.extra_url_input = QLineEdit()
-        self.extra_url_input.setPlaceholderText("可选，逗号分隔")
-        input_layout3.addWidget(self.extra_url_input)
-        config_layout.addLayout(input_layout3)
-        
-        # 文件路径提示
-        file_info_layout = QHBoxLayout()
-        self.accounts_label = QLabel("✅ accounts.txt")
-        self.accounts_label.setStyleSheet("color: green;")
-        self.proxies_label = QLabel("✅ proxies.txt")
-        self.proxies_label.setStyleSheet("color: green;")
-        file_info_layout.addWidget(self.accounts_label)
-        file_info_layout.addWidget(self.proxies_label)
-        file_info_layout.addStretch()
-        config_layout.addLayout(file_info_layout)
-        
         config_group.setLayout(config_layout)
         left_layout.addWidget(config_group)
-        
+
         # 3. 创建控制按钮
         create_btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("开始根据模板创建窗口")
@@ -1024,7 +987,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         # 初始加载
         QTimer.singleShot(100, self.refresh_browser_list)
         QTimer.singleShot(150, self.refresh_group_list)
-        self.check_files()
 
     def refresh_group_list(self):
         """刷新分组下拉列表"""
@@ -1047,96 +1009,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         except Exception as e:
             self.log(f"[警告] 获取分组列表失败: {e}")
             self.group_combo.addItem("默认分组", 1)
-
-    def check_files(self):
-        """检查文件是否存在并验证格式"""
-        accounts_exists = os.path.exists('accounts.txt')
-        proxies_exists = os.path.exists('proxies.txt')
-
-        # 检查 accounts.txt
-        if not accounts_exists:
-            self.accounts_label.setText("❌ accounts.txt 缺失")
-            self.accounts_label.setStyleSheet("color: red;")
-            self.accounts_label.setToolTip("请创建 accounts.txt 文件\n格式: 邮箱----密码----辅助邮箱----2FA密钥")
-        else:
-            # 验证格式
-            valid_count, invalid_count, errors = self._validate_accounts_file('accounts.txt')
-            if invalid_count > 0:
-                self.accounts_label.setText(f"⚠️ accounts.txt ({valid_count}有效/{invalid_count}无效)")
-                self.accounts_label.setStyleSheet("color: orange;")
-                error_tip = "格式错误的行:\n" + "\n".join(errors[:5])
-                if len(errors) > 5:
-                    error_tip += f"\n... 还有 {len(errors) - 5} 处错误"
-                self.accounts_label.setToolTip(error_tip)
-            else:
-                self.accounts_label.setText(f"✅ accounts.txt ({valid_count}个账号)")
-                self.accounts_label.setStyleSheet("color: green;")
-                self.accounts_label.setToolTip("格式正确: 邮箱----密码----辅助邮箱----2FA密钥")
-
-        # 检查 proxies.txt
-        if not proxies_exists:
-            self.proxies_label.setText("⚠️ proxies.txt 未找到")
-            self.proxies_label.setStyleSheet("color: orange;")
-            self.proxies_label.setToolTip("可选文件，不影响基本功能\n格式: host:port:user:pass 或 host:port")
-        else:
-            proxy_count = self._count_valid_proxies('proxies.txt')
-            if proxy_count > 0:
-                self.proxies_label.setText(f"✅ proxies.txt ({proxy_count}个代理)")
-                self.proxies_label.setStyleSheet("color: green;")
-            else:
-                self.proxies_label.setText("⚠️ proxies.txt (空或格式错误)")
-                self.proxies_label.setStyleSheet("color: orange;")
-
-    def _validate_accounts_file(self, file_path: str) -> tuple:
-        """
-        验证账号文件格式
-
-        Returns:
-            (valid_count, invalid_count, error_messages)
-        """
-        valid = 0
-        invalid = 0
-        errors = []
-
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for i, line in enumerate(f, 1):
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-
-                    parts = line.split('----')
-                    if len(parts) >= 2:
-                        # 至少需要邮箱和密码
-                        email = parts[0].strip()
-                        if '@' in email and '.' in email:
-                            valid += 1
-                        else:
-                            invalid += 1
-                            errors.append(f"行{i}: 邮箱格式无效 '{email[:20]}...'")
-                    else:
-                        invalid += 1
-                        errors.append(f"行{i}: 分隔符不足 (需要 ---- 分隔)")
-        except Exception as e:
-            errors.append(f"读取文件错误: {e}")
-
-        return valid, invalid, errors
-
-    def _count_valid_proxies(self, file_path: str) -> int:
-        """统计有效代理数量"""
-        count = 0
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        # 支持 host:port 或 host:port:user:pass 格式
-                        parts = line.split(':')
-                        if len(parts) >= 2:
-                            count += 1
-        except Exception:
-            pass
-        return count
 
     def log(self, message):
         """添加日志"""
@@ -1456,8 +1328,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
             QMessageBox.warning(self, "警告", "请输入模板窗口ID")
             return
 
-        platform_url = self.platform_url_input.text().strip()
-        extra_url = self.extra_url_input.text().strip()
         name_prefix = self.name_prefix_input.text().strip()
         group_id = self.group_combo.currentData()  # 获取选中分组ID
 
@@ -1467,8 +1337,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.worker_thread = WorkerThread(
             'create',
             template_id=template_id,
-            platform_url=platform_url,
-            extra_url=extra_url,
             name_prefix=name_prefix,
             group_id=group_id
         )
@@ -1512,8 +1380,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
 
     def start_creation_default(self):
         """使用默认模板开始创建任务"""
-        platform_url = self.platform_url_input.text().strip()
-        extra_url = self.extra_url_input.text().strip()
         name_prefix = self.name_prefix_input.text().strip()
         group_id = self.group_combo.currentData()  # 获取选中分组ID
 
@@ -1523,8 +1389,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.start_worker_thread(
             'create',
             template_config=DEFAULT_TEMPLATE_CONFIG,
-            platform_url=platform_url,
-            extra_url=extra_url,
             name_prefix=name_prefix,
             group_id=group_id
         )
@@ -1606,16 +1470,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
             thread_count = ConfigManager.get("default_thread_count", 3)
             self.thread_spinbox.setValue(thread_count)
 
-            # 平台URL
-            platform_url = ConfigManager.get("platform_url", "")
-            if platform_url:
-                self.platform_url_input.setText(platform_url)
-
-            # 额外URL
-            extra_url = ConfigManager.get("extra_url", "")
-            if extra_url:
-                self.extra_url_input.setText(extra_url)
-
         except Exception as e:
             print(f"[Config] 加载配置到UI失败: {e}")
 
@@ -1625,8 +1479,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
             ConfigManager.set("last_used_template_id", self.template_id_input.text().strip())
             ConfigManager.set("window_name_prefix", self.name_prefix_input.text().strip())
             ConfigManager.set("default_thread_count", self.thread_spinbox.value())
-            ConfigManager.set("platform_url", self.platform_url_input.text().strip())
-            ConfigManager.set("extra_url", self.extra_url_input.text().strip())
         except Exception as e:
             print(f"[Config] 保存配置失败: {e}")
 

@@ -23,135 +23,6 @@ def get_client() -> IXBrowserClient:
     return _client
 
 
-def read_proxies(file_path: str) -> list:
-    """
-    读取代理信息文件
-
-    Args:
-        file_path: 代理文件路径
-
-    Returns:
-        代理列表，每个代理为字典格式 {'type': 'socks5', 'host': '', 'port': '', 'username': '', 'password': ''}
-    """
-    proxies = []
-
-    if not os.path.exists(file_path):
-        return proxies
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                match = re.match(r'^socks5://([^:]+):([^@]+)@([^:]+):(\d+)$', line)
-                if match:
-                    proxies.append({
-                        'type': 'socks5',
-                        'host': match.group(3),
-                        'port': match.group(4),
-                        'username': match.group(1),
-                        'password': match.group(2)
-                    })
-    except Exception:
-        pass
-
-    return proxies
-
-
-def read_separator_config(file_path: str) -> str:
-    """从文件顶部读取分隔符配置"""
-    default_sep = "----"
-
-    if not os.path.exists(file_path):
-        return default_sep
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith('分隔符=') or line.startswith('separator='):
-                    match = re.search(r'["\'](.+?)["\']', line)
-                    if match:
-                        return match.group(1)
-                if not line.startswith('#') and '=' not in line:
-                    break
-    except Exception:
-        pass
-
-    return default_sep
-
-
-def parse_account_line(line: str, separator: str) -> dict:
-    """根据分隔符解析账号信息行"""
-    if '#' in line:
-        comment_pos = line.find('#')
-        line = line[:comment_pos].strip()
-
-    if not line:
-        return None
-
-    parts = line.split(separator)
-    parts = [p.strip() for p in parts if p.strip()]
-
-    if len(parts) < 2:
-        return None
-
-    result = {
-        'email': '',
-        'password': '',
-        'backup_email': '',
-        '2fa_secret': '',
-        'full_line': line
-    }
-
-    if len(parts) >= 1:
-        result['email'] = parts[0]
-    if len(parts) >= 2:
-        result['password'] = parts[1]
-    if len(parts) >= 3:
-        result['backup_email'] = parts[2]
-    if len(parts) >= 4:
-        result['2fa_secret'] = parts[3]
-
-    return result if result['email'] else None
-
-
-def read_accounts(file_path: str) -> list:
-    """读取账户信息文件"""
-    accounts = []
-
-    if not os.path.exists(file_path):
-        print(f"错误: 找不到文件 {file_path}")
-        return accounts
-
-    separator = read_separator_config(file_path)
-    print(f"使用分隔符: '{separator}'")
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-
-                if not line or line.startswith('#'):
-                    continue
-
-                if line.startswith('分隔符=') or line.startswith('separator='):
-                    continue
-
-                account = parse_account_line(line, separator)
-                if account:
-                    accounts.append(account)
-                else:
-                    print(f"警告: 第{line_num}行格式不正确: {line[:50]}")
-    except Exception as e:
-        print(f"读取文件出错: {e}")
-
-    return accounts
-
-
 def get_browser_list(page: int = 1, limit: int = 50, group_id: int = 0) -> list:
     """
     获取所有窗口列表
@@ -293,8 +164,7 @@ def open_browser_url(profile_id: int, target_url: str):
 
 
 def create_browser_window(account: dict, reference_profile_id: int = None,
-                          proxy: dict = None, platform: str = None,
-                          extra_url: str = None, name_prefix: str = None,
+                          proxy: dict = None, name_prefix: str = None,
                           template_config: dict = None, group_id: int = 1):
     """
     创建新的浏览器窗口
@@ -303,8 +173,6 @@ def create_browser_window(account: dict, reference_profile_id: int = None,
         account: 账户信息
         reference_profile_id: 参考窗口ID (用于复制)
         proxy: 代理信息
-        platform: 平台URL (ixBrowser 不直接支持，保留兼容性)
-        extra_url: 额外URL (ixBrowser 不直接支持，保留兼容性)
         name_prefix: 窗口名称前缀
         template_config: 模板配置 (未使用，保留兼容性)
         group_id: 分组ID
@@ -408,16 +276,37 @@ def print_browser_info(profile_id: int):
 
 
 def main():
-    """测试入口"""
-    accounts_file = os.path.join(os.path.dirname(__file__), 'accounts.txt')
-    accounts = read_accounts(accounts_file)
+    """测试入口 - 从数据库读取数据"""
+    from database import DBManager
+
+    # 从数据库获取账号
+    DBManager.init_db()
+    db_accounts = DBManager.get_all_accounts()
+    accounts = []
+    for acc in db_accounts:
+        if acc.get('status') == 'pending':
+            accounts.append({
+                'email': acc.get('email', ''),
+                'password': acc.get('password', ''),
+                'backup_email': acc.get('recovery_email', ''),
+                '2fa_secret': acc.get('secret_key', ''),
+            })
 
     if not accounts:
-        print("无账号数据")
+        print("无待处理账号数据")
         return
 
-    proxies_file = os.path.join(os.path.dirname(__file__), 'proxies.txt')
-    proxies = read_proxies(proxies_file)
+    # 从数据库获取代理
+    db_proxies = DBManager.get_all_proxies()
+    proxies = []
+    for p in db_proxies:
+        proxies.append({
+            'type': p.get('proxy_type', 'socks5'),
+            'host': p.get('host', ''),
+            'port': p.get('port', ''),
+            'username': p.get('username', ''),
+            'password': p.get('password', '')
+        })
 
     browsers = get_browser_list()
     print(f"当前有 {len(browsers)} 个窗口")

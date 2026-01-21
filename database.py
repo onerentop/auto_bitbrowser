@@ -107,33 +107,8 @@ class DBManager:
     def import_from_files():
         """从现有文本文件导入数据到数据库（初始化用）"""
         count_total = 0
-        
-        # 1. 优先从 accounts.txt 导入（使用新的解析方式）
-        accounts_path = os.path.join(BASE_DIR, "accounts.txt")
-        if os.path.exists(accounts_path):
-            try:
-                # 使用ix_window中的read_accounts函数
-                from ix_window import read_accounts
-                accounts = read_accounts(accounts_path)
-                
-                print(f"从 accounts.txt 读取到 {len(accounts)} 个账号")
-                
-                for account in accounts:
-                    email = account.get('email', '')
-                    pwd = account.get('password', '')
-                    rec = account.get('backup_email', '')
-                    sec = account.get('2fa_secret', '')
-                    
-                    if email:
-                        # 新账号默认状态为pending（待处理）
-                        DBManager.upsert_account(email, pwd, rec, sec, None, status='pending')
-                        count_total += 1
-                
-                print(f"成功导入 {count_total} 个账号（状态: pending）")
-            except Exception as e:
-                print(f"从 accounts.txt 导入时出错: {e}")
-        
-        # 2. 从状态文件导入（覆盖accounts.txt中的状态）
+
+        # 从状态文件导入
         files_map = {
             "link_ready": "sheerIDlink.txt",
             "verified": "已验证未绑卡.txt",

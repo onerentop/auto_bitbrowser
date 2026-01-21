@@ -41,8 +41,6 @@ class ConfigManager:
         "card_rotation_index": 0,
         "last_used_template_id": "",
         "window_name_prefix": "",
-        "platform_url": "",
-        "extra_url": "",
         # AI Agent 配置 (Gemini Vision)
         "ai_agent": {
             "api_key": "",
