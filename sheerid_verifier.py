@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://batch.1key.me"
 DEFAULT_API_KEY = ""  # 请在GUI中输入你的SheerID API密钥
 
+
 class SheerIDVerifier:
     def __init__(self, api_key=DEFAULT_API_KEY):
         self.session = requests.Session()
@@ -26,19 +27,19 @@ class SheerIDVerifier:
         """Fetch homepage and extract CSRF token"""
         try:
             logger.info("Fetching CSRF token...")
-            resp = self.session.get(BASE_URL, headers=self.headers, timeout=10)
+            resp = self.session.get(BASE_URL, headers=self.headers, timeout=15)
             resp.raise_for_status()
-            
+
             logger.debug(f"Response status: {resp.status_code}")
             logger.debug(f"Response length: {len(resp.text)} chars")
-            
+
             # 尝试多种 CSRF token 模式
             patterns = [
                 r'window\.CSRF_TOKEN\s*=\s*["\']([^"\']+)["\']',  # window.CSRF_TOKEN = "..."
                 r'csrfToken["\']?\s*[:=]\s*["\']([^"\']+)["\']',  # csrfToken: "..." or csrfToken = "..."
                 r'_csrf["\']?\s*[:=]\s*["\']([^"\']+)["\']',      # _csrf: "..." or _csrf = "..."
             ]
-            
+
             for i, pattern in enumerate(patterns):
                 match = re.search(pattern, resp.text, re.IGNORECASE)
                 if match:
@@ -46,20 +47,20 @@ class SheerIDVerifier:
                     self.headers["X-CSRF-Token"] = self.csrf_token
                     logger.info(f"✅ CSRF Token obtained (pattern {i+1}): {self.csrf_token[:10]}...")
                     return True
-            
+
             # 如果都没匹配到，输出更详细的调试信息
             logger.error("❌ CSRF Token pattern not found in page.")
             logger.error(f"Page content preview (first 1000 chars):\n{resp.text[:1000]}")
-            
+
             # 查找所有可能的 token 相关字符串
             token_hints = re.findall(r'(csrf|token|_token)[^"\']*["\']([^"\']{20,})["\']', resp.text, re.IGNORECASE)
             if token_hints:
                 logger.info(f"Found potential token patterns: {token_hints[:3]}")
-            
+
             # 尝试不使用 CSRF token 继续
             logger.warning("Attempting to proceed without CSRF token...")
             return False
-            
+
         except Exception as e:
             logger.error(f"Failed to get CSRF token: {e}")
             import traceback
@@ -79,38 +80,37 @@ class SheerIDVerifier:
         results = {}
         # Max 5 IDs per batch if API key is present
         # API requires hCaptchaToken to be the API Key for bypass
-        
+
         payload = {
             "verificationIds": verification_ids,
-            "hCaptchaToken": self.api_key, 
+            "hCaptchaToken": self.api_key,
             "useLucky": False,
             "programId": ""
         }
-        
+
         headers = self.headers.copy()
         headers["Content-Type"] = "application/json"
 
         try:
             logger.info(f"Submitting batch verification for {len(verification_ids)} IDs...")
             logger.info(f"🔑 API Key: {self.api_key[:10] if self.api_key else '❌ EMPTY'}...")
-            logger.info(f"📦 Payload: verificationIds={verification_ids}, hCaptchaToken={self.api_key[:10] if self.api_key else 'NONE'}...")
-            
+
             resp = self.session.post(
-                f"{BASE_URL}/api/batch", 
-                headers=headers, 
+                f"{BASE_URL}/api/batch",
+                headers=headers,
                 json=payload,
                 stream=True,
                 timeout=30
             )
-            
+
             # 如果返回 403/401，说明 token 还是过期了，再试一次
             if resp.status_code in [403, 401]:
                 logger.warning(f"Token expired (status {resp.status_code}), refreshing again...")
                 if self._get_csrf_token():
                     headers["X-CSRF-Token"] = self.csrf_token
                     resp = self.session.post(
-                        f"{BASE_URL}/api/batch", 
-                        headers=headers, 
+                        f"{BASE_URL}/api/batch",
+                        headers=headers,
                         json=payload,
                         stream=True,
                         timeout=30
@@ -127,7 +127,8 @@ class SheerIDVerifier:
             # Parse SSE Stream
             # The API returns "data: {...json...}" lines
             for line in resp.iter_lines():
-                if not line: continue
+                if not line:
+                    continue
                 decoded_line = line.decode('utf-8')
                 if decoded_line.startswith("data:"):
                     json_str = decoded_line[5:].strip()
@@ -136,7 +137,7 @@ class SheerIDVerifier:
                         self._handle_api_response(data, results, callback)
                     except json.JSONDecodeError:
                         pass
-                        
+
         except Exception as e:
             logger.error(f"Batch verify request failed: {e}")
             for vid in verification_ids:

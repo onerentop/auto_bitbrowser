@@ -42,7 +42,7 @@ class AIBrowserAgent:
         base_url: Optional[str] = None,
         model: str = "gemini-2.5-flash",
         default_timeout: int = 10000,
-        screenshot_delay: float = 1.0,
+        screenshot_delay: float = 2.0,
     ):
         """
         初始化 AI Browser Agent
@@ -52,7 +52,7 @@ class AIBrowserAgent:
             base_url: API Base URL（默认使用 Gemini OpenAI 兼容 API）
             model: 使用的模型
             default_timeout: 默认操作超时时间（毫秒）
-            screenshot_delay: 截图前的等待时间（秒）
+            screenshot_delay: 截图前的等待时间（秒），默认 2.0 秒
 
         Environment Variables:
             GEMINI_API_KEY: Gemini API 密钥
@@ -132,10 +132,26 @@ class AIBrowserAgent:
         executor = ActionExecutor(page, timeout=self.default_timeout)
 
         try:
-            # 导航到起始页面
+            # 导航到起始页面（带重试）
             if navigate_first:
                 print(f"导航到: {start_url}")
-                await page.goto(start_url, wait_until="domcontentloaded", timeout=30000)
+                nav_retries = 3
+                nav_timeout = 60000  # 60 秒超时
+                for nav_attempt in range(nav_retries):
+                    try:
+                        await page.goto(start_url, wait_until="domcontentloaded", timeout=nav_timeout)
+                        break  # 成功则跳出循环
+                    except Exception as nav_error:
+                        if nav_attempt < nav_retries - 1:
+                            print(f"导航超时 (尝试 {nav_attempt + 1}/{nav_retries})，重试中...")
+                            await asyncio.sleep(2)
+                        else:
+                            # 最后一次尝试使用更宽松的等待策略
+                            print(f"导航仍然超时，尝试 commit 等待策略...")
+                            try:
+                                await page.goto(start_url, wait_until="commit", timeout=nav_timeout)
+                            except Exception:
+                                raise nav_error  # 抛出原始错误
                 await asyncio.sleep(self.screenshot_delay)
 
             # 主循环
@@ -172,9 +188,17 @@ class AIBrowserAgent:
                 if action.action_type == ActionType.DONE:
                     self.state = AgentState.COMPLETED
                     context.add_action(action)
-                    return TaskResult.success_result(
+                    # 传递 result_status（用于 get_sheerlink 等任务）
+                    result_data = {"action_type": "done"}
+                    if action.result_status:
+                        result_data["result_status"] = action.result_status
+                    return TaskResult(
+                        success=True,
                         message=action.reasoning,
-                        steps=context.current_step + 1,
+                        state=AgentState.COMPLETED,
+                        total_steps=context.current_step + 1,
+                        action_history=context.action_history,
+                        data=result_data,
                     )
 
                 if action.action_type == ActionType.ERROR:
@@ -216,6 +240,40 @@ class AIBrowserAgent:
                         },
                     )
 
+                if action.action_type == ActionType.EXTRACT_LINK:
+                    # 执行链接提取动作（从页面实际提取 href）
+                    success, message = await executor.execute(action)
+                    print(f"执行结果: {message}")
+
+                    # 使用提取到的链接（executor 会更新 action.extracted_link）
+                    context.add_action(action)
+                    extracted_link = action.extracted_link
+                    result_status = action.result_status or "link_ready"
+
+                    if not extracted_link:
+                        # 提取失败
+                        print(f"⚠️ 链接提取失败: {message}")
+                        # 继续循环，让 AI 重新分析
+                        continue
+
+                    print(f"🔗 提取到链接: {extracted_link}")
+                    print(f"📋 结果状态: {result_status}")
+
+                    # 如果有 result_status，直接完成任务（不需要进一步处理）
+                    self.state = AgentState.COMPLETED
+                    return TaskResult(
+                        success=True,
+                        message=f"已提取链接 ({result_status})",
+                        state=AgentState.COMPLETED,
+                        total_steps=context.current_step + 1,
+                        action_history=context.action_history,
+                        data={
+                            "action_type": "extract_link",
+                            "extracted_link": extracted_link,
+                            "result_status": result_status,
+                        },
+                    )
+
                 # 4. 执行动作
                 success, message = await executor.execute(action)
                 print(f"执行结果: {message}")
@@ -232,14 +290,11 @@ class AIBrowserAgent:
                     print(f"⚠️ 动作执行失败: {message}")
 
                 # 5. 等待页面稳定
-                # 对于点击按钮操作，等待更长时间以便页面导航
-                if action.action_type == ActionType.CLICK:
-                    try:
-                        # 尝试等待页面加载完成
-                        await page.wait_for_load_state("domcontentloaded", timeout=3000)
-                    except Exception:
-                        pass  # 超时没关系，继续执行
-                    await asyncio.sleep(self.screenshot_delay * 1.5)
+                # 对于点击/导航/刷新操作，action_executor 已处理智能等待
+                # 这里额外等待让 iframe 内容有时间渲染
+                if action.action_type in (ActionType.CLICK, ActionType.NAVIGATE, ActionType.REFRESH):
+                    # 这些操作可能触发 iframe 加载，需要额外等待渲染
+                    await asyncio.sleep(self.screenshot_delay * 2.0)
                 else:
                     await asyncio.sleep(self.screenshot_delay)
 

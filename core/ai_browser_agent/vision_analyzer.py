@@ -248,6 +248,8 @@ class VisionAnalyzer:
                 error_message=data.get("error_message"),
                 verification_type=data.get("verification_type"),
                 extracted_secret=data.get("extracted_secret"),
+                extracted_link=data.get("extracted_link"),
+                result_status=data.get("result_status"),
             )
 
         except json.JSONDecodeError as e:
@@ -422,6 +424,7 @@ class VisionAnalyzer:
             "navigate": ActionType.NAVIGATE,
             "refresh": ActionType.REFRESH,
             "extract_secret": ActionType.EXTRACT_SECRET,
+            "extract_link": ActionType.EXTRACT_LINK,
             "done": ActionType.DONE,
             "error": ActionType.ERROR,
             "need_verification": ActionType.NEED_VERIFICATION,

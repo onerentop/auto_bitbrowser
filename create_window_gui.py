@@ -26,14 +26,12 @@ from ix_window import (
 )
 from ix_api import get_group_list
 from database import DBManager
-from run_playwright_google import process_browser
 from sheerid_verifier import SheerIDVerifier
-from sheerid_gui import SheerIDWindow
+from sheerid_gui_v2 import SheerIDWindowV2
 from config_ui import ConfigManagerWidget
 import re
 from web_admin.server import run_server
 from core.config_manager import ConfigManager
-from core.retry_helper import FailedTaskQueue
 
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -159,107 +157,8 @@ class WorkerThread(QThread):
             self.run_open()
         elif self.task_type == '2fa':
             self.run_2fa()
-        elif self.task_type == 'sheerlink':
-            self.run_sheerlink()
         elif self.task_type == 'verify_sheerid':
             self.run_verify_sheerid()
-
-    def run_sheerlink(self):
-        """执行SheerLink提取任务 (多线程) + 统计"""
-        ids_to_process = self.kwargs.get('ids', [])
-        thread_count = self.kwargs.get('thread_count', 1)
-        
-        if not ids_to_process:
-             self.finished_signal.emit({'type': 'sheerlink', 'count': 0})
-             return
-        
-        self.log(f"\n[开始] 提取 SheerID Link 任务，共 {len(ids_to_process)} 个窗口，并发数: {thread_count}...")
-        
-        # Stats counters
-        stats = {
-            'link_unverified': 0,
-            'link_verified': 0,
-            'subscribed': 0,
-            'ineligible': 0,
-            'timeout': 0,
-            'error': 0
-        }
-        
-        success_count = 0
-        
-        with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            future_to_id = {}
-            for bid in ids_to_process:
-                # Callback to log progress with ID prefix
-                # Using default arg b=bid to capture loop variable value
-                callback = lambda msg, b=bid: self.log_signal.emit(f"[{b}] {msg}")
-                future = executor.submit(process_browser, bid, log_callback=callback)
-                future_to_id[future] = bid
-            
-            finished_tasks = 0
-            total_tasks = len(ids_to_process)
-            for future in as_completed(future_to_id):
-                if not self.is_running:
-                    self.log('[用户操作] 任务已停止 (等待当前线程完成)')
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-
-                bid = future_to_id[future]
-                finished_tasks += 1
-
-                # 发送进度信号
-                self.emit_progress(finished_tasks, total_tasks)
-
-                try:
-                    success, msg = future.result()
-                    pct = int(finished_tasks / total_tasks * 100)
-                    if success:
-                        self.log(f"[成功] ({finished_tasks}/{total_tasks} - {pct}%) {bid}: {msg}")
-                        success_count += 1
-                    else:
-                        self.log(f"[失败] ({finished_tasks}/{total_tasks} - {pct}%) {bid}: {msg}")
-                        
-                    # Stats Logic
-                    if "Verified Link" in msg or "Get Offer" in msg or "Offer Ready" in msg:
-                        stats['link_verified'] += 1
-                    elif "Unverified Link" in msg or "Link Found" in msg or "提取成功" in msg:
-                        stats['link_unverified'] += 1
-                    elif "Subscribed" in msg or "已绑卡" in msg:
-                        stats['subscribed'] += 1
-                    elif "无资格" in msg or "not available" in msg:
-                        stats['ineligible'] += 1
-                    elif "超时" in msg or "Timeout" in msg:
-                        stats['timeout'] += 1
-                        # 记录失败任务
-                        FailedTaskQueue.add(bid, 'sheerlink', {'msg': msg})
-                    else:
-                        stats['error'] += 1
-                        # 记录失败任务
-                        FailedTaskQueue.add(bid, 'sheerlink', {'msg': msg})
-
-                except Exception as e:
-                    self.log(f"[异常] ({finished_tasks}/{total_tasks}) {bid}: {e}")
-                    stats['error'] += 1
-                    # 记录失败任务
-                    FailedTaskQueue.add(bid, 'sheerlink', {'error': str(e)})
-
-        # 保存失败任务队列
-        FailedTaskQueue.save()
-
-        # Final Report
-        summary_msg = (
-            f"📊 任务统计报告:\n"
-            f"--------------------------------\n"
-            f"🔗 有资格待验证:   {stats['link_unverified']}\n"
-            f"✅ 已过验证未绑卡: {stats['link_verified']}\n"
-            f"💳 已过验证已绑卡: {stats['subscribed']}\n"
-            f"❌ 无资格 (不可用): {stats['ineligible']}\n"
-            f"⏳ 超时/错误:      {stats['timeout'] + stats['error']}\n"
-            f"--------------------------------\n"
-            f"总计处理: {finished_tasks}/{len(ids_to_process)}"
-        )
-        self.log(f"\n{summary_msg}")
-        self.finished_signal.emit({'type': 'sheerlink', 'count': success_count, 'summary': summary_msg})
 
     def run_verify_sheerid(self):
         links = self.kwargs.get('links', [])
@@ -660,24 +559,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         google_layout = QVBoxLayout()
         google_layout.setContentsMargins(5,10,5,10)
         
-        # Move btn_sheerlink here
-        self.btn_sheerlink = QPushButton("一键获取 G-SheerLink")
-        self.btn_sheerlink.setFixedHeight(40)
-        self.btn_sheerlink.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_sheerlink.setStyleSheet("""
+        # 一键获取 SheerLink (AI 版) 按钮
+        self.btn_sheerlink_ai = QPushButton("🤖 一键获取 SheerLink (AI)")
+        self.btn_sheerlink_ai.setFixedHeight(40)
+        self.btn_sheerlink_ai.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sheerlink_ai.setStyleSheet("""
             QPushButton {
-                text-align: left; 
-                padding-left: 15px; 
-                font-weight: bold; 
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
                 color: white;
-                background-color: #4CAF50;
+                background-color: #8BC34A;
                 border-radius: 5px;
             }
-            QPushButton:hover { background-color: #45a049; }
+            QPushButton:hover { background-color: #7CB342; }
         """)
-        self.btn_sheerlink.clicked.connect(self.action_get_sheerlink)
-        google_layout.addWidget(self.btn_sheerlink)
-        
+        self.btn_sheerlink_ai.clicked.connect(self.action_get_sheerlink_ai)
+        google_layout.addWidget(self.btn_sheerlink_ai)
+
         # New Button: Verify SheerID
         self.btn_verify_sheerid = QPushButton("批量验证 SheerID Link")
         self.btn_verify_sheerid.setFixedHeight(40)
@@ -696,26 +595,26 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_verify_sheerid.clicked.connect(self.action_verify_sheerid)
         google_layout.addWidget(self.btn_verify_sheerid)
         
-        # 一键绑卡订阅按钮
-        self.btn_bind_card = QPushButton("🔗 一键绑卡订阅")
-        self.btn_bind_card.setFixedHeight(40)
-        self.btn_bind_card.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_bind_card.setStyleSheet("""
+        # 一键绑卡订阅 AI 版按钮
+        self.btn_bind_card_ai = QPushButton("🤖 一键绑卡订阅 (AI)")
+        self.btn_bind_card_ai.setFixedHeight(40)
+        self.btn_bind_card_ai.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_bind_card_ai.setStyleSheet("""
             QPushButton {
-                text-align: left; 
-                padding-left: 15px; 
-                font-weight: bold; 
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
                 color: white;
-                background-color: #FF9800;
+                background-color: #E65100;
                 border-radius: 5px;
             }
-            QPushButton:hover { background-color: #F57C00; }
+            QPushButton:hover { background-color: #BF360C; }
         """)
-        self.btn_bind_card.clicked.connect(self.action_bind_card)
-        google_layout.addWidget(self.btn_bind_card)
-        
-        # 一键全自动处理按钮
-        self.btn_auto_all = QPushButton("🚀 一键全自动处理")
+        self.btn_bind_card_ai.clicked.connect(self.action_bind_card_ai)
+        google_layout.addWidget(self.btn_bind_card_ai)
+
+        # 一键全自动订阅按钮
+        self.btn_auto_all = QPushButton("🚀 一键全自动订阅")
         self.btn_auto_all.setFixedHeight(40)
         self.btn_auto_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_auto_all.setStyleSheet("""
@@ -1034,12 +933,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         list_action_layout.addWidget(self.select_all_checkbox)
         list_action_layout.addStretch()
 
-        # 继续失败任务按钮
-        self.btn_retry_failed = QPushButton("🔄 继续失败任务")
-        self.btn_retry_failed.setStyleSheet("color: #FF5722; font-weight: bold;")
-        self.btn_retry_failed.clicked.connect(self.retry_failed_tasks)
-        list_action_layout.addWidget(self.btn_retry_failed)
-
         list_action_layout.addWidget(self.open_btn)
         list_action_layout.addWidget(self.delete_btn)
         list_layout.addLayout(list_action_layout)
@@ -1329,66 +1222,63 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.log("正在获取所有窗口信息以生成验证码...")
         self.start_worker_thread('2fa')
 
-    def action_get_sheerlink(self):
-        """一键获取G-sheerlink"""
-        ids = self.get_selected_browser_ids()
-        if not ids:
-            QMessageBox.warning(self, "提示", "请先在列表中勾选要处理的窗口")
-            return
-        
-        thread_count = self.thread_spinbox.value()
-        msg = f"确定要对选中的 {len(ids)} 个窗口执行 SheerID 提取吗？\n"
-        msg += f"当前并发模式: {thread_count} 线程\n"
-        if thread_count > 1:
-            msg += "⚠️ 注意: 将同时打开多个浏览器窗口，请确保电脑资源充足。"
-        
-        reply = QMessageBox.question(self, '确认操作', msg,
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            self.start_worker_thread('sheerlink', ids=ids, thread_count=thread_count)
+    def action_get_sheerlink_ai(self):
+        """打开一键获取 SheerLink AI 版窗口"""
+        try:
+            from get_sheerlink_ai_gui import GetSheerlinkAIDialog
+
+            if not hasattr(self, 'get_sheerlink_ai_dialog') or self.get_sheerlink_ai_dialog is None:
+                self.get_sheerlink_ai_dialog = GetSheerlinkAIDialog(self)
+
+            self.get_sheerlink_ai_dialog.show()
+            self.get_sheerlink_ai_dialog.raise_()
+            self.get_sheerlink_ai_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开 AI SheerLink 窗口: {e}")
+            import traceback
+            traceback.print_exc()
 
     def action_verify_sheerid(self):
-        """打开 SheerID 批量验证窗口"""
+        """打开 SheerID 批量验证窗口 (数据库版)"""
         try:
             if not hasattr(self, 'verify_window') or self.verify_window is None:
-                self.verify_window = SheerIDWindow(self)
+                self.verify_window = SheerIDWindowV2(self)
             
             self.verify_window.show()
             self.verify_window.raise_()
             self.verify_window.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开验证窗口: {e}")
-    
-    def action_bind_card(self):
-        """打开一键绑卡订阅窗口"""
+
+    def action_bind_card_ai(self):
+        """打开一键绑卡订阅 AI 版窗口"""
         try:
-            from bind_card_gui import BindCardWindow
-            
-            if not hasattr(self, 'bind_card_window') or self.bind_card_window is None:
-                self.bind_card_window = BindCardWindow()
-            
-            self.bind_card_window.show()
-            self.bind_card_window.raise_()
-            self.bind_card_window.activateWindow()
+            from bind_card_ai_gui import BindCardAIDialog
+
+            if not hasattr(self, 'bind_card_ai_dialog') or self.bind_card_ai_dialog is None:
+                self.bind_card_ai_dialog = BindCardAIDialog(self)
+
+            self.bind_card_ai_dialog.show()
+            self.bind_card_ai_dialog.raise_()
+            self.bind_card_ai_dialog.activateWindow()
         except Exception as e:
-            QMessageBox.warning(self, "错误", f"无法打开绑卡窗口: {e}")
+            QMessageBox.warning(self, "错误", f"无法打开 AI 绑卡窗口: {e}")
             import traceback
             traceback.print_exc()
-    
+
     def action_auto_all(self):
-        """打开一键全自动处理窗口"""
+        """打开一键全自动订阅窗口"""
         try:
-            from auto_all_in_one_gui import AutoAllInOneWindow
+            from auto_subscribe_gui import AutoSubscribeWindow
 
             if not hasattr(self, 'auto_all_window') or self.auto_all_window is None:
-                self.auto_all_window = AutoAllInOneWindow()
+                self.auto_all_window = AutoSubscribeWindow()
 
             self.auto_all_window.show()
             self.auto_all_window.raise_()
             self.auto_all_window.activateWindow()
         except Exception as e:
-            QMessageBox.warning(self, "错误", f"无法打开全自动处理窗口: {e}")
+            QMessageBox.warning(self, "错误", f"无法打开全自动订阅窗口: {e}")
             import traceback
             traceback.print_exc()
 
@@ -1586,19 +1476,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
                 f"进度: {current}/{total} ({pct}%) | 速度: {speed:.1f}个/分钟 | 剩余: 约{eta_str}"
             )
 
-    def update_ui_state(self, running):
-        """更新UI按钮状态"""
-        self.start_btn.setEnabled(not running)
-        self.start_default_btn.setEnabled(not running)
-        self.delete_btn.setEnabled(not running)
-        self.open_btn.setEnabled(not running)
-        self.btn_2fa.setEnabled(not running)
-        self.btn_sheerlink.setEnabled(not running)
-        self.stop_btn.setEnabled(running)
-        self.refresh_btn.setEnabled(not running)
-        self.template_id_input.setEnabled(not running)
-        self.name_prefix_input.setEnabled(not running)
-
     def start_creation_default(self):
         """使用默认模板开始创建任务"""
         platform_url = self.platform_url_input.text().strip()
@@ -1659,14 +1536,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         # 打开操作
         elif result.get('type') == 'open':
             pass
-            
-        elif result.get('type') == 'sheerlink':
-            count = result.get('count', 0)
-            summary = result.get('summary')
-            if summary:
-                 QMessageBox.information(self, "任务完成", summary)
-            else:
-                 QMessageBox.information(self, "完成", f"SheerLink 提取任务结束\n成功提取: {count} 个\n结果保存在 sheerIDlink.txt")
 
         elif result.get('type') == 'verify_sheerid':
             count = result.get('count', 0)
@@ -1675,40 +1544,16 @@ class BrowserWindowCreatorGUI(QMainWindow):
     def update_ui_state(self, running):
         """更新UI按钮状态"""
         self.start_btn.setEnabled(not running)
+        self.start_default_btn.setEnabled(not running)
         self.delete_btn.setEnabled(not running)
         self.open_btn.setEnabled(not running)
         self.btn_2fa.setEnabled(not running)
-        self.btn_sheerlink.setEnabled(not running)
+        self.btn_sheerlink_ai.setEnabled(not running)
         self.btn_verify_sheerid.setEnabled(not running)
         self.stop_btn.setEnabled(running)
         self.refresh_btn.setEnabled(not running)
-        self.btn_retry_failed.setEnabled(not running)
-
-    def retry_failed_tasks(self):
-        """继续执行失败的任务"""
-        failed_count = FailedTaskQueue.count('sheerlink')
-        if failed_count == 0:
-            QMessageBox.information(self, "提示", "没有失败的任务需要重试")
-            return
-
-        failed_ids = FailedTaskQueue.get_ids('sheerlink')
-
-        reply = QMessageBox.question(
-            self,
-            "继续失败任务",
-            f"发现 {failed_count} 个失败的任务，是否重新执行？\n\n"
-            f"任务ID: {', '.join(failed_ids[:5])}{'...' if len(failed_ids) > 5 else ''}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-
-        if reply == QMessageBox.StandardButton.Yes:
-            # 清空失败队列
-            FailedTaskQueue.clear('sheerlink')
-            FailedTaskQueue.save()
-
-            # 重新执行
-            thread_count = self.thread_spinbox.value()
-            self.start_worker_thread('sheerlink', ids=failed_ids, thread_count=thread_count)
+        self.template_id_input.setEnabled(not running)
+        self.name_prefix_input.setEnabled(not running)
 
     def load_config_to_ui(self):
         """从配置加载到UI控件"""

@@ -27,6 +27,7 @@ class ActionType(str, Enum):
 
     # 数据提取
     EXTRACT_SECRET = "extract_secret"  # 提取身份验证器密钥
+    EXTRACT_LINK = "extract_link"  # 提取页面链接（如 SheerID 验证链接）
 
     # 终止状态
     DONE = "done"  # 任务完成
@@ -73,6 +74,10 @@ class AgentAction:
     verification_type: Optional[str] = None  # "sms" | "email" | "captcha"
     # 提取的密钥（当 action_type 为 EXTRACT_SECRET 时）
     extracted_secret: Optional[str] = None
+    # 提取的链接（当 action_type 为 EXTRACT_LINK 时）
+    extracted_link: Optional[str] = None
+    # 结果状态（用于 get_sheerlink 等任务返回状态分类）
+    result_status: Optional[str] = None
 
     def __str__(self) -> str:
         if self.action_type == ActionType.CLICK:
@@ -97,6 +102,8 @@ class AgentAction:
             return f"NEED_VERIFICATION ({self.verification_type}): {self.reasoning}"
         elif self.action_type == ActionType.EXTRACT_SECRET:
             return f"EXTRACT_SECRET: {self.extracted_secret[:20]}..." if self.extracted_secret and len(self.extracted_secret) > 20 else f"EXTRACT_SECRET: {self.extracted_secret}"
+        elif self.action_type == ActionType.EXTRACT_LINK:
+            return f"EXTRACT_LINK: {self.extracted_link[:50]}..." if self.extracted_link and len(self.extracted_link) > 50 else f"EXTRACT_LINK: {self.extracted_link}"
         return f"{self.action_type.value}: {self.reasoning}"
 
 

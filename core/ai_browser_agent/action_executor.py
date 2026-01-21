@@ -83,6 +83,10 @@ class ActionExecutor:
                 # 密钥提取动作由 agent.py 处理，不应该到达这里
                 return True, f"已提取密钥: {action.extracted_secret[:20] if action.extracted_secret else ''}..."
 
+            elif action.action_type == ActionType.EXTRACT_LINK:
+                # 从页面提取 SheerID 链接
+                return await self._execute_extract_link(action)
+
             else:
                 return False, f"未知动作类型: {action.action_type}"
 
@@ -110,28 +114,32 @@ class ActionExecutor:
 
                     # 尝试普通点击
                     await element.click(timeout=self.timeout)
-                    await asyncio.sleep(0.8)
+                    # 点击后等待页面响应
+                    await self._wait_for_page_stable()
                     return True, f"点击元素: {action.target_description}"
                 except Exception as e1:
                     print(f"[AI Agent] 普通点击失败: {e1}, 尝试 force click...")
                     try:
                         # 尝试强制点击
                         await element.click(force=True, timeout=self.timeout)
-                        await asyncio.sleep(0.8)
+                        # 点击后等待页面响应
+                        await self._wait_for_page_stable()
                         return True, f"点击元素(force): {action.target_description}"
                     except Exception as e2:
                         print(f"[AI Agent] Force click 失败: {e2}, 尝试 JS click...")
                         try:
                             # 尝试 JavaScript 点击
                             await element.evaluate("el => el.click()")
-                            await asyncio.sleep(0.8)
+                            # 点击后等待页面响应
+                            await self._wait_for_page_stable()
                             return True, f"点击元素(JS): {action.target_description}"
                         except Exception as e3:
                             print(f"[AI Agent] JS click 失败: {e3}, 尝试 dispatch click event...")
                             try:
                                 # 尝试 dispatch click 事件
                                 await element.dispatch_event("click")
-                                await asyncio.sleep(0.8)
+                                # 点击后等待页面响应
+                                await self._wait_for_page_stable()
                                 return True, f"点击元素(dispatch): {action.target_description}"
                             except Exception as e4:
                                 return False, f"所有点击方式均失败: {action.target_description}"
@@ -140,7 +148,7 @@ class ActionExecutor:
         if action.x is not None and action.y is not None:
             await self.page.mouse.click(action.x, action.y)
             # 坐标点击后等待页面响应
-            await asyncio.sleep(0.5)
+            await self._wait_for_page_stable()
             return True, f"点击坐标 ({action.x}, {action.y})"
 
         # 如果有描述但未找到元素
@@ -226,12 +234,78 @@ class ActionExecutor:
             return False, "未指定 URL"
 
         await self.page.goto(action.url, wait_until="domcontentloaded", timeout=30000)
+        # 等待页面稳定
+        await self._wait_for_page_stable()
         return True, f"导航到: {action.url}"
 
     async def _execute_refresh(self, action: AgentAction) -> Tuple[bool, str]:
         """执行刷新操作"""
         await self.page.reload(wait_until="domcontentloaded", timeout=30000)
+        # 等待页面稳定
+        await self._wait_for_page_stable()
         return True, "页面已刷新"
+
+    async def _execute_extract_link(self, action: AgentAction) -> Tuple[bool, str]:
+        """
+        从页面提取 SheerID 验证链接
+
+        查找包含 sheerid.com 的链接并提取其 href 属性
+        """
+        try:
+            # 查找包含 sheerid.com 的链接
+            sheerid_patterns = [
+                'a[href*="sheerid.com"]',
+                'a[href*="services.sheerid.com"]',
+                'a[href*="offers.sheerid.com"]',
+            ]
+
+            for pattern in sheerid_patterns:
+                try:
+                    locator = self.page.locator(pattern)
+                    count = await locator.count()
+                    if count > 0:
+                        # 获取第一个匹配链接的 href
+                        href = await locator.first.get_attribute("href")
+                        if href:
+                            print(f"[AI Agent] 提取到 SheerID 链接: {href}")
+                            # 将提取到的链接保存到 action 对象中
+                            action.extracted_link = href
+                            return True, f"已提取链接: {href}"
+                except Exception as e:
+                    print(f"[AI Agent] 链接提取尝试失败 ({pattern}): {e}")
+                    continue
+
+            # 如果没有直接找到，尝试查找 "Verify eligibility" 按钮
+            verify_patterns = [
+                'a[aria-label*="Verify" i]',
+                'a[aria-label*="eligibility" i]',
+                'a:has-text("Verify eligibility")',
+                'a:has-text("验证资格")',
+                '[role="link"]:has-text("Verify")',
+            ]
+
+            for pattern in verify_patterns:
+                try:
+                    locator = self.page.locator(pattern)
+                    count = await locator.count()
+                    if count > 0:
+                        href = await locator.first.get_attribute("href")
+                        if href and "sheerid" in href.lower():
+                            print(f"[AI Agent] 从 Verify 按钮提取链接: {href}")
+                            action.extracted_link = href
+                            return True, f"已提取链接: {href}"
+                except Exception as e:
+                    continue
+
+            # 如果 AI 已经提供了链接，直接使用
+            if action.extracted_link:
+                return True, f"使用 AI 提供的链接: {action.extracted_link}"
+
+            return False, "未找到 SheerID 链接"
+
+        except Exception as e:
+            traceback.print_exc()
+            return False, f"提取链接失败: {str(e)}"
 
     async def _find_element(
         self, description: str, wait_timeout: Optional[int] = None
@@ -505,6 +579,105 @@ class ActionExecutor:
             except Exception:
                 continue
 
+        # 如果在主页面没找到，尝试在 iframe 中查找
+        element = await self._find_element_in_frames(description, key_phrases, is_button, is_link, is_delete, is_code_input)
+        if element:
+            return element
+
+        return None
+
+    async def _find_element_in_frames(
+        self, description: str, key_phrases: list, is_button: bool, is_link: bool, is_delete: bool, is_code_input: bool
+    ) -> Optional[Locator]:
+        """
+        在所有 iframe 中查找元素
+
+        Args:
+            description: 元素描述
+            key_phrases: 关键短语列表
+            is_button: 是否是按钮
+            is_link: 是否是链接
+            is_delete: 是否是删除按钮
+            is_code_input: 是否是验证码输入框
+
+        Returns:
+            找到的 Locator 或 None
+        """
+        try:
+            # 获取所有 frame
+            frames = self.page.frames
+            print(f"[AI Agent] 在 {len(frames)} 个 frame 中查找元素...")
+
+            for frame in frames:
+                # 跳过主 frame
+                if frame == self.page.main_frame:
+                    continue
+
+                frame_url = frame.url
+                # 只在支付相关的 iframe 中查找
+                if not any(domain in frame_url for domain in ['google.com', 'gstatic.com', 'googleapis.com']):
+                    continue
+
+                print(f"[AI Agent] 在 iframe 中查找: {frame_url[:80]}...")
+
+                try:
+                    # 尝试在 frame 中查找元素
+                    for phrase in key_phrases:
+                        if not phrase or len(phrase) < 2:
+                            continue
+
+                        # 尝试各种定位策略
+                        strategies = []
+
+                        if is_button:
+                            strategies.extend([
+                                lambda p=phrase: frame.get_by_role("button", name=re.compile(p, re.I)),
+                                lambda p=phrase: frame.locator(f'button:has-text("{p}")'),
+                                lambda p=phrase: frame.locator(f'[role="button"]:has-text("{p}")'),
+                            ])
+
+                        # 通用策略
+                        strategies.extend([
+                            lambda p=phrase: frame.get_by_text(p, exact=True),
+                            lambda p=phrase: frame.get_by_text(p),
+                            lambda p=phrase: frame.locator(f'[aria-label*="{p}" i]'),
+                            lambda p=phrase: frame.get_by_role("link", name=re.compile(p, re.I)),
+                        ])
+
+                        # 输入框策略
+                        if is_code_input or 'card' in description.lower() or 'number' in description.lower():
+                            strategies.extend([
+                                lambda p=phrase: frame.get_by_role("textbox", name=re.compile(p, re.I)),
+                                lambda p=phrase: frame.get_by_placeholder(re.compile(p, re.I)),
+                                lambda p=phrase: frame.locator(f'input[aria-label*="{p}" i]'),
+                            ])
+
+                        for strategy in strategies:
+                            try:
+                                locator = strategy()
+                                if locator is None:
+                                    continue
+
+                                count = await locator.count()
+                                if count > 0:
+                                    first = locator.first
+                                    try:
+                                        is_visible = await first.is_visible()
+                                        if is_visible:
+                                            print(f"[AI Agent] 在 iframe 中找到元素: {phrase}")
+                                            return first
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                continue
+
+                except Exception as e:
+                    print(f"[AI Agent] 在 iframe 中查找失败: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"[AI Agent] 获取 frames 失败: {e}")
+
         return None
 
     def _is_selector(self, text: str) -> bool:
@@ -517,6 +690,46 @@ class ActionExecutor:
             r"\s+",  # 后代选择器
         ]
         return any(re.search(pattern, text) for pattern in selector_patterns)
+
+    async def _wait_for_page_stable(self, timeout: int = 10000, min_wait: float = 1.0):
+        """
+        等待页面稳定（导航完成或网络空闲）
+
+        在点击后调用，等待页面响应完成后再进行下一步操作。
+        使用多重策略确保页面稳定：
+        1. 等待网络空闲（无请求 500ms）
+        2. 等待 DOM 内容加载完成
+        3. 最小等待时间保证
+
+        Args:
+            timeout: 最大等待时间（毫秒），默认 10 秒
+            min_wait: 最小等待时间（秒），确保页面有足够时间响应
+        """
+        try:
+            # 首先等待一个最小时间，让页面开始响应
+            await asyncio.sleep(min_wait)
+
+            # 尝试等待网络空闲（2个或更少的网络连接持续500ms）
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=timeout)
+                print("[AI Agent] 页面网络空闲")
+            except Exception:
+                # 网络空闲超时，尝试等待 DOM 加载
+                try:
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=timeout)
+                    print("[AI Agent] DOM 内容已加载")
+                except Exception:
+                    # 都失败了，等待固定时间
+                    print("[AI Agent] 页面加载等待超时，使用固定等待")
+                    await asyncio.sleep(3.0)
+
+            # 额外等待让 JavaScript 渲染和 iframe 加载完成
+            await asyncio.sleep(1.5)
+
+        except Exception as e:
+            print(f"[AI Agent] 等待页面稳定时出错: {e}")
+            # 出错时仍然等待一段时间
+            await asyncio.sleep(2.0)
 
     async def take_screenshot(self) -> bytes:
         """

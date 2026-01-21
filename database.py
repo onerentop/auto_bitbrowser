@@ -39,6 +39,24 @@ class DBManager:
                 )
             ''')
 
+            # 动态添加 sheerid_steps 列（如果不存在）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN sheerid_steps INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 last_failed_step 列（用于断点续传）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN last_failed_step TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 last_error 列（记录最后错误信息）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN last_error TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
             # 创建卡片表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -150,24 +168,26 @@ class DBManager:
             print(f"数据库初始化完成，共处理 {total} 条记录")
 
     @staticmethod
-    def upsert_account(email, password=None, recovery_email=None, secret_key=None, 
-                       link=None, status=None, message=None):
+    def upsert_account(email, password=None, recovery_email=None, secret_key=None,
+                       link=None, status=None, message=None, sheerid_steps=None,
+                       last_failed_step=None, last_error=None):
         """插入或更新账号信息"""
-        if not email: 
+        if not email:
             print(f"[DB] upsert_account: email 为空，跳过")
             return
-            
+
         try:
             with lock:
                 conn = DBManager.get_connection()
                 cursor = conn.cursor()
-                
+
                 # 先检查是否存在
                 cursor.execute("SELECT * FROM accounts WHERE email = ?", (email,))
                 exists = cursor.fetchone()
-                
+
                 if exists:
                     # 构建更新语句 - 使用 is not None 而不是 truthiness 判断
+                    # 特殊处理：空字符串 "" 表示要清除字段
                     fields = []
                     values = []
                     if password is not None: fields.append("password = ?"); values.append(password)
@@ -176,7 +196,11 @@ class DBManager:
                     if link is not None: fields.append("verification_link = ?"); values.append(link)
                     if status is not None: fields.append("status = ?"); values.append(status)
                     if message is not None: fields.append("message = ?"); values.append(message)
-                    
+                    if sheerid_steps is not None: fields.append("sheerid_steps = ?"); values.append(sheerid_steps)
+                    # last_failed_step 和 last_error 支持传 "" 来清除
+                    if last_failed_step is not None: fields.append("last_failed_step = ?"); values.append(last_failed_step if last_failed_step else None)
+                    if last_error is not None: fields.append("last_error = ?"); values.append(last_error if last_error else None)
+
                     if fields:
                         fields.append("updated_at = CURRENT_TIMESTAMP")
                         values.append(email)
@@ -186,11 +210,11 @@ class DBManager:
                 else:
                     # 插入新记录
                     cursor.execute('''
-                        INSERT INTO accounts (email, password, recovery_email, secret_key, verification_link, status, message)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (email, password, recovery_email, secret_key, link, status or 'pending', message))
+                        INSERT INTO accounts (email, password, recovery_email, secret_key, verification_link, status, message, sheerid_steps, last_failed_step, last_error)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (email, password, recovery_email, secret_key, link, status or 'pending', message, sheerid_steps or 0, last_failed_step, last_error))
                     print(f"[DB] 插入新账号: {email}, 状态: {status or 'pending'}")
-                
+
                 conn.commit()
                 conn.close()
         except Exception as e:
@@ -803,4 +827,85 @@ class DBManager:
                 return deleted
         except Exception as e:
             print(f"[DB ERROR] clear_authenticator_modification_history 失败: {e}")
+            return 0
+
+    # ==================== Bind Card History ====================
+
+    @staticmethod
+    def init_bind_card_history_table():
+        """初始化绑卡历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bind_card_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    card_number TEXT NOT NULL,
+                    bound_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_bind_card_history() -> dict:
+        """获取所有绑卡历史记录，返回 {email: {card_number, bound_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_bind_card_history_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, card_number, bound_at FROM bind_card_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {'card_number': row['card_number'], 'bound_at': row['bound_at']} for row in rows}
+        except Exception as e:
+            print(f"[DB] get_bind_card_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_bind_card_history(email: str, card_number: str):
+        """添加或更新绑卡记录"""
+        try:
+            # 确保表存在
+            DBManager.init_bind_card_history_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO bind_card_history (email, card_number, bound_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        card_number = excluded.card_number,
+                        bound_at = CURRENT_TIMESTAMP
+                ''', (email, card_number))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录绑卡: {email} -> {card_number}")
+        except Exception as e:
+            print(f"[DB ERROR] add_bind_card_history 失败: {e}")
+
+    @staticmethod
+    def clear_bind_card_history() -> int:
+        """清除所有绑卡历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_bind_card_history_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM bind_card_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条绑卡记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_bind_card_history 失败: {e}")
             return 0
