@@ -322,22 +322,19 @@ class ComprehensiveQueryWindow(QDialog):
             # 邮箱
             self.table.setItem(row_idx, 0, QTableWidgetItem(data.get('email', '')))
 
-            # 密码 (显示前4位 + ***)
-            pwd = data.get('password', '') or ''
-            masked_pwd = pwd[:4] + '***' if pwd and len(pwd) > 4 else pwd
-            self.table.setItem(row_idx, 1, QTableWidgetItem(masked_pwd))
+            # 密码 (明文显示)
+            self.table.setItem(row_idx, 1, QTableWidgetItem(data.get('password', '') or ''))
 
             # 辅助邮箱
             self.table.setItem(row_idx, 2, QTableWidgetItem(data.get('recovery_email', '') or ''))
 
-            # 2FA密钥 (显示前8位 + ...)
-            secret = data.get('secret_key', '') or ''
-            masked_secret = secret[:8] + '...' if len(secret) > 8 else secret
-            self.table.setItem(row_idx, 3, QTableWidgetItem(masked_secret))
+            # 2FA密钥 (明文显示)
+            self.table.setItem(row_idx, 3, QTableWidgetItem(data.get('secret_key', '') or ''))
 
-            # 主状态
+            # 主状态 (转换为中文显示)
             status = data.get('status', '')
-            status_item = QTableWidgetItem(status)
+            status_display = self._get_status_display(status)
+            status_item = QTableWidgetItem(status_display)
             status_item.setBackground(self._get_status_color(status))
             self.table.setItem(row_idx, 4, status_item)
 
@@ -404,6 +401,19 @@ class ComprehensiveQueryWindow(QDialog):
             else:
                 bind_card_status = "—"
             self.table.setItem(row_idx, 11, QTableWidgetItem(bind_card_status))
+
+    def _get_status_display(self, status: str) -> str:
+        """将英文状态转换为中文显示"""
+        status_map = {
+            'pending': '待处理',
+            'link_ready': '链接已获取',
+            'verified': '已验证',
+            'subscribed': '已订阅',
+            'ineligible': '无资格',
+            'error': '错误',
+            'running': '运行中',
+        }
+        return status_map.get(status, status)
 
     def _get_status_color(self, status: str) -> QBrush:
         """根据状态返回背景颜色"""
