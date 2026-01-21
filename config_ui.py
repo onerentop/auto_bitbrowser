@@ -1095,9 +1095,27 @@ class SettingsTab(QWidget):
         self.gmail_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         gmail_layout.addRow("应用密码:", self.gmail_password_input)
 
+        # 提示和链接
         gmail_hint = QLabel("提示: 需在 Google 账号设置中生成「应用专用密码」")
         gmail_hint.setStyleSheet("color: #666; font-size: 11px;")
         gmail_layout.addRow("", gmail_hint)
+
+        # 应用密码获取链接
+        app_password_url = "https://myaccount.google.com/apppasswords"
+        gmail_link_layout = QHBoxLayout()
+        gmail_link_label = QLabel(f'获取应用密码: <a href="{app_password_url}">{app_password_url}</a>')
+        gmail_link_label.setOpenExternalLinks(True)
+        gmail_link_label.setStyleSheet("color: #1976D2; font-size: 11px;")
+        gmail_link_layout.addWidget(gmail_link_label)
+
+        self.gmail_copy_link_btn = QPushButton("复制链接")
+        self.gmail_copy_link_btn.setFixedWidth(70)
+        self.gmail_copy_link_btn.setStyleSheet("font-size: 11px; padding: 2px 5px;")
+        self.gmail_copy_link_btn.clicked.connect(lambda: self._copy_to_clipboard(app_password_url))
+        gmail_link_layout.addWidget(self.gmail_copy_link_btn)
+        gmail_link_layout.addStretch()
+
+        gmail_layout.addRow("", gmail_link_layout)
 
         gmail_group.setLayout(gmail_layout)
         layout.addWidget(gmail_group)
@@ -1327,6 +1345,16 @@ class SettingsTab(QWidget):
             self.delay_save_spin.setValue(18)
             # Other
             self.thread_count_spin.setValue(3)
+
+    def _copy_to_clipboard(self, text: str):
+        """复制文本到剪贴板"""
+        from PyQt6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+        # 短暂显示复制成功提示
+        self.gmail_copy_link_btn.setText("已复制!")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1500, lambda: self.gmail_copy_link_btn.setText("复制链接"))
 
 
 class ConfigManagerWidget(QWidget):
