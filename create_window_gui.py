@@ -8,7 +8,6 @@ UI布局调整：左侧操作区，右侧日志区
 import sys
 import os
 import threading
-import pyotp
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from PyQt6.QtWidgets import (
@@ -154,8 +153,6 @@ class WorkerThread(QThread):
             self.run_delete()
         elif self.task_type == 'open':
             self.run_open()
-        elif self.task_type == '2fa':
-            self.run_2fa()
         elif self.task_type == 'verify_sheerid':
             self.run_verify_sheerid()
 
@@ -271,72 +268,6 @@ class WorkerThread(QThread):
         
         self.log(f"[完成] 打开任务结束，成功请求 {success_count}/{len(ids_to_open)} 个")
         self.finished_signal.emit({'type': 'open', 'success_count': success_count})
-
-    def run_2fa(self):
-        """生成并保存2FA验证码"""
-        try:
-            self.log("正在通过API获取窗口列表和密钥...")
-            
-            # 1. 获取当前窗口列表 (尝试获取更多以涵盖所有)
-            browsers = get_browser_list(page=0, pageSize=100)
-            if not browsers:
-                self.log("未获取到窗口列表")
-                self.finished_signal.emit({'type': '2fa', 'codes': {}})
-                return
-
-            codes_map = {}
-            file_lines = []
-            
-            count = 0
-            for browser in browsers:
-                if not self.is_running:
-                    break
-                
-                # 优先从备注获取密钥 (第4段)
-                secret = None
-                remark = browser.get('note', '')
-                if remark:
-                    parts = remark.split('----')
-                    if len(parts) >= 4:
-                        secret = parts[3].strip()
-                
-                # 如果备注没有，再尝试从字段获取
-                if not secret:
-                    secret = browser.get('tfa_secret')
-
-                if secret and secret.strip():
-                    try:
-                        # 清理密钥
-                        s = secret.strip().replace(" ", "")
-                        totp = pyotp.TOTP(s)
-                        code = totp.now()
-                        
-                        bid = browser.get('profile_id')
-                        codes_map[bid] = code
-                        file_lines.append(f"{code}----{s}")
-                        count += 1
-                    except Exception as e:
-                       # pass
-                       pass
-            
-            # 保存到文件
-            if file_lines:
-                # Use absolute path relative to executable
-                base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-                save_path = os.path.join(base_path, '2fa_codes.txt')
-                
-                with open(save_path, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(file_lines))
-                self.log(f"已保存 {len(file_lines)} 个验证码到 {save_path}")
-            
-            self.log(f"2FA刷新完成，共生成 {count} 个")
-            self.finished_signal.emit({'type': '2fa', 'codes': codes_map})
-            
-        except Exception as e:
-            self.log(f"2FA处理异常: {e}")
-            import traceback
-            self.log(traceback.format_exc())
-            self.finished_signal.emit({'type': '2fa', 'codes': {}})
 
     def run_delete(self):
         """执行批量删除任务"""
@@ -501,7 +432,7 @@ class BrowserWindowCreatorGUI(QMainWindow):
     def ensure_data_files(self):
         """Ensure necessary data files exist"""
         base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-        files = ["sheerIDlink.txt", "无资格号.txt", "2fa_codes.txt", "已绑卡号.txt", "已验证未绑卡.txt", "超时或其他错误.txt"]
+        files = ["sheerIDlink.txt", "无资格号.txt", "已绑卡号.txt", "已验证未绑卡.txt", "超时或其他错误.txt"]
         for f in files:
             path = os.path.join(base_path, f)
             if not os.path.exists(path):
@@ -887,20 +818,15 @@ class BrowserWindowCreatorGUI(QMainWindow):
         # 4. 窗口列表部分
         list_group = QGroupBox("现存窗口列表")
         list_layout = QVBoxLayout()
-        
+
         # 列表操作按钮
         list_action_layout = QHBoxLayout()
         self.refresh_btn = QPushButton("刷新列表")
         self.refresh_btn.clicked.connect(self.refresh_browser_list)
-        
-        self.btn_2fa = QPushButton("刷新并保存验证码")
-        self.btn_2fa = QPushButton("刷新并保存验证码")
-        self.btn_2fa.setStyleSheet("color: purple; font-weight: bold;")
-        self.btn_2fa.clicked.connect(self.action_refresh_2fa)
 
         self.select_all_checkbox = QCheckBox("全选")
         self.select_all_checkbox.stateChanged.connect(self.toggle_select_all)
-        
+
         self.open_btn = QPushButton("打开选中窗口")
         self.open_btn.setStyleSheet("color: blue; font-weight: bold;")
         self.open_btn.clicked.connect(self.open_selected_browsers)
@@ -908,9 +834,8 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.delete_btn = QPushButton("删除选中窗口")
         self.delete_btn.setStyleSheet("color: red;")
         self.delete_btn.clicked.connect(self.delete_selected_browsers)
-        
+
         list_action_layout.addWidget(self.refresh_btn)
-        list_action_layout.addWidget(self.btn_2fa)
         list_action_layout.addWidget(self.select_all_checkbox)
         list_action_layout.addStretch()
 
@@ -1106,11 +1031,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
             import traceback
             traceback.print_exc()
             self.log(f"[错误] 刷新列表失败: {e}")
-
-    def action_refresh_2fa(self):
-        """刷新并保存2FA验证码"""
-        self.log("正在获取所有窗口信息以生成验证码...")
-        self.start_worker_thread('2fa')
 
     def action_get_sheerlink_ai(self):
         """打开一键获取 SheerLink AI 版窗口"""
@@ -1416,21 +1336,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         # 如果是创建操作，也刷新列表可以看到新窗口
         elif result.get('type') == 'create':
             self.refresh_browser_list()
-        # 2FA刷新结果
-        elif result.get('type') == '2fa':
-            codes = result.get('codes', {})
-            # 遍历树形控件更新 2FA 验证码
-            root = self.tree.invisibleRootItem()
-            for i in range(root.childCount()):
-                group_item = root.child(i)
-                for j in range(group_item.childCount()):
-                    child = group_item.child(j)
-                    data = child.data(0, Qt.ItemDataRole.UserRole)
-                    if data and data.get("type") == "browser":
-                        bid = str(data.get("id"))
-                        if bid in codes:
-                            child.setText(3, str(codes[bid]))
-            QMessageBox.information(self, "完成", "2FA验证码已更新并保存")
         # 打开操作
         elif result.get('type') == 'open':
             pass
@@ -1445,7 +1350,6 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.start_default_btn.setEnabled(not running)
         self.delete_btn.setEnabled(not running)
         self.open_btn.setEnabled(not running)
-        self.btn_2fa.setEnabled(not running)
         self.btn_sheerlink_ai.setEnabled(not running)
         self.btn_verify_sheerid.setEnabled(not running)
         self.stop_btn.setEnabled(running)
