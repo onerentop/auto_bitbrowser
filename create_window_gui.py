@@ -703,6 +703,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_modify_authenticator.clicked.connect(self.action_modify_authenticator)
         google_layout.addWidget(self.btn_modify_authenticator)
 
+        # 综合查询按钮
+        self.btn_comprehensive_query = QPushButton("🔍 综合查询")
+        self.btn_comprehensive_query.setFixedHeight(40)
+        self.btn_comprehensive_query.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_comprehensive_query.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #2196F3;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #1976D2; }
+        """)
+        self.btn_comprehensive_query.clicked.connect(self.action_open_comprehensive_query)
+        google_layout.addWidget(self.btn_comprehensive_query)
+
         google_layout.addStretch()
         google_page.setLayout(google_layout)
         self.toolbox.addItem(google_page, "Google 专区")
@@ -1363,6 +1381,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.config_manager_dialog.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开配置管理窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_open_comprehensive_query(self):
+        """打开综合查询窗口"""
+        try:
+            from comprehensive_query_gui import ComprehensiveQueryWindow
+
+            if not hasattr(self, 'comprehensive_query_dialog') or self.comprehensive_query_dialog is None:
+                self.comprehensive_query_dialog = ComprehensiveQueryWindow(self)
+
+            self.comprehensive_query_dialog.show()
+            self.comprehensive_query_dialog.raise_()
+            self.comprehensive_query_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开综合查询窗口: {e}")
             import traceback
             traceback.print_exc()
 

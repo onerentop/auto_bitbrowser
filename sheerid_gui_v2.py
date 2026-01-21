@@ -92,9 +92,27 @@ class VerifyWorkerV2(QThread):
                             status="verified",
                             message="SheerID 验证成功",
                         )
+                        # 记录到 SheerID 验证历史表（供综合查询使用）
+                        DBManager.add_sheerid_verification(
+                            email=email,
+                            verification_id=vid,
+                            verification_result="success",
+                            message="验证成功"
+                        )
                         msg = "验证成功，已更新状态"
                     except Exception as e:
                         msg += f" (数据库更新失败: {e})"
+                else:
+                    # 验证失败 - 也记录到历史表
+                    try:
+                        DBManager.add_sheerid_verification(
+                            email=email,
+                            verification_id=vid,
+                            verification_result=status or "error",
+                            message=msg
+                        )
+                    except Exception as e:
+                        print(f"[SheerID] 记录验证历史失败: {e}")
 
                 self.progress_signal.emit(
                     {"email": email, "vid": vid, "status": status, "msg": msg}

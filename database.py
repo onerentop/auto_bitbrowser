@@ -829,6 +829,191 @@ class DBManager:
             print(f"[DB ERROR] clear_authenticator_modification_history 失败: {e}")
             return 0
 
+    # ==================== SheerID Verification History ====================
+
+    @staticmethod
+    def init_sheerid_verification_table():
+        """初始化SheerID验证历史表"""
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS sheerid_verification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL,
+                    verification_id TEXT,
+                    verification_result TEXT,
+                    message TEXT,
+                    verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(email)
+                )
+            ''')
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def get_sheerid_verification_history() -> dict:
+        """获取所有SheerID验证历史记录，返回 {email: {verification_id, verification_result, message, verified_at}}"""
+        try:
+            # 确保表存在
+            DBManager.init_sheerid_verification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT email, verification_id, verification_result, message, verified_at FROM sheerid_verification_history")
+                rows = cursor.fetchall()
+                conn.close()
+                return {row['email']: {
+                    'verification_id': row['verification_id'],
+                    'verification_result': row['verification_result'],
+                    'message': row['message'],
+                    'verified_at': row['verified_at']
+                } for row in rows}
+        except Exception as e:
+            print(f"[DB] get_sheerid_verification_history 失败: {e}")
+            return {}
+
+    @staticmethod
+    def add_sheerid_verification(email: str, verification_id: str, verification_result: str, message: str = None):
+        """添加或更新SheerID验证记录"""
+        try:
+            # 确保表存在
+            DBManager.init_sheerid_verification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO sheerid_verification_history (email, verification_id, verification_result, message, verified_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(email) DO UPDATE SET
+                        verification_id = excluded.verification_id,
+                        verification_result = excluded.verification_result,
+                        message = excluded.message,
+                        verified_at = CURRENT_TIMESTAMP
+                ''', (email, verification_id, verification_result, message))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 记录SheerID验证: {email} -> {verification_result}")
+        except Exception as e:
+            print(f"[DB ERROR] add_sheerid_verification 失败: {e}")
+
+    @staticmethod
+    def clear_sheerid_verification_history():
+        """清除所有SheerID验证历史记录"""
+        try:
+            # 确保表存在
+            DBManager.init_sheerid_verification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM sheerid_verification_history")
+                conn.commit()
+                deleted = cursor.rowcount
+                conn.close()
+                print(f"[DB] 已清除 {deleted} 条SheerID验证记录")
+                return deleted
+        except Exception as e:
+            print(f"[DB ERROR] clear_sheerid_verification_history 失败: {e}")
+            return 0
+
+    # ==================== 综合查询方法 ====================
+
+    @staticmethod
+    def get_comprehensive_account_data() -> list:
+        """
+        获取综合账户数据，合并所有修改历史
+        返回包含所有状态信息的账户列表
+        """
+        try:
+            # 确保所有表都存在
+            DBManager.init_phone_modification_table()
+            DBManager.init_email_modification_table()
+            DBManager.init_2sv_phone_modification_table()
+            DBManager.init_authenticator_modification_table()
+            DBManager.init_sheerid_verification_table()
+
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 使用 LEFT JOIN 合并所有表
+                cursor.execute('''
+                    SELECT
+                        a.email,
+                        a.password,
+                        a.recovery_email,
+                        a.secret_key,
+                        a.verification_link,
+                        a.status,
+                        a.message,
+                        a.updated_at,
+                        p.new_phone as phone_new,
+                        p.modified_at as phone_modified_at,
+                        e.new_recovery_email as email_new,
+                        e.modified_at as email_modified_at,
+                        sv.new_phone as sv2_phone_new,
+                        sv.modified_at as sv2_phone_modified_at,
+                        auth.new_secret as auth_new_secret,
+                        auth.modified_at as auth_modified_at,
+                        sh.verification_id as sheerid_id,
+                        sh.verification_result as sheerid_result,
+                        sh.message as sheerid_message,
+                        sh.verified_at as sheerid_verified_at
+                    FROM accounts a
+                    LEFT JOIN phone_modification_history p ON a.email = p.email
+                    LEFT JOIN email_modification_history e ON a.email = e.email
+                    LEFT JOIN sv2_phone_modification_history sv ON a.email = sv.email
+                    LEFT JOIN authenticator_modification_history auth ON a.email = auth.email
+                    LEFT JOIN sheerid_verification_history sh ON a.email = sh.email
+                    ORDER BY a.updated_at DESC
+                ''')
+                rows = cursor.fetchall()
+                conn.close()
+
+                result = []
+                for row in rows:
+                    result.append({
+                        'email': row['email'],
+                        'password': row['password'],
+                        'recovery_email': row['recovery_email'],
+                        'secret_key': row['secret_key'],
+                        'verification_link': row['verification_link'],
+                        'status': row['status'],
+                        'message': row['message'],
+                        'updated_at': row['updated_at'],
+                        # 辅助手机号修改
+                        'phone_modified': row['phone_new'] is not None,
+                        'phone_new': row['phone_new'],
+                        'phone_modified_at': row['phone_modified_at'],
+                        # 辅助邮箱修改
+                        'email_modified': row['email_new'] is not None,
+                        'email_new': row['email_new'],
+                        'email_modified_at': row['email_modified_at'],
+                        # 2SV手机号修改
+                        'sv2_phone_modified': row['sv2_phone_new'] is not None,
+                        'sv2_phone_new': row['sv2_phone_new'],
+                        'sv2_phone_modified_at': row['sv2_phone_modified_at'],
+                        # 身份验证器修改
+                        'auth_modified': row['auth_new_secret'] is not None,
+                        'auth_new_secret': row['auth_new_secret'],
+                        'auth_modified_at': row['auth_modified_at'],
+                        # SheerID验证
+                        'sheerid_verified': row['sheerid_result'] is not None,
+                        'sheerid_id': row['sheerid_id'],
+                        'sheerid_result': row['sheerid_result'],
+                        'sheerid_message': row['sheerid_message'],
+                        'sheerid_verified_at': row['sheerid_verified_at'],
+                    })
+                return result
+        except Exception as e:
+            print(f"[DB ERROR] get_comprehensive_account_data 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
     # ==================== Bind Card History ====================
 
     @staticmethod
