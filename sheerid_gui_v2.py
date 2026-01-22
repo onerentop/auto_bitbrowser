@@ -55,9 +55,10 @@ class VerifyWorkerV2(QThread):
         """加载 AI 配置"""
         try:
             ConfigManager.load()
-            self.gemini_api_key = ConfigManager.get("gemini_api_key", "")
-            self.gemini_base_url = ConfigManager.get("gemini_base_url", "")
-            self.gemini_model = ConfigManager.get("gemini_model", "gemini-2.5-flash")
+            # 使用 ConfigManager 的专用方法获取 AI 配置
+            self.gemini_api_key = ConfigManager.get_ai_api_key()
+            self.gemini_base_url = ConfigManager.get_ai_base_url()
+            self.gemini_model = ConfigManager.get_ai_model()
         except Exception as e:
             print(f"[VerifyWorkerV2] 加载 AI 配置失败: {e}")
             self.gemini_api_key = ""
