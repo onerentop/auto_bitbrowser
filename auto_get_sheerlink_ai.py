@@ -11,7 +11,6 @@ from typing import Optional, Tuple
 
 from core.ai_browser_agent import AIBrowserAgent, TaskResult
 from core.ai_browser_agent.types import AgentState
-from account_manager import AccountManager
 from database import DBManager
 
 # 目标 URL - Google One 学生订阅页面
@@ -211,11 +210,6 @@ def _save_result(
         error_msg: 错误信息（可选）
         total_steps: AI 执行的总步骤数
     """
-    # 构建账号行
-    account_line = f"{email}----{password}----{secret}"
-    if link:
-        account_line = f"{link}----{account_line}"
-
     try:
         # 根据状态更新数据库
         status_mapping = {
@@ -227,11 +221,13 @@ def _save_result(
         }
         db_status = status_mapping.get(status, "error")
 
-        # 更新数据库 - 保存全量信息（包括 link 和 steps）
+        # 更新数据库 - 只更新必要字段，不覆盖 recovery_email
+        # 注意：这里不传 recovery_email，保留数据库中原有的值
         DBManager.upsert_account(
             email=email,
             password=password,
-            secret_key=secret,
+            secret_key=secret,  # 只更新 secret_key
+            # recovery_email 不传，保留原值
             link=link,
             status=db_status,
             message=error_msg or status,
@@ -239,22 +235,21 @@ def _save_result(
         )
         print(f"✅ 数据库已更新: {email} -> {db_status} (步骤: {total_steps})")
 
-        # 根据状态保存到对应文件
-        if status == "subscribed":
-            AccountManager.move_to_subscribed(account_line)
-            print(f"📁 已保存到: 已绑卡号.txt")
-        elif status == "verified":
-            AccountManager.move_to_verified(account_line)
-            print(f"📁 已保存到: 已验证未绑卡.txt")
-        elif status == "link_ready":
-            AccountManager.save_link(account_line)
-            print(f"📁 已保存到: sheerIDlink.txt")
-        elif status == "ineligible":
-            AccountManager.move_to_ineligible(account_line)
-            print(f"📁 已保存到: 无资格号.txt")
-        else:
-            AccountManager.move_to_error(account_line)
-            print(f"📁 已保存到: 超时或其他错误.txt")
+        # 注意：不再调用 AccountManager.move_to_xxx() 方法
+        # 因为那些方法会解析 account_line 并可能覆盖 recovery_email
+        # 数据库已经更新，文件导出由 DBManager.export_to_files() 统一处理
+        DBManager.export_to_files()
+
+        # 记录保存位置（仅用于日志）
+        file_names = {
+            "subscribed": "已绑卡号.txt",
+            "verified": "已验证未绑卡.txt",
+            "link_ready": "sheerIDlink.txt",
+            "ineligible": "无资格号.txt",
+            "error": "超时或其他错误.txt",
+        }
+        if status in file_names:
+            print(f"📁 已保存到: {file_names[status]}")
 
     except Exception as e:
         print(f"❌ 保存结果失败: {e}")

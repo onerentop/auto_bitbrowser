@@ -10,7 +10,7 @@ import traceback
 from typing import Optional, Tuple
 
 from core.ai_browser_agent import AIBrowserAgent, TaskResult
-from account_manager import AccountManager
+from database import DBManager
 
 # 目标 URL - Google One AI Student 页面
 BIND_CARD_URL = "https://one.google.com/ai-student?g1_landing_page=75&utm_source=antigravity&utm_campaign=argon_limit_reached"
@@ -119,17 +119,21 @@ async def auto_bind_card_ai(
             print(f"\n✅ 绑卡订阅成功!")
             print(f"总步骤数: {task_result.total_steps}")
 
-            # 更新账号状态为已订阅
+            # 更新账号状态为已订阅 - 直接使用 DBManager，不使用 AccountManager
+            # 避免 account_line 解析导致 recovery_email 被覆盖
             try:
-                acc_line = email
-                if account_info.get("password"):
-                    acc_line += f"----{account_info.get('password')}"
-                if account_info.get("backup"):
-                    acc_line += f"----{account_info.get('backup')}"
-                if account_info.get("secret"):
-                    acc_line += f"----{account_info.get('secret')}"
+                DBManager.upsert_account(
+                    email=email,
+                    status="subscribed",
+                    message="绑卡订阅成功",
+                )
+                # 记录绑卡历史
+                card_number = card_info.get("number", "")
+                if card_number:
+                    masked_card = card_number[-4:] if len(card_number) >= 4 else card_number
+                    DBManager.add_bind_card_history(email, masked_card)
 
-                AccountManager.move_to_subscribed(acc_line)
+                DBManager.export_to_files()
                 print(f"✅ 账号状态已更新为 subscribed")
             except Exception as e:
                 print(f"⚠️ 更新账号状态失败（不影响绑卡结果）: {e}")

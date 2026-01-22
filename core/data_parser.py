@@ -110,14 +110,22 @@ def build_account_line(email: str, password: str = None, recovery: str = None,
 
     Returns:
         格式化的账号行
+
+    Note:
+        始终保持4段格式: email----password----recovery----secret
+        空值用空字符串占位，确保位置正确
     """
-    parts = [email]
-    if password:
-        parts.append(password)
-    if recovery:
-        parts.append(recovery)
-    if secret:
-        parts.append(secret)
+    # 始终保持4段格式，空值用空字符串占位
+    parts = [
+        email or '',
+        password or '',
+        recovery or '',
+        secret or ''
+    ]
+
+    # 从末尾移除连续的空字符串，但至少保留 email 和 password
+    while len(parts) > 2 and not parts[-1]:
+        parts.pop()
 
     line = separator.join(parts)
 
