@@ -154,10 +154,17 @@ class GetSheerlinkAIDialog(QDialog):
 
         self.worker = None
         self.db_manager = DBManager()
-        self.accounts = []
+        self.accounts = []  # 当前过滤后的账号列表
+
+        # 数据缓存（避免每次过滤都重新调用 API）
+        self._cached_browsers = []  # 缓存浏览器列表
+        self._cached_account_map = {}  # 缓存数据库账号映射
+        self._cached_group_names = {}  # 缓存分组名称
+        self._all_account_data = []  # 所有账号数据（未过滤）
 
         self._init_ui()
-        self._load_accounts()
+        self._fetch_all_data()  # 首次加载数据
+        self._apply_filter()  # 应用过滤器
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -203,32 +210,32 @@ class GetSheerlinkAIDialog(QDialog):
 
         self.filter_pending = QCheckBox("pending (待处理)")
         self.filter_pending.setChecked(True)  # 默认选中
-        self.filter_pending.stateChanged.connect(self._load_accounts)
+        self.filter_pending.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_pending)
 
         self.filter_error = QCheckBox("error (错误)")
         self.filter_error.setChecked(True)  # 默认选中
-        self.filter_error.stateChanged.connect(self._load_accounts)
+        self.filter_error.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_error)
 
         self.filter_link_ready = QCheckBox("link_ready (待验证)")
         self.filter_link_ready.setChecked(False)
-        self.filter_link_ready.stateChanged.connect(self._load_accounts)
+        self.filter_link_ready.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_link_ready)
 
         self.filter_verified = QCheckBox("verified (已验证)")
         self.filter_verified.setChecked(False)
-        self.filter_verified.stateChanged.connect(self._load_accounts)
+        self.filter_verified.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_verified)
 
         self.filter_subscribed = QCheckBox("subscribed (已绑卡)")
         self.filter_subscribed.setChecked(False)
-        self.filter_subscribed.stateChanged.connect(self._load_accounts)
+        self.filter_subscribed.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_subscribed)
 
         self.filter_ineligible = QCheckBox("ineligible (无资格)")
         self.filter_ineligible.setChecked(False)
-        self.filter_ineligible.stateChanged.connect(self._load_accounts)
+        self.filter_ineligible.stateChanged.connect(self._apply_filter)
         filter_layout.addWidget(self.filter_ineligible)
 
         filter_layout.addStretch()
@@ -251,7 +258,7 @@ class GetSheerlinkAIDialog(QDialog):
         toolbar.addWidget(self.deselect_all_btn)
 
         self.refresh_btn = QPushButton("刷新列表")
-        self.refresh_btn.clicked.connect(self._load_accounts)
+        self.refresh_btn.clicked.connect(self._refresh_data)
         toolbar.addWidget(self.refresh_btn)
 
         toolbar.addStretch()
@@ -335,22 +342,19 @@ class GetSheerlinkAIDialog(QDialog):
             filters.add('pending')
         return filters
 
-    def _load_accounts(self):
-        """从浏览器列表加载账号（按分组显示，根据状态过滤器过滤）"""
-        self.tree.clear()
-        self.accounts = []
-
-        # 获取选中的状态过滤器
-        status_filters = self._get_selected_status_filters()
-
+    def _fetch_all_data(self):
+        """
+        从 API 和数据库获取所有数据并缓存
+        此方法会执行 HTTP 调用，仅在初始化和刷新时调用
+        """
         try:
             # 获取数据库账号（用于获取密码等信息）
             db_accounts = self.db_manager.get_all_accounts()
-            account_map = {acc['email']: acc for acc in db_accounts}
+            self._cached_account_map = {acc['email']: acc for acc in db_accounts}
 
             # 获取分组列表
             all_groups = get_group_list() or []
-            group_names = {}
+            self._cached_group_names = {}
             for g in all_groups:
                 gid = g.get('id')
                 title = g.get('title', '')
@@ -358,24 +362,25 @@ class GetSheerlinkAIDialog(QDialog):
                 clean_title = ''.join(c for c in str(title) if c.isprintable())
                 if not clean_title or '\ufffd' in clean_title:
                     clean_title = f"分组 {gid}"
-                group_names[gid] = clean_title
-            group_names[0] = "未分组"
-            group_names[1] = "默认分组"
+                self._cached_group_names[gid] = clean_title
+            self._cached_group_names[0] = "未分组"
+            self._cached_group_names[1] = "默认分组"
 
             # 获取浏览器列表
-            browsers = get_browser_list(page=1, limit=1000) or []
+            self._cached_browsers = get_browser_list(page=1, limit=1000) or []
 
-            # 按分组组织浏览器
-            grouped = {gid: [] for gid in group_names.keys()}
-            for browser in browsers:
+            # 预处理所有账号数据（一次性处理，后续只做过滤）
+            self._all_account_data = []
+            for browser in self._cached_browsers:
                 gid = browser.get('group_id', 0) or 0
-                if gid not in grouped:
-                    grouped[gid] = []
+
+                # 动态添加分组名称
+                if gid not in self._cached_group_names:
                     gname = browser.get('group_name', '') or ''
                     clean_gname = ''.join(c for c in str(gname) if c.isprintable())
                     if not clean_gname or '\ufffd' in clean_gname:
                         clean_gname = f"分组 {gid}"
-                    group_names[gid] = clean_gname
+                    self._cached_group_names[gid] = clean_gname
 
                 browser_id = browser.get('id', '') or browser.get('profile_id', '')
                 browser_name = browser.get('name', '')
@@ -392,109 +397,138 @@ class GetSheerlinkAIDialog(QDialog):
                     continue
 
                 # 获取对应的账号信息
-                account = account_map.get(email, {})
-
-                # 根据状态过滤器过滤
+                account = self._cached_account_map.get(email, {})
                 status = account.get('status', 'pending')
-                if status not in status_filters:
-                    continue
 
                 account_data = {
                     'browser_id': str(browser_id),
                     'email': email,
                     'password': account.get('password', ''),
                     'secret': account.get('secret', '') or account.get('secret_key', ''),
-                    'status': status,  # 保存状态用于显示
+                    'status': status,
+                    'group_id': gid,
                 }
-                grouped[gid].append(account_data)
+                self._all_account_data.append(account_data)
 
-            # 创建树形结构
-            total_count = 0
-
-            for gid in sorted(grouped.keys()):
-                account_list = grouped[gid]
-                if not account_list:
-                    continue  # 跳过空分组
-
-                group_name = group_names.get(gid, f"分组 {gid}")
-
-                # 分组节点
-                group_item = QTreeWidgetItem(self.tree)
-                group_item.setText(0, "")
-                group_item.setText(1, f"📁 {group_name} ({len(account_list)})")
-                group_item.setFlags(
-                    group_item.flags() |
-                    Qt.ItemFlag.ItemIsAutoTristate |
-                    Qt.ItemFlag.ItemIsUserCheckable
-                )
-                group_item.setCheckState(0, Qt.CheckState.Unchecked)
-                group_item.setExpanded(True)
-                group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
-
-                # 设置分组行样式
-                font = group_item.font(1)
-                font.setBold(True)
-                group_item.setFont(1, font)
-
-                # 账号子节点
-                for account_data in account_list:
-                    email = account_data['email']
-                    browser_id = account_data['browser_id']
-                    status = account_data.get('status', 'pending')
-
-                    child = QTreeWidgetItem(group_item)
-                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
-                    child.setText(1, email)
-                    child.setText(2, browser_id)
-
-                    # 显示当前状态
-                    status_display = {
-                        'pending': '待处理',
-                        'subscribed': '已绑卡',
-                        'verified': '已验证',
-                        'link_ready': '待验证',
-                        'ineligible': '无资格',
-                        'error': '错误',
-                    }.get(status, status)
-                    child.setText(3, status_display)
-
-                    # 状态颜色
-                    if status == "subscribed":
-                        child.setBackground(3, QColor("#2196F3"))
-                        child.setForeground(3, QColor("#ffffff"))
-                    elif status == "verified":
-                        child.setBackground(3, QColor("#4CAF50"))
-                        child.setForeground(3, QColor("#ffffff"))
-                    elif status == "link_ready":
-                        child.setBackground(3, QColor("#FF9800"))
-                        child.setForeground(3, QColor("#ffffff"))
-                    elif status == "ineligible":
-                        child.setBackground(3, QColor("#9E9E9E"))
-                        child.setForeground(3, QColor("#ffffff"))
-                    elif status == "error":
-                        child.setBackground(3, QColor("#f44336"))
-                        child.setForeground(3, QColor("#ffffff"))
-                    elif status == "pending":
-                        child.setBackground(3, QColor("#607D8B"))
-                        child.setForeground(3, QColor("#ffffff"))
-
-                    child.setText(4, "")
-                    child.setData(0, Qt.ItemDataRole.UserRole, {
-                        "type": "browser",
-                        "data": account_data
-                    })
-
-                    self.accounts.append(account_data)
-                    total_count += 1
-
-            filter_str = ", ".join(status_filters) if status_filters else "pending"
-            self._log(f"加载完成：{total_count} 个账号 (过滤器: {filter_str})")
-            self._update_selection_count()
+            self._log(f"数据加载完成：共 {len(self._all_account_data)} 个账号")
 
         except Exception as e:
-            self._log(f"❌ 加载账号失败: {e}")
+            self._log(f"❌ 加载数据失败: {e}")
             traceback.print_exc()
+
+    def _apply_filter(self):
+        """
+        根据当前过滤器设置，在缓存数据上应用过滤并更新 UI
+        此方法不执行 HTTP 调用，响应速度快
+        """
+        self.tree.clear()
+        self.accounts = []
+
+        # 获取选中的状态过滤器
+        status_filters = self._get_selected_status_filters()
+
+        # 按分组组织过滤后的账号
+        grouped = {}
+        for account_data in self._all_account_data:
+            status = account_data.get('status', 'pending')
+            if status not in status_filters:
+                continue
+
+            gid = account_data.get('group_id', 0)
+            if gid not in grouped:
+                grouped[gid] = []
+            grouped[gid].append(account_data)
+
+        # 创建树形结构
+        total_count = 0
+
+        for gid in sorted(grouped.keys()):
+            account_list = grouped[gid]
+            if not account_list:
+                continue  # 跳过空分组
+
+            group_name = self._cached_group_names.get(gid, f"分组 {gid}")
+
+            # 分组节点
+            group_item = QTreeWidgetItem(self.tree)
+            group_item.setText(0, "")
+            group_item.setText(1, f"📁 {group_name} ({len(account_list)})")
+            group_item.setFlags(
+                group_item.flags() |
+                Qt.ItemFlag.ItemIsAutoTristate |
+                Qt.ItemFlag.ItemIsUserCheckable
+            )
+            group_item.setCheckState(0, Qt.CheckState.Unchecked)
+            group_item.setExpanded(True)
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
+
+            # 设置分组行样式
+            font = group_item.font(1)
+            font.setBold(True)
+            group_item.setFont(1, font)
+
+            # 账号子节点
+            for account_data in account_list:
+                email = account_data['email']
+                browser_id = account_data['browser_id']
+                status = account_data.get('status', 'pending')
+
+                child = QTreeWidgetItem(group_item)
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.CheckState.Checked)  # 默认选中
+                child.setText(1, email)
+                child.setText(2, browser_id)
+
+                # 显示当前状态
+                status_display = {
+                    'pending': '待处理',
+                    'subscribed': '已绑卡',
+                    'verified': '已验证',
+                    'link_ready': '待验证',
+                    'ineligible': '无资格',
+                    'error': '错误',
+                }.get(status, status)
+                child.setText(3, status_display)
+
+                # 状态颜色
+                if status == "subscribed":
+                    child.setBackground(3, QColor("#2196F3"))
+                    child.setForeground(3, QColor("#ffffff"))
+                elif status == "verified":
+                    child.setBackground(3, QColor("#4CAF50"))
+                    child.setForeground(3, QColor("#ffffff"))
+                elif status == "link_ready":
+                    child.setBackground(3, QColor("#FF9800"))
+                    child.setForeground(3, QColor("#ffffff"))
+                elif status == "ineligible":
+                    child.setBackground(3, QColor("#9E9E9E"))
+                    child.setForeground(3, QColor("#ffffff"))
+                elif status == "error":
+                    child.setBackground(3, QColor("#f44336"))
+                    child.setForeground(3, QColor("#ffffff"))
+                elif status == "pending":
+                    child.setBackground(3, QColor("#607D8B"))
+                    child.setForeground(3, QColor("#ffffff"))
+
+                child.setText(4, "")
+                child.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "browser",
+                    "data": account_data
+                })
+
+                self.accounts.append(account_data)
+                total_count += 1
+
+        filter_str = ", ".join(status_filters) if status_filters else "pending"
+        self.stats_label.setText(f"📊 显示: {total_count} / 总计: {len(self._all_account_data)} (过滤器: {filter_str})")
+        self._update_selection_count()
+
+    def _refresh_data(self):
+        """刷新数据（重新从 API 获取）"""
+        self._log("正在刷新数据...")
+        self._fetch_all_data()
+        self._apply_filter()
+        self._log("刷新完成")
 
     def _select_all(self):
         """全选"""
@@ -675,7 +709,38 @@ class GetSheerlinkAIDialog(QDialog):
         self._log("=" * 50)
         self._log("任务执行完成！")
 
-        QMessageBox.information(self, "完成", "AI SheerLink 检测任务已完成")
+        # 统计本次处理结果
+        success_count = 0
+        fail_count = 0
+        pending_count = 0
+        root = self.tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            group_item = root.child(i)
+            for j in range(group_item.childCount()):
+                child = group_item.child(j)
+                status_text = child.text(3)
+                if status_text in ("已绑卡", "已验证", "待验证"):
+                    success_count += 1
+                elif status_text in ("失败", "无资格", "错误"):
+                    fail_count += 1
+                elif status_text == "待处理":
+                    pending_count += 1
+                # 其他状态（如 "处理中..."）表示任务被中途停止
+
+        # 计算被中断的数量
+        total_items = sum(
+            root.child(i).childCount() for i in range(root.childCount())
+        )
+        interrupted_count = total_items - success_count - fail_count - pending_count
+
+        # 显示结果统计
+        msg = f"AI SheerLink 检测任务已完成\n\n成功: {success_count} 个\n失败: {fail_count} 个"
+        if interrupted_count > 0:
+            msg += f"\n中断: {interrupted_count} 个"
+        if fail_count > 0 or interrupted_count > 0:
+            msg += "\n\n💡 提示: 结果已保留在列表中，可查看详情后手动刷新"
+
+        QMessageBox.information(self, "完成", msg)
         self.worker = None
 
     def closeEvent(self, event):
