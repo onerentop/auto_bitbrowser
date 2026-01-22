@@ -252,12 +252,26 @@ class AutoSubscriber:
                     )
 
                 self._progress(email, "验证SheerID", "正在验证学生资格...")
-                result = await self._step_verify_sheerid(verification_link, email)
+                result = await self._step_verify_sheerid(
+                    verification_link,
+                    email,
+                    agent=agent,
+                    page=page,
+                    account=account,
+                )
 
                 if not result.success:
+                    # 检查是否是特殊状态（可能在重试时检测到）
+                    if result.status == "ineligible":
+                        DBManager.upsert_account(email, status="ineligible")
+                        return result
                     return self._handle_failure(email, current_step, result.message)
 
-                # 验证成功，更新状态
+                # 验证成功（包括 verified 和 subscribed 状态）
+                if result.status == "subscribed":
+                    DBManager.upsert_account(email, status="subscribed")
+                    return SubscribeResult(success=True, status="subscribed", message="账号已订阅")
+
                 DBManager.upsert_account(email, status="verified")
                 current_step = SubscribeStep.BIND_CARD
 
@@ -436,12 +450,16 @@ class AutoSubscriber:
     async def _step_verify_sheerid(
         self,
         verification_link: str,
-        email: str
+        email: str,
+        agent: AIBrowserAgent = None,
+        page = None,
+        account: dict = None,
     ) -> SubscribeResult:
         """
         步骤2：验证 SheerID
 
         调用 SheerID API 进行学生资格验证
+        验证失败时会自动重新获取链接并重试一次
         """
         if not self.sheerid_api_key:
             return SubscribeResult(
@@ -450,53 +468,110 @@ class AutoSubscriber:
                 message="未配置 SheerID API 密钥"
             )
 
+        # 内部验证函数
+        async def do_verify(link: str) -> tuple:
+            """执行验证，返回 (success, status, message, result)"""
+            try:
+                import re
+                match = re.search(r'verificationId=([a-zA-Z0-9]+)', link)
+                if not match:
+                    match = re.search(r'/verify/([a-zA-Z0-9]+)', link)
+
+                if not match:
+                    return False, "error", "无法从链接中提取 verificationId", None
+
+                verification_id = match.group(1)
+                self._log(f"[{email}] 验证 ID: {verification_id}")
+
+                verifier = SheerIDVerifier(api_key=self.sheerid_api_key)
+
+                def progress_callback(vid, msg):
+                    self._log(f"[{email}] SheerID: {msg}")
+
+                results = await asyncio.to_thread(
+                    verifier.verify_batch,
+                    [verification_id],
+                    progress_callback
+                )
+
+                result = results.get(verification_id, {})
+                status = result.get("currentStep", result.get("status", ""))
+
+                if status == "success":
+                    return True, "verified", "SheerID 验证成功", result
+                else:
+                    error_msg = result.get("message", "验证失败")
+                    return False, "error", f"SheerID 验证失败: {error_msg}", result
+
+            except Exception as e:
+                return False, "error", f"SheerID 验证异常: {str(e)}", None
+
         try:
-            # 从链接中提取 verificationId
-            import re
-            match = re.search(r'verificationId=([a-zA-Z0-9]+)', verification_link)
-            if not match:
-                # 尝试其他格式
-                match = re.search(r'/verify/([a-zA-Z0-9]+)', verification_link)
+            # 首次验证
+            success, status, message, result = await do_verify(verification_link)
 
-            if not match:
+            if success:
+                return SubscribeResult(success=True, status=status, message=message)
+
+            # 首次验证失败，尝试重新获取链接并重试
+            self._log(f"[{email}] 首次验证失败: {message}，尝试重新获取链接...")
+
+            # 检查是否有重试所需的参数
+            if not agent or not page or not account:
+                self._log(f"[{email}] 缺少重试参数，跳过重试")
+                return SubscribeResult(success=False, status=status, message=message)
+
+            # 检查是否请求停止
+            if self._stop_requested:
+                return SubscribeResult(success=False, status="error", message="用户请求停止")
+
+            # 重新获取链接
+            self._progress(email, "重试获取链接", "验证失败，正在重新获取链接...")
+
+            retry_result = await self._step_get_link(agent, page, account)
+
+            if not retry_result.success:
+                # 检查是否是特殊状态
+                if retry_result.status == "verified":
+                    # 重新获取链接时发现账号已验证，说明之前验证其实成功了
+                    self._log(f"[{email}] 重新获取链接时发现账号已验证")
+                    return SubscribeResult(success=True, status="verified", message="账号已验证")
+                elif retry_result.status == "subscribed":
+                    # 已订阅
+                    self._log(f"[{email}] 重新获取链接时发现账号已订阅")
+                    return SubscribeResult(success=True, status="subscribed", message="账号已订阅")
+                elif retry_result.status == "ineligible":
+                    # 无资格
+                    return SubscribeResult(success=False, status="ineligible", message="账号无资格")
+                self._log(f"[{email}] 重新获取链接失败: {retry_result.message}")
                 return SubscribeResult(
                     success=False,
                     status="error",
-                    message="无法从链接中提取 verificationId"
+                    message=f"{message} (重新获取链接也失败: {retry_result.message})"
                 )
 
-            verification_id = match.group(1)
-            self._log(f"[{email}] 验证 ID: {verification_id}")
+            # 获取到新链接
+            new_link = retry_result.message  # message 存储的是链接
+            self._log(f"[{email}] 获取到新链接，正在重试验证...")
 
-            # 调用 SheerID API
-            verifier = SheerIDVerifier(api_key=self.sheerid_api_key)
+            # 更新数据库中的链接
+            DBManager.upsert_account(email, link=new_link, status="link_ready")
 
-            def progress_callback(vid, msg):
-                self._log(f"[{email}] SheerID: {msg}")
+            # 检查是否请求停止
+            if self._stop_requested:
+                return SubscribeResult(success=False, status="error", message="用户请求停止")
 
-            # 异步执行同步的验证方法
-            results = await asyncio.to_thread(
-                verifier.verify_batch,
-                [verification_id],
-                progress_callback
-            )
+            # 使用新链接重试验证
+            self._progress(email, "重试验证", "已获取新链接，正在重试验证...")
+            retry_success, retry_status, retry_message, _ = await do_verify(new_link)
 
-            # 解析结果
-            result = results.get(verification_id, {})
-            status = result.get("currentStep", result.get("status", ""))
-
-            if status == "success":
-                return SubscribeResult(
-                    success=True,
-                    status="verified",
-                    message="SheerID 验证成功"
-                )
+            if retry_success:
+                return SubscribeResult(success=True, status=retry_status, message=retry_message)
             else:
-                error_msg = result.get("message", "验证失败")
                 return SubscribeResult(
                     success=False,
-                    status="error",
-                    message=f"SheerID 验证失败: {error_msg}"
+                    status=retry_status,
+                    message=f"重试验证失败: {retry_message}"
                 )
 
         except Exception as e:
