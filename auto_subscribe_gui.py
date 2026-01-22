@@ -643,10 +643,36 @@ class AutoSubscribeWindow(QWidget):
         self.log("✅ 一键全自动订阅任务完成！")
         self.log("="*60)
 
-        QMessageBox.information(self, "完成", "一键全自动订阅任务已完成")
+        # 统计本次处理结果
+        success_count = 0
+        fail_count = 0
+        pending_count = 0
+        for row in range(self.table.rowCount()):
+            status_item = self.table.item(row, 5)  # 处理状态列
+            if status_item:
+                status_text = status_item.text()
+                if "✅" in status_text or "完成" in status_text:
+                    success_count += 1
+                elif "❌" in status_text or "失败" in status_text:
+                    fail_count += 1
+                elif status_text == "待处理":
+                    pending_count += 1
+                # 其他状态（如 "获取链接"、"验证SheerID" 等）表示任务被中途停止
 
-        # 刷新数据
-        self.load_data()
+        # 计算被中断的数量
+        total_rows = self.table.rowCount()
+        interrupted_count = total_rows - success_count - fail_count - pending_count
+
+        # 显示结果统计，不自动刷新列表
+        msg = f"一键全自动订阅任务已完成\n\n成功: {success_count} 个\n失败: {fail_count} 个"
+        if interrupted_count > 0:
+            msg += f"\n中断: {interrupted_count} 个"
+        if fail_count > 0 or interrupted_count > 0:
+            msg += "\n\n💡 提示: 结果已保留在列表中，可查看详情后手动刷新"
+
+        QMessageBox.information(self, "完成", msg)
+        # 注意：不再自动刷新数据，保留处理结果供用户查看
+        # 用户可以手动点击「刷新列表」按钮更新
 
     def log(self, message: str):
         """添加日志"""

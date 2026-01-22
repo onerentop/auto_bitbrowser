@@ -789,10 +789,38 @@ class SheerIDWindowV2(QDialog):
         """验证完成"""
         self.btn_start.setEnabled(True)
         self.btn_start.setText("验证选中项")
-        QMessageBox.information(self, "完成", "验证任务已结束")
 
-        # 刷新数据
-        self._load_data()
+        # 统计本次验证结果
+        success_count = 0
+        fail_count = 0
+        pending_count = 0
+        for row in range(self.table.rowCount()):
+            status_item = self.table.item(row, 4)
+            if status_item:
+                status_text = status_item.text()
+                if status_text == "验证成功":
+                    success_count += 1
+                elif status_text in ("失败", "无资格") or "失败" in status_text or "error" in status_text.lower():
+                    fail_count += 1
+                elif status_text in ("待验证", "已验证", "错误", "Pending"):
+                    # 初始状态，未被处理
+                    pending_count += 1
+                # 其他状态（如 "处理中"、"运行中"、"重试中"）表示任务被中途停止
+
+        # 计算被中断的数量
+        total_rows = self.table.rowCount()
+        interrupted_count = total_rows - success_count - fail_count - pending_count
+
+        # 显示结果统计，不自动刷新列表
+        msg = f"验证任务已结束\n\n成功: {success_count} 个\n失败: {fail_count} 个"
+        if interrupted_count > 0:
+            msg += f"\n中断: {interrupted_count} 个"
+        if fail_count > 0 or interrupted_count > 0:
+            msg += "\n\n💡 提示: 结果已保留在列表中，可查看详情后手动刷新"
+
+        QMessageBox.information(self, "完成", msg)
+        # 注意：不再自动刷新数据，保留验证结果供用户查看
+        # 用户可以手动点击"刷新"按钮更新列表
 
     def _cancel_selected(self):
         """取消选中的验证"""
