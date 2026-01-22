@@ -6,6 +6,7 @@ SheerID 批量验证工具 V2 (数据库版)
 """
 import sys
 import re
+import asyncio
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -27,10 +28,12 @@ from PyQt6.QtGui import QColor
 from sheerid_verifier import SheerIDVerifier
 from database import DBManager
 from core.config_manager import ConfigManager
+from ix_window import find_browser_by_email
+from auto_get_sheerlink_ai import auto_get_sheerlink_ai
 
 
 class VerifyWorkerV2(QThread):
-    """验证工作线程 - 数据库版"""
+    """验证工作线程 - 数据库版（支持失败重试）"""
 
     progress_signal = pyqtSignal(dict)  # {email, vid, status, msg}
     finished_signal = pyqtSignal()
@@ -45,6 +48,21 @@ class VerifyWorkerV2(QThread):
         self.api_key = api_key
         self.accounts = accounts
         self.is_running = True
+        # 从配置加载 AI 相关设置
+        self._load_ai_config()
+
+    def _load_ai_config(self):
+        """加载 AI 配置"""
+        try:
+            ConfigManager.load()
+            self.gemini_api_key = ConfigManager.get("gemini_api_key", "")
+            self.gemini_base_url = ConfigManager.get("gemini_base_url", "")
+            self.gemini_model = ConfigManager.get("gemini_model", "gemini-2.5-flash")
+        except Exception as e:
+            print(f"[VerifyWorkerV2] 加载 AI 配置失败: {e}")
+            self.gemini_api_key = ""
+            self.gemini_base_url = ""
+            self.gemini_model = "gemini-2.5-flash"
 
     def run(self):
         verifier = SheerIDVerifier(api_key=self.api_key)
@@ -86,39 +104,221 @@ class VerifyWorkerV2(QThread):
 
                 if status == "success":
                     # 验证成功 - 更新数据库状态为 verified
-                    try:
-                        DBManager.upsert_account(
-                            email=email,
-                            status="verified",
-                            message="SheerID 验证成功",
-                        )
-                        # 记录到 SheerID 验证历史表（供综合查询使用）
-                        DBManager.add_sheerid_verification(
-                            email=email,
-                            verification_id=vid,
-                            verification_result="success",
-                            message="验证成功"
-                        )
-                        msg = "验证成功，已更新状态"
-                    except Exception as e:
-                        msg += f" (数据库更新失败: {e})"
+                    self._handle_success(email, vid, msg)
                 else:
-                    # 验证失败 - 也记录到历史表
-                    try:
-                        DBManager.add_sheerid_verification(
-                            email=email,
-                            verification_id=vid,
-                            verification_result=status or "error",
-                            message=msg
-                        )
-                    except Exception as e:
-                        print(f"[SheerID] 记录验证历史失败: {e}")
-
-                self.progress_signal.emit(
-                    {"email": email, "vid": vid, "status": status, "msg": msg}
-                )
+                    # 验证失败 - 尝试重新获取链接并重试
+                    self._handle_failure_with_retry(email, vid, status, msg, verifier, callback)
 
         self.finished_signal.emit()
+
+    def _handle_success(self, email: str, vid: str, msg: str):
+        """处理验证成功"""
+        try:
+            DBManager.upsert_account(
+                email=email,
+                status="verified",
+                message="SheerID 验证成功",
+            )
+            # 记录到 SheerID 验证历史表
+            DBManager.add_sheerid_verification(
+                email=email,
+                verification_id=vid,
+                verification_result="success",
+                message="验证成功"
+            )
+            msg = "验证成功，已更新状态"
+        except Exception as e:
+            msg += f" (数据库更新失败: {e})"
+
+        self.progress_signal.emit(
+            {"email": email, "vid": vid, "status": "success", "msg": msg}
+        )
+
+    def _handle_failure_with_retry(self, email: str, vid: str, status: str, msg: str,
+                                   verifier: SheerIDVerifier, callback):
+        """处理验证失败，尝试重新获取链接并重试"""
+        # 检查是否已停止
+        if not self.is_running:
+            return
+
+        # 记录首次失败到历史表
+        try:
+            DBManager.add_sheerid_verification(
+                email=email,
+                verification_id=vid,
+                verification_result=status or "error",
+                message=f"首次验证失败: {msg}"
+            )
+        except Exception as e:
+            print(f"[SheerID] 记录验证历史失败: {e}")
+
+        # 通知正在重新获取链接
+        self.progress_signal.emit(
+            {"email": email, "vid": vid, "status": "Retrying", "msg": "验证失败，正在重新获取链接..."}
+        )
+
+        # 检查是否已停止
+        if not self.is_running:
+            return
+
+        # 尝试重新获取链接
+        account_info = self._get_account_info_by_email(email)
+        if not account_info:
+            self.progress_signal.emit(
+                {"email": email, "vid": vid, "status": status, "msg": f"{msg} (无法获取账号信息，跳过重试)"}
+            )
+            return
+
+        # 查找对应的浏览器窗口
+        profile_id = find_browser_by_email(email)
+        if not profile_id:
+            self.progress_signal.emit(
+                {"email": email, "vid": vid, "status": status, "msg": f"{msg} (未找到对应窗口，跳过重试)"}
+            )
+            return
+
+        # 检查是否已停止
+        if not self.is_running:
+            return
+
+        # 重新获取链接（异步调用）
+        new_link, new_vid = self._run_async_get_new_link(profile_id, account_info)
+
+        # 处理特殊状态返回
+        if new_link == "VERIFIED":
+            # 重新检测发现账号已验证
+            self._handle_success(email, vid, "重新检测发现账号已验证")
+            return
+        elif new_link == "SUBSCRIBED":
+            # 账号已订阅
+            try:
+                DBManager.upsert_account(email=email, status="subscribed", message="账号已订阅")
+            except Exception as e:
+                print(f"[SheerID] 更新订阅状态失败: {e}")
+            self.progress_signal.emit(
+                {"email": email, "vid": vid, "status": "success", "msg": "账号已订阅"}
+            )
+            return
+        elif new_link == "INELIGIBLE":
+            # 账号无资格
+            try:
+                DBManager.upsert_account(email=email, status="ineligible", message="账号无资格")
+            except Exception as e:
+                print(f"[SheerID] 更新无资格状态失败: {e}")
+            self.progress_signal.emit(
+                {"email": email, "vid": vid, "status": "ineligible", "msg": "账号无资格"}
+            )
+            return
+
+        if not new_link or not new_vid:
+            self.progress_signal.emit(
+                {"email": email, "vid": vid, "status": status, "msg": f"{msg} (重新获取链接失败)"}
+            )
+            return
+
+        # 检查是否已停止
+        if not self.is_running:
+            return
+
+        # 更新内存中的账号数据
+        self._update_account_link(email, new_link, new_vid)
+
+        # 通知正在使用新链接重试
+        self.progress_signal.emit(
+            {"email": email, "vid": new_vid, "status": "Retrying", "msg": f"已获取新链接，正在重试验证..."}
+        )
+
+        # 使用新 VID 重新验证
+        retry_results = verifier.verify_batch([new_vid], callback=callback)
+
+        # 处理重试结果
+        for retry_vid, retry_res in retry_results.items():
+            retry_status = retry_res.get("currentStep") or retry_res.get("status")
+            retry_msg = retry_res.get("message", "")
+
+            if retry_status == "success":
+                self._handle_success(email, retry_vid, retry_msg)
+            else:
+                # 重试也失败，记录最终结果
+                try:
+                    DBManager.add_sheerid_verification(
+                        email=email,
+                        verification_id=retry_vid,
+                        verification_result=retry_status or "error",
+                        message=f"重试验证失败: {retry_msg}"
+                    )
+                except Exception as e:
+                    print(f"[SheerID] 记录验证历史失败: {e}")
+
+                self.progress_signal.emit(
+                    {"email": email, "vid": retry_vid, "status": retry_status, "msg": f"重试失败: {retry_msg}"}
+                )
+
+    def _run_async_get_new_link(self, profile_id: int, account_info: dict):
+        """
+        运行异步获取链接函数
+
+        Returns:
+            (link, vid) - 成功获取链接时返回链接和VID
+            (None, None) - 获取失败
+            ("VERIFIED", None) - 账号已验证
+            ("SUBSCRIBED", None) - 账号已订阅
+            ("INELIGIBLE", None) - 账号无资格
+        """
+        try:
+            # 在新的事件循环中运行异步函数
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                success, msg, status, link = loop.run_until_complete(
+                    auto_get_sheerlink_ai(
+                        browser_id=str(profile_id),
+                        account_info=account_info,
+                        close_after=True,
+                        max_steps=20,
+                        api_key=self.gemini_api_key or None,
+                        base_url=self.gemini_base_url or None,
+                        model=self.gemini_model,
+                        save_to_file=True,  # 更新数据库
+                    )
+                )
+            finally:
+                loop.close()
+
+            if success:
+                if link:
+                    # 成功获取链接
+                    new_vid = self._extract_vid(link)
+                    return link, new_vid
+                else:
+                    # 没有链接但成功了，说明是特殊状态
+                    if status == "verified":
+                        return "VERIFIED", None
+                    elif status == "subscribed":
+                        return "SUBSCRIBED", None
+                    elif status == "ineligible":
+                        return "INELIGIBLE", None
+
+            print(f"[SheerID] 重新获取链接失败: {msg}")
+            return None, None
+
+        except Exception as e:
+            print(f"[SheerID] 重新获取链接异常: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None
+
+    def _extract_vid(self, link: str) -> str:
+        """从链接中提取 Verification ID"""
+        if not link:
+            return None
+        m = re.search(r"verificationId=([a-zA-Z0-9]+)", link)
+        if m:
+            return m.group(1)
+        m = re.search(r"verify/([a-zA-Z0-9]+)", link)
+        if m:
+            return m.group(1)
+        return None
 
     def _get_email_by_vid(self, vid: str) -> str:
         """根据 VID 查找邮箱"""
@@ -126,6 +326,30 @@ class VerifyWorkerV2(QThread):
             if item["vid"] == vid:
                 return item["email"]
         return "Unknown"
+
+    def _get_account_info_by_email(self, email: str) -> dict:
+        """根据邮箱获取完整账号信息（用于重新获取链接）"""
+        try:
+            # 从数据库获取完整信息
+            accounts = DBManager.get_all_accounts()
+            for acc in accounts:
+                if acc.get("email") == email:
+                    return {
+                        "email": acc.get("email", ""),
+                        "password": acc.get("password", ""),
+                        "secret": acc.get("secret_key", ""),
+                    }
+        except Exception as e:
+            print(f"[SheerID] 获取账号信息失败: {e}")
+        return None
+
+    def _update_account_link(self, email: str, new_link: str, new_vid: str):
+        """更新内存中的账号链接信息"""
+        for item in self.accounts:
+            if item["email"] == email:
+                item["link"] = new_link
+                item["vid"] = new_vid
+                break
 
     def stop(self):
         self.is_running = False
@@ -514,10 +738,16 @@ class SheerIDWindowV2(QDialog):
         email = data.get("email", "")
         status = data.get("status", "")
         msg = data.get("msg", "")
+        vid = data.get("vid", "")
 
         row = self.email_row_map.get(email)
         if row is None:
             return
+
+        # 如果 VID 变化了（重试时获取了新链接），更新表格中的 VID 列
+        current_vid_item = self.table.item(row, 2)
+        if vid and current_vid_item and current_vid_item.text() != vid:
+            self.table.setItem(row, 2, QTableWidgetItem(vid))
 
         # 更新状态
         status_display = {
@@ -525,6 +755,8 @@ class SheerIDWindowV2(QDialog):
             "error": "失败",
             "Processing": "处理中",
             "Running": "运行中",
+            "Retrying": "重试中",
+            "ineligible": "无资格",
         }.get(status, status)
 
         status_item = QTableWidgetItem(status_display)
@@ -539,8 +771,14 @@ class SheerIDWindowV2(QDialog):
         elif status in ("Processing", "Running"):
             status_item.setBackground(QColor("#FF9800"))
             status_item.setForeground(QColor("#ffffff"))
+        elif status == "Retrying":
+            status_item.setBackground(QColor("#2196F3"))  # 蓝色表示重试中
+            status_item.setForeground(QColor("#ffffff"))
         elif status == "Pending":
             status_item.setBackground(QColor("#607D8B"))
+            status_item.setForeground(QColor("#ffffff"))
+        elif status == "ineligible":
+            status_item.setBackground(QColor("#9C27B0"))  # 紫色表示无资格
             status_item.setForeground(QColor("#ffffff"))
 
         self.table.setItem(row, 4, status_item)

@@ -91,6 +91,28 @@ def get_browser_info(profile_id: int) -> dict:
     return data[0]
 
 
+def find_browser_by_email(email: str) -> int:
+    """
+    通过邮箱查找对应的浏览器窗口
+
+    Args:
+        email: 账号邮箱
+
+    Returns:
+        profile_id: 匹配的窗口 ID，未找到返回 None
+    """
+    if not email:
+        return None
+
+    browsers = get_browser_list(limit=1000)
+    for browser in browsers:
+        # 匹配 name 或 username 字段
+        if browser.get('name') == email or browser.get('username') == email:
+            return browser.get('profile_id')
+
+    return None
+
+
 def delete_browsers_by_name(name_pattern: str) -> int:
     """
     根据名称删除所有匹配的窗口
