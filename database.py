@@ -222,6 +222,19 @@ class DBManager:
             return [dict(row) for row in rows]
 
     @staticmethod
+    def get_account_by_email(email: str) -> dict:
+        """根据邮箱获取单个账号信息"""
+        if not email:
+            return None
+        with lock:
+            conn = DBManager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM accounts WHERE email = ?", (email,))
+            row = cursor.fetchone()
+            conn.close()
+            return dict(row) if row else None
+
+    @staticmethod
     def delete_account(email: str) -> bool:
         """从数据库删除账号"""
         with lock:

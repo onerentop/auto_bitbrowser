@@ -268,13 +268,29 @@ class AccountBatchImportDialog(BatchImportDialog):
         ]
 
     def save_record(self, data: dict) -> bool:
-        DBManager.upsert_account(
-            email=data['email'],
-            password=data['password'],
-            recovery_email=data['recovery_email'],
-            secret_key=data['secret_key'],
-            status='pending'
-        )
+        # 检查账号是否已存在，已存在则不覆盖状态
+        existing = DBManager.get_account_by_email(data['email'])
+        if existing:
+            # 账号已存在，只更新基本信息，不覆盖状态
+            # 密码必须更新，辅助邮箱和2FA只有非空时才更新
+            recovery = data.get('recovery_email')
+            secret = data.get('secret_key')
+            DBManager.upsert_account(
+                email=data['email'],
+                password=data.get('password'),  # 密码总是更新
+                recovery_email=recovery if recovery else None,  # 只有非空才更新
+                secret_key=secret if secret else None,  # 只有非空才更新
+                # 不传 status，保留原状态
+            )
+        else:
+            # 新账号，设为 pending
+            DBManager.upsert_account(
+                email=data['email'],
+                password=data.get('password'),
+                recovery_email=data.get('recovery_email'),
+                secret_key=data.get('secret_key'),
+                status='pending'
+            )
         return True
 
 
