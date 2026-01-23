@@ -563,8 +563,11 @@ class ModifyAuthenticatorDialog(QDialog):
 
     def _get_ai_config(self) -> dict:
         """从全局配置获取 AI 配置"""
+        api_key = ConfigManager.get_ai_api_key()
+        if not api_key:
+            self._log("⚠️ 未检测到 AI API Key，请在「配置管理 → 全局设置」中设置")
         return {
-            'api_key': ConfigManager.get_ai_api_key() or None,
+            'api_key': api_key or None,
             'base_url': ConfigManager.get_ai_base_url() or None,
             'model': ConfigManager.get_ai_model(),
             'max_steps': ConfigManager.get_ai_max_steps(),
@@ -575,6 +578,19 @@ class ModifyAuthenticatorDialog(QDialog):
         accounts = self._get_selected_accounts()
         if not accounts:
             QMessageBox.warning(self, "警告", "请选择要处理的账号")
+            return
+
+        # 获取 AI 配置并检查
+        ai_config = self._get_ai_config()
+        if not ai_config.get('api_key'):
+            QMessageBox.warning(
+                self, "AI 配置缺失",
+                "未检测到 AI API Key！\n\n"
+                "请在「配置管理 → 全局设置 → AI Agent 配置」中：\n"
+                "1. 输入 Gemini API Key\n"
+                "2. 点击「保存设置」按钮\n\n"
+                "或者设置环境变量 GEMINI_API_KEY"
+            )
             return
 
         # 确认
@@ -600,8 +616,7 @@ class ModifyAuthenticatorDialog(QDialog):
                     child.setText(4, "")  # 上次修改列
                     child.setText(5, "")  # 新密钥列
 
-        # 获取 AI 配置
-        ai_config = self._get_ai_config()
+        # 显示 AI 配置信息
         if ai_config.get('base_url'):
             self._log(f"API Base URL: {ai_config['base_url']}")
         self._log(f"模型: {ai_config.get('model', 'default')}")
@@ -651,14 +666,13 @@ class ModifyAuthenticatorDialog(QDialog):
                     if status == "成功":
                         child.setBackground(3, Qt.GlobalColor.green)
 
-                        # 保存修改记录到数据库（需要有新密钥才保存）
+                        # 更新本地缓存和 UI（数据库已在 auto_modify_authenticator 中保存，这里只更新缓存）
                         if new_secret:
                             data = child.data(0, Qt.ItemDataRole.UserRole)
                             if data and data.get("type") == "browser":
                                 email = data.get("account", {}).get("email", "")
                                 if email:
-                                    self.db_manager.add_authenticator_modification(email, new_secret)
-                                    # 更新本地缓存
+                                    # 更新本地缓存（用于筛选和显示，避免重复调用数据库）
                                     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                                     self.modification_history[email] = {
                                         'new_secret': new_secret,

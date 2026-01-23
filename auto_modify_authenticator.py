@@ -302,8 +302,11 @@ def _save_new_secret(
                     elif len(parts) == 3:
                         # 只有3段，添加2FA密钥
                         new_note = f"{current_note}----{clean_secret}"
+                    elif len(parts) == 2:
+                        # 只有2段（邮箱----密码），添加空辅助邮箱和2FA密钥
+                        new_note = f"{current_note}--------{clean_secret}"
                     else:
-                        # 备注格式不标准，重新构建
+                        # 备注格式不标准，重新构建完整4段格式
                         new_note = f"{email}----{password}--------{clean_secret}"
 
                     # 更新窗口备注和 tfa_secret 字段
