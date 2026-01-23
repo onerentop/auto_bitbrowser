@@ -371,7 +371,7 @@ class WorkerThread(QThread):
             self.log(f"[信息] 从数据库找到 {len(accounts)} 个待处理账户")
 
             # 使用代理分配器
-            from proxy_allocator import ProxyAllocator
+            from services.proxy_allocator import ProxyAllocator
             max_per_ip = ProxyAllocator.get_max_windows_per_ip()
             available_quota = ProxyAllocator.get_available_count()
 

@@ -1050,7 +1050,7 @@ class ProxiesTab(QWidget):
     def load_data(self):
         """加载代理数据"""
         try:
-            from proxy_allocator import ProxyAllocator
+            from services.proxy_allocator import ProxyAllocator
 
             self.data_store.reload()
             proxies = self.data_store.get_proxies()
@@ -1209,7 +1209,7 @@ class ProxyDetailDialog(QDialog):
     def load_data(self):
         """加载关联窗口数据"""
         try:
-            from proxy_allocator import ProxyAllocator
+            from services.proxy_allocator import ProxyAllocator
             from services.database import DBManager
 
             # 获取代理信息
@@ -1251,7 +1251,7 @@ class ProxyDetailDialog(QDialog):
 
     def unbind_single(self, browser_id: str):
         """解绑单个窗口"""
-        from proxy_allocator import ProxyAllocator
+        from services.proxy_allocator import ProxyAllocator
 
         reply = QMessageBox.question(
             self, "确认解绑",
@@ -1276,7 +1276,7 @@ class ProxyDetailDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            from proxy_allocator import ProxyAllocator
+            from services.proxy_allocator import ProxyAllocator
             for binding in bindings:
                 ProxyAllocator.unbind_window(binding.get('browser_id'))
             self.load_data()
