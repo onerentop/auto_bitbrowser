@@ -7,10 +7,14 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPushButton, QLabel, QLineEdit, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QFormLayout, QGroupBox, QSpinBox,
-    QComboBox, QTextEdit, QDialog, QDialogButtonBox, QScrollArea
+    QComboBox, QTextEdit, QDialog, QDialogButtonBox, QScrollArea,
+    QCheckBox, QFileDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
 from PyQt6.QtGui import QFont
+
+from ix_api import closeBrowser, deleteBrowser
+from ix_window import find_browser_by_email
 
 from database import DBManager
 from data_store import DataStore, CardInfo, ProxyInfo, get_data_store
@@ -422,6 +426,7 @@ class AccountsTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._all_accounts = []  # 存储所有账号数据，用于搜索过滤
         self._init_ui()
         self.load_data()
 
@@ -430,6 +435,12 @@ class AccountsTab(QWidget):
 
         # 工具栏
         toolbar = QHBoxLayout()
+
+        # 全选复选框
+        self.header_checkbox = QCheckBox()
+        self.header_checkbox.setToolTip("全选/取消全选可见账号")
+        self.header_checkbox.stateChanged.connect(self._toggle_all_checkboxes)
+        toolbar.addWidget(self.header_checkbox)
 
         self.btn_add = QPushButton("添加账号")
         self.btn_add.clicked.connect(self.add_account)
@@ -443,53 +454,151 @@ class AccountsTab(QWidget):
         self.btn_delete.clicked.connect(self.delete_selected)
         toolbar.addWidget(self.btn_delete)
 
+        self.btn_export = QPushButton("📤 导出选中")
+        self.btn_export.clicked.connect(self.export_selected)
+        toolbar.addWidget(self.btn_export)
+
         self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.clicked.connect(self.load_data)
         toolbar.addWidget(self.btn_refresh)
 
         toolbar.addStretch()
 
+        # 搜索框
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 搜索邮箱...")
+        self.search_input.setMaximumWidth(200)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._filter_table)
+        toolbar.addWidget(self.search_input)
+
         self.count_label = QLabel("共 0 个账号")
         toolbar.addWidget(self.count_label)
 
         layout.addLayout(toolbar)
 
-        # 表格
+        # 表格（新增复选框列）
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["邮箱", "密码", "辅助邮箱", "2FA密钥", "状态", "操作"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["", "邮箱", "密码", "辅助邮箱", "2FA密钥", "状态", "操作"])
+
+        # 设置列宽
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 40)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
+
+    def _create_checkbox_widget(self) -> QWidget:
+        """创建居中的复选框组件"""
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        checkbox = QCheckBox()
+        layout.addWidget(checkbox)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setContentsMargins(0, 0, 0, 0)
+        return widget
+
+    def _get_checkbox(self, row: int) -> QCheckBox:
+        """获取指定行的复选框"""
+        widget = self.table.cellWidget(row, 0)
+        if widget:
+            return widget.findChild(QCheckBox)
+        return None
+
+    def _toggle_all_checkboxes(self, state: int):
+        """全选/取消全选（仅可见行）"""
+        checked = state == Qt.CheckState.Checked.value
+        for row in range(self.table.rowCount()):
+            # 只操作可见行
+            if not self.table.isRowHidden(row):
+                checkbox = self._get_checkbox(row)
+                if checkbox:
+                    checkbox.setChecked(checked)
+
+    def _get_selected_rows(self) -> list:
+        """获取所有勾选的可见行号"""
+        selected = []
+        for row in range(self.table.rowCount()):
+            # 只返回可见且勾选的行
+            if not self.table.isRowHidden(row):
+                checkbox = self._get_checkbox(row)
+                if checkbox and checkbox.isChecked():
+                    selected.append(row)
+        return selected
+
+    def _filter_table(self, search_text: str):
+        """实时过滤表格"""
+        search_text = search_text.lower().strip()
+        visible_count = 0
+
+        for row in range(self.table.rowCount()):
+            email_item = self.table.item(row, 1)
+            if email_item:
+                email = email_item.text().lower()
+                match = search_text in email if search_text else True
+                self.table.setRowHidden(row, not match)
+                if match:
+                    visible_count += 1
+                else:
+                    # 隐藏行时取消勾选，避免误操作
+                    checkbox = self._get_checkbox(row)
+                    if checkbox:
+                        checkbox.setChecked(False)
+
+        # 重置全选复选框状态
+        self.header_checkbox.blockSignals(True)
+        self.header_checkbox.setChecked(False)
+        self.header_checkbox.blockSignals(False)
+
+        # 更新计数标签
+        total = self.table.rowCount()
+        if search_text:
+            self.count_label.setText(f"显示 {visible_count}/{total} 个账号")
+        else:
+            self.count_label.setText(f"共 {total} 个账号")
 
     def load_data(self):
         """加载账号数据"""
         try:
             DBManager.init_db()
             accounts = DBManager.get_all_accounts()
+            self._all_accounts = accounts
 
             self.table.setRowCount(0)
             for acc in accounts:
                 row = self.table.rowCount()
                 self.table.insertRow(row)
 
-                self.table.setItem(row, 0, QTableWidgetItem(acc.get('email', '')))
-                self.table.setItem(row, 1, QTableWidgetItem(acc.get('password', '')))
-                self.table.setItem(row, 2, QTableWidgetItem(acc.get('recovery_email', '')))
-                self.table.setItem(row, 3, QTableWidgetItem(acc.get('secret_key', '')))
-                self.table.setItem(row, 4, QTableWidgetItem(acc.get('status', '')))
+                # 复选框列
+                self.table.setCellWidget(row, 0, self._create_checkbox_widget())
+
+                self.table.setItem(row, 1, QTableWidgetItem(acc.get('email', '')))
+                self.table.setItem(row, 2, QTableWidgetItem(acc.get('password', '')))
+                self.table.setItem(row, 3, QTableWidgetItem(acc.get('recovery_email', '')))
+                self.table.setItem(row, 4, QTableWidgetItem(acc.get('secret_key', '')))
+                self.table.setItem(row, 5, QTableWidgetItem(acc.get('status', '')))
 
                 # 编辑按钮
                 btn_edit = QPushButton("编辑")
                 btn_edit.clicked.connect(lambda checked, r=row: self.edit_account(r))
-                self.table.setCellWidget(row, 5, btn_edit)
+                self.table.setCellWidget(row, 6, btn_edit)
 
             self.count_label.setText(f"共 {len(accounts)} 个账号")
+
+            # 重置全选复选框（不触发信号）
+            self.header_checkbox.blockSignals(True)
+            self.header_checkbox.setChecked(False)
+            self.header_checkbox.blockSignals(False)
+
+            # 如果搜索框有内容，重新应用过滤
+            if self.search_input.text():
+                self._filter_table(self.search_input.text())
         except Exception as e:
             QMessageBox.warning(self, "错误", f"加载账号失败: {e}")
 
@@ -509,10 +618,10 @@ class AccountsTab(QWidget):
 
     def edit_account(self, row: int):
         """编辑账号"""
-        email = self.table.item(row, 0).text()
-        password = self.table.item(row, 1).text()
-        recovery = self.table.item(row, 2).text()
-        secret = self.table.item(row, 3).text()
+        email = self.table.item(row, 1).text()
+        password = self.table.item(row, 2).text()
+        recovery = self.table.item(row, 3).text()
+        secret = self.table.item(row, 4).text()
 
         dialog = AccountEditDialog(self, {
             'email': email,
@@ -531,22 +640,87 @@ class AccountsTab(QWidget):
             self.load_data()
 
     def delete_selected(self):
-        """删除选中账号"""
-        rows = set(item.row() for item in self.table.selectedItems())
+        """删除选中账号（同时删除对应的 ixBrowser 窗口）"""
+        rows = self._get_selected_rows()
         if not rows:
-            QMessageBox.information(self, "提示", "请先选择要删除的账号")
+            QMessageBox.information(self, "提示", "请先勾选要删除的账号")
             return
 
         reply = QMessageBox.question(
             self, "确认删除",
-            f"确定要删除选中的 {len(rows)} 个账号吗？",
+            f"确定要删除选中的 {len(rows)} 个账号吗？\n将同时删除对应的 ixBrowser 窗口。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
+            deleted_accounts = 0
+            deleted_windows = 0
+
             for row in sorted(rows, reverse=True):
-                email = self.table.item(row, 0).text()
+                email = self.table.item(row, 1).text()
+
+                # 查找并删除对应的 ixBrowser 窗口
+                try:
+                    profile_id = find_browser_by_email(email)
+                    if profile_id:
+                        # 先关闭窗口（如果正在运行）
+                        try:
+                            closeBrowser(profile_id)
+                        except Exception:
+                            pass  # 忽略关闭错误
+                        # 删除窗口
+                        try:
+                            result = deleteBrowser(profile_id)
+                            if result.get('success'):
+                                deleted_windows += 1
+                        except Exception:
+                            pass  # 忽略删除错误
+                except Exception:
+                    pass  # 忽略查找错误
+
+                # 删除数据库中的账号
                 DBManager.delete_account(email)
+                deleted_accounts += 1
+
             self.load_data()
+
+            # 显示删除结果
+            if deleted_windows > 0:
+                QMessageBox.information(
+                    self, "删除完成",
+                    f"已删除 {deleted_accounts} 个账号，同时删除了 {deleted_windows} 个对应窗口。"
+                )
+
+    def export_selected(self):
+        """导出选中账号到 TXT 文件"""
+        rows = self._get_selected_rows()
+        if not rows:
+            QMessageBox.information(self, "提示", "请先勾选要导出的账号")
+            return
+
+        # 选择保存路径
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出账号", "accounts_export.txt", "文本文件 (*.txt)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write('分隔符="----"\n')
+                for row in rows:
+                    email = self.table.item(row, 1).text()
+                    password = self.table.item(row, 2).text()
+                    recovery = self.table.item(row, 3).text()
+                    secret = self.table.item(row, 4).text()
+                    line = f"{email}----{password}----{recovery}----{secret}\n"
+                    f.write(line)
+
+            QMessageBox.information(
+                self, "导出成功",
+                f"已导出 {len(rows)} 个账号到:\n{file_path}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", f"导出时发生错误: {e}")
 
     def batch_import(self):
         """批量导入账号"""
