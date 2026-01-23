@@ -905,6 +905,13 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.select_all_checkbox = QCheckBox("全选")
         self.select_all_checkbox.stateChanged.connect(self.toggle_select_all)
 
+        # 搜索框
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 搜索邮箱/名称...")
+        self.search_input.setMaximumWidth(180)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self._filter_browser_tree)
+
         self.open_btn = QPushButton("打开选中窗口")
         self.open_btn.setStyleSheet("color: blue; font-weight: bold;")
         self.open_btn.clicked.connect(self.open_selected_browsers)
@@ -915,6 +922,7 @@ class BrowserWindowCreatorGUI(QMainWindow):
 
         list_action_layout.addWidget(self.refresh_btn)
         list_action_layout.addWidget(self.select_all_checkbox)
+        list_action_layout.addWidget(self.search_input)
         list_action_layout.addStretch()
 
         list_action_layout.addWidget(self.open_btn)
@@ -1208,6 +1216,57 @@ class BrowserWindowCreatorGUI(QMainWindow):
 
         self.log(f"列表刷新完成，共 {len(grouped)} 个分组，{total_count} 个窗口")
 
+        # 如果搜索框有内容，重新应用过滤
+        if self.search_input.text():
+            self._filter_browser_tree(self.search_input.text())
+
+    def _filter_browser_tree(self, search_text: str):
+        """根据搜索文本过滤窗口树形控件"""
+        search_text = search_text.lower().strip()
+        root = self.tree.invisibleRootItem()
+        visible_count = 0
+        total_count = 0
+
+        for i in range(root.childCount()):
+            group_item = root.child(i)
+            group_visible_count = 0
+
+            # 遍历分组下的所有窗口
+            for j in range(group_item.childCount()):
+                child = group_item.child(j)
+                total_count += 1
+
+                if not search_text:
+                    # 无搜索文本，显示所有
+                    child.setHidden(False)
+                    group_visible_count += 1
+                else:
+                    # 匹配名称列（索引1）和备注列（索引4）
+                    name = (child.text(1) or "").lower()
+                    note = (child.text(4) or "").lower()
+
+                    if search_text in name or search_text in note:
+                        child.setHidden(False)
+                        group_visible_count += 1
+                    else:
+                        child.setHidden(True)
+                        # 隐藏时取消勾选，防止误操作
+                        child.setCheckState(0, Qt.CheckState.Unchecked)
+
+            # 根据可见窗口数决定分组显示状态
+            if not search_text:
+                # 无搜索时，显示所有分组
+                group_item.setHidden(False)
+            else:
+                # 有搜索时，隐藏空分组
+                group_item.setHidden(group_visible_count == 0)
+            visible_count += group_visible_count
+
+        # 重置全选复选框
+        self.select_all_checkbox.blockSignals(True)
+        self.select_all_checkbox.setChecked(False)
+        self.select_all_checkbox.blockSignals(False)
+
     def action_get_sheerlink_ai(self):
         """打开一键获取 SheerLink AI 版窗口"""
         try:
@@ -1410,22 +1469,29 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.start_worker_thread('open', ids=ids)
 
     def toggle_select_all(self, state):
-        """全选/取消全选（适配树形控件）"""
+        """全选/取消全选（适配树形控件，仅操作可见项）"""
         check_state = Qt.CheckState.Checked if state == 2 else Qt.CheckState.Unchecked
         root = self.tree.invisibleRootItem()
         for i in range(root.childCount()):
             group_item = root.child(i)
-            group_item.setCheckState(0, check_state)
+            # 只操作可见的分组
+            if not group_item.isHidden():
+                # 遍历子项，只勾选可见的窗口
+                for j in range(group_item.childCount()):
+                    child = group_item.child(j)
+                    if not child.isHidden():
+                        child.setCheckState(0, check_state)
 
     def get_selected_browser_ids(self):
-        """获取选中的窗口ID列表（适配树形控件）"""
+        """获取选中的窗口ID列表（适配树形控件，仅返回可见项）"""
         ids = []
         root = self.tree.invisibleRootItem()
         for i in range(root.childCount()):
             group_item = root.child(i)
             for j in range(group_item.childCount()):
                 child = group_item.child(j)
-                if child.checkState(0) == Qt.CheckState.Checked:
+                # 只返回可见且勾选的窗口
+                if not child.isHidden() and child.checkState(0) == Qt.CheckState.Checked:
                     data = child.data(0, Qt.ItemDataRole.UserRole)
                     if data and data.get("type") == "browser":
                         ids.append(str(data.get("id")))
