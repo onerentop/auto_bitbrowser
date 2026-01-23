@@ -211,6 +211,7 @@ class AIBrowserAgent:
                         message=action.error_message or "AI 报告错误",
                         error_details=action.reasoning,
                         steps=context.current_step + 1,
+                        error_type=action.error_type,  # 传递 AI 识别的错误类型
                     )
 
                 if action.action_type == ActionType.NEED_VERIFICATION:

@@ -587,6 +587,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_replace_email.clicked.connect(self.action_replace_email)
         google_layout.addWidget(self.btn_replace_email)
 
+        # 一键替换辅助邮箱 V2 (邮箱池版) 按钮
+        self.btn_replace_email_v2 = QPushButton("📧 一键替换辅助邮箱 V2 (邮箱池)")
+        self.btn_replace_email_v2.setFixedHeight(40)
+        self.btn_replace_email_v2.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_replace_email_v2.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #E91E63;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #C2185B; }
+        """)
+        self.btn_replace_email_v2.clicked.connect(self.action_replace_email_v2)
+        google_layout.addWidget(self.btn_replace_email_v2)
+
         # 一键修改2SV手机号按钮
         self.btn_modify_2sv_phone = QPushButton("📱 一键修改2SV手机号")
         self.btn_modify_2sv_phone.setFixedHeight(40)
@@ -1139,6 +1157,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.replace_email_window.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开替换辅助邮箱窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_replace_email_v2(self):
+        """打开一键替换辅助邮箱 V2 (邮箱池版) 窗口"""
+        try:
+            from replace_email_v2_gui import ReplaceEmailV2Window
+
+            if not hasattr(self, 'replace_email_v2_window') or self.replace_email_v2_window is None:
+                self.replace_email_v2_window = ReplaceEmailV2Window()
+
+            self.replace_email_v2_window.show()
+            self.replace_email_v2_window.raise_()
+            self.replace_email_v2_window.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开替换辅助邮箱 V2 窗口: {e}")
             import traceback
             traceback.print_exc()
 

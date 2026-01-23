@@ -46,6 +46,19 @@ class AgentState(str, Enum):
     STOPPED = "stopped"  # 被停止
 
 
+class ErrorType(str, Enum):
+    """错误类型分类 - AI 识别的错误类型"""
+
+    NONE = "none"  # 无错误（成功）
+    EMAIL_UNAVAILABLE = "email_unavailable"  # 邮箱不可用（已被其他账号使用、达到上限等）
+    LOGIN_FAILED = "login_failed"  # 登录失败
+    VERIFICATION_REQUIRED = "verification_required"  # 需要验证码
+    ACCOUNT_LOCKED = "account_locked"  # 账号被锁定
+    NETWORK_ERROR = "network_error"  # 网络错误
+    PAGE_ERROR = "page_error"  # 页面加载错误
+    UNKNOWN = "unknown"  # 其他未知错误
+
+
 @dataclass
 class AgentAction:
     """AI 决策的单个动作"""
@@ -70,6 +83,8 @@ class AgentAction:
     confidence: float = 1.0
     # 错误信息（当 action_type 为 ERROR 时）
     error_message: Optional[str] = None
+    # 错误类型（当 action_type 为 ERROR 时，AI 识别的错误分类）
+    error_type: Optional[str] = None  # ErrorType 的值
     # 验证码类型（当 action_type 为 NEED_VERIFICATION 时）
     verification_type: Optional[str] = None  # "sms" | "email" | "captcha"
     # 提取的密钥（当 action_type 为 EXTRACT_SECRET 时）
@@ -160,6 +175,8 @@ class TaskResult:
     final_screenshot: Optional[str] = None
     # 错误详情
     error_details: Optional[str] = None
+    # 错误类型（AI 识别的错误分类）
+    error_type: Optional[str] = None  # ErrorType 的值
 
     @classmethod
     def success_result(
@@ -176,7 +193,7 @@ class TaskResult:
 
     @classmethod
     def failure_result(
-        cls, message: str, error_details: str = None, steps: int = 0
+        cls, message: str, error_details: str = None, steps: int = 0, error_type: str = None
     ) -> "TaskResult":
         """创建失败结果"""
         return cls(
@@ -185,6 +202,7 @@ class TaskResult:
             state=AgentState.FAILED,
             total_steps=steps,
             error_details=error_details,
+            error_type=error_type,
         )
 
     @classmethod

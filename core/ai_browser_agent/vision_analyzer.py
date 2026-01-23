@@ -246,6 +246,7 @@ class VisionAnalyzer:
                 reasoning=data.get("reasoning", ""),
                 confidence=data.get("confidence", 1.0),
                 error_message=data.get("error_message"),
+                error_type=data.get("error_type"),  # AI 识别的错误类型
                 verification_type=data.get("verification_type"),
                 extracted_secret=data.get("extracted_secret"),
                 extracted_link=data.get("extracted_link"),

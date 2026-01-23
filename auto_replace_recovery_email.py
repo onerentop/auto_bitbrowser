@@ -25,7 +25,8 @@ async def auto_replace_recovery_email(
     base_url: Optional[str] = None,
     model: str = "gemini-2.5-flash",
     email_imap_config: dict = None,
-) -> Tuple[bool, str]:
+    pool_emails: list = None,
+) -> Tuple[bool, str, Optional[str]]:
     """
     替换 Google 辅助邮箱
 
@@ -40,9 +41,13 @@ async def auto_replace_recovery_email(
         model: 使用的模型（默认 gemini-2.5-flash）
         email_imap_config: 邮箱 IMAP 配置 {'email': str, 'password': str}
                           用于自动读取邮箱验证码
+        pool_emails: 邮箱池列表（可选），用于告诉 AI 如果当前邮箱在池中则无需修改
 
     Returns:
-        (success: bool, message: str)
+        (success: bool, message: str, error_type: Optional[str])
+        - success: 是否成功
+        - message: 结果消息
+        - error_type: AI 识别的错误类型 (仅失败时有值)
 
     Environment Variables:
         GEMINI_API_KEY: Gemini API 密钥
@@ -52,14 +57,24 @@ async def auto_replace_recovery_email(
     print(f"替换辅助邮箱 (Recovery Email)")
     print(f"账号: {email}")
     print(f"新辅助邮箱: {new_email}")
+    if pool_emails:
+        print(f"邮箱池: {len(pool_emails)} 个邮箱")
     print(f"{'='*50}")
+
+    # 构建参数，包含邮箱池列表
+    params = {"new_email": new_email}
+    if pool_emails:
+        # 将邮箱列表转为逗号分隔的字符串，方便 AI 阅读
+        params["pool_emails"] = ", ".join(pool_emails)
+    else:
+        params["pool_emails"] = "(未提供邮箱池)"
 
     result: TaskResult = await run_with_ixbrowser(
         browser_id=browser_id,
         goal=f"将 Google 账号 {email} 的辅助邮箱修改为 {new_email}",
         start_url=RECOVERY_EMAIL_URL,
         account=account_info,
-        params={"new_email": new_email},
+        params=params,
         task_type="replace_recovery_email",
         max_steps=max_steps,
         close_after=close_after,
@@ -75,10 +90,12 @@ async def auto_replace_recovery_email(
     else:
         print(f"\n❌ 辅助邮箱替换失败")
         print(f"原因: {result.message}")
+        if result.error_type:
+            print(f"错误类型: {result.error_type}")
         if result.error_details:
             print(f"详情: {result.error_details[:500]}")
 
-    return result.success, result.message
+    return result.success, result.message, result.error_type
 
 
 # 测试入口
@@ -93,12 +110,12 @@ if __name__ == "__main__":
         }
         test_new_email = "backup@example.com"
 
-        success, msg = await auto_replace_recovery_email(
+        success, msg, error_type = await auto_replace_recovery_email(
             test_browser_id,
             test_account,
             test_new_email,
             close_after=False,
         )
-        print(f"\nResult: {success}, {msg}")
+        print(f"\nResult: {success}, {msg}, error_type={error_type}")
 
     asyncio.run(test())

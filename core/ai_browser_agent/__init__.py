@@ -11,6 +11,7 @@ from .types import (
     ActionType,
     AgentAction,
     AgentState,
+    ErrorType,
     TaskResult,
     TaskContext,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "ActionType",
     "AgentAction",
     "AgentState",
+    "ErrorType",
     "TaskResult",
     "TaskContext",
     # Classes

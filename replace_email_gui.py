@@ -103,7 +103,7 @@ class ReplaceEmailWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg = await auto_replace_recovery_email(
+                    success, msg, error_type = await auto_replace_recovery_email(
                         browser_id,
                         account_info,
                         self.new_email,
@@ -119,7 +119,7 @@ class ReplaceEmailWorker(QThread):
                         self._log(f"[{index + 1}] ✅ {email}: {msg}")
                         self.progress_signal.emit(browser_id, "成功", msg)
                     else:
-                        self._log(f"[{index + 1}] ❌ {email}: {msg}")
+                        self._log(f"[{index + 1}] ❌ {email}: {msg} (error_type={error_type})")
                         self.progress_signal.emit(browser_id, "失败", msg)
 
                 except Exception as e:
