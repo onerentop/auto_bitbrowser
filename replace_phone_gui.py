@@ -467,6 +467,7 @@ class ReplacePhoneWindow(QDialog):
             self.select_all_btn.setEnabled(False)
             self.deselect_all_btn.setEnabled(False)
             self.clear_history_btn.setEnabled(False)
+            self.start_btn.setEnabled(False)
         else:
             self.tree_loading_overlay.hide()
             # 恢复工具栏按钮
@@ -474,6 +475,7 @@ class ReplacePhoneWindow(QDialog):
             self.select_all_btn.setEnabled(True)
             self.deselect_all_btn.setEnabled(True)
             self.clear_history_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
 
     def _on_load_progress(self, current: int, total: int, message: str):
         """加载进度更新"""
@@ -702,7 +704,10 @@ class ReplacePhoneWindow(QDialog):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.phone_input.setEnabled(False)
-        self.refresh_btn.setEnabled(False)  # 禁止任务期间刷新
+        self.refresh_btn.setEnabled(False)
+        self.select_all_btn.setEnabled(False)
+        self.deselect_all_btn.setEnabled(False)
+        self.clear_history_btn.setEnabled(False)
 
         self._log(f"开始处理 {len(accounts)} 个账号...")
         self.worker.start()
@@ -780,7 +785,10 @@ class ReplacePhoneWindow(QDialog):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.phone_input.setEnabled(True)
-        self.refresh_btn.setEnabled(True)  # 恢复刷新按钮
+        self.refresh_btn.setEnabled(True)
+        self.select_all_btn.setEnabled(True)
+        self.deselect_all_btn.setEnabled(True)
+        self.clear_history_btn.setEnabled(True)
 
         self._log("✅ 处理完成")
         self.worker = None

@@ -524,12 +524,14 @@ class BindCardAIDialog(QDialog):
             self.refresh_btn.setEnabled(False)
             self.select_all_btn.setEnabled(False)
             self.deselect_all_btn.setEnabled(False)
+            self.start_btn.setEnabled(False)
         else:
             self.tree_loading_overlay.hide()
             # 恢复工具栏按钮
             self.refresh_btn.setEnabled(True)
             self.select_all_btn.setEnabled(True)
             self.deselect_all_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
 
     def _on_load_progress(self, current: int, total: int, message: str):
         """加载进度更新"""
@@ -750,6 +752,8 @@ class BindCardAIDialog(QDialog):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.refresh_btn.setEnabled(False)
+        self.select_all_btn.setEnabled(False)
+        self.deselect_all_btn.setEnabled(False)
 
         # 创建工作线程
         self.worker = BindCardAIWorker(
@@ -816,6 +820,8 @@ class BindCardAIDialog(QDialog):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.refresh_btn.setEnabled(True)
+        self.select_all_btn.setEnabled(True)
+        self.deselect_all_btn.setEnabled(True)
 
         self._log("=" * 50)
         self._log("任务执行完成！")

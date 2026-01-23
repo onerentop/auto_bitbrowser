@@ -34,8 +34,9 @@ from PyQt6.QtWidgets import (
     QWidget,
     QInputDialog,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QBrush
+from PyQt6.QtWidgets import QProgressBar
 
 from ix_api import get_group_list, update_profile
 from ix_window import get_browser_list
@@ -46,6 +47,153 @@ from recovery_email_manager import RecoveryEmailManager, DAILY_BIND_LIMIT
 
 # 最大轮换重试次数
 MAX_ROTATION_RETRIES = 5
+
+
+class LoadDataWorker(QThread):
+    """异步加载数据的后台线程"""
+    progress_signal = pyqtSignal(int, int, str)  # current, total, message
+    finished_signal = pyqtSignal(dict)  # result data
+    log_signal = pyqtSignal(str)
+
+    def __init__(self, db_manager):
+        super().__init__()
+        self.db_manager = db_manager
+        self.is_running = True
+
+    def stop(self):
+        self.is_running = False
+
+    def run(self):
+        try:
+            result = {
+                'cached_browsers': [],
+                'cached_account_map': {},
+                'cached_group_names': {},
+                'all_account_data': [],
+                'bindings': {},
+                'pool_emails': set(),
+            }
+
+            # 阶段 1: 获取数据库账号
+            self.progress_signal.emit(1, 5, "正在读取数据库账号...")
+            if not self.is_running:
+                return
+
+            db_accounts = self.db_manager.get_all_accounts()
+            result['cached_account_map'] = {acc['email']: acc for acc in db_accounts}
+
+            # 阶段 2: 获取分组列表
+            self.progress_signal.emit(2, 5, "正在获取分组列表...")
+            if not self.is_running:
+                return
+
+            all_groups = get_group_list() or []
+            cached_group_names = {}
+            for g in all_groups:
+                gid = g.get('id')
+                title = g.get('title', '')
+                clean_title = ''.join(c for c in str(title) if c.isprintable())
+                if not clean_title or '\ufffd' in clean_title:
+                    clean_title = f"分组 {gid}"
+                cached_group_names[gid] = clean_title
+            cached_group_names[0] = "未分组"
+            cached_group_names[1] = "默认分组"
+            result['cached_group_names'] = cached_group_names
+
+            # 阶段 3: 获取浏览器列表
+            self.progress_signal.emit(3, 5, "正在获取窗口列表...")
+            if not self.is_running:
+                return
+
+            browsers = get_browser_list(page=1, limit=1000) or []
+            result['cached_browsers'] = browsers
+
+            # 阶段 4: 获取绑定关系和邮箱池
+            self.progress_signal.emit(4, 5, "正在获取绑定关系...")
+            if not self.is_running:
+                return
+
+            result['bindings'] = DBManager.get_all_account_recovery_bindings()
+            result['pool_emails'] = set(RecoveryEmailManager.get_pool_emails())
+
+            # 阶段 5: 预处理所有账号数据
+            self.progress_signal.emit(5, 5, "正在处理账号数据...")
+            if not self.is_running:
+                return
+
+            all_account_data = []
+            for browser in browsers:
+                gid = browser.get('group_id', 0) or 0
+
+                if gid not in cached_group_names:
+                    gname = browser.get('group_name', '') or ''
+                    clean_gname = ''.join(c for c in str(gname) if c.isprintable())
+                    if not clean_gname or '\ufffd' in clean_gname:
+                        clean_gname = f"分组 {gid}"
+                    cached_group_names[gid] = clean_gname
+
+                browser_id = browser.get('id', '') or browser.get('profile_id', '')
+                browser_name = browser.get('name', '')
+
+                # 从名称或备注中提取邮箱
+                email = browser_name
+                note = browser.get('note', '') or ''
+                if '----' in note:
+                    email = note.split('----')[0].strip()
+                elif '----' in browser_name:
+                    email = browser_name.split('----')[0].strip()
+
+                if '@' not in email:
+                    continue
+
+                # 获取对应的账号信息
+                account = result['cached_account_map'].get(email, {})
+
+                # 获取当前绑定的辅助邮箱
+                current_recovery = account.get('recovery_email', '')
+                binding_info = result['bindings'].get(email, {})
+                if binding_info:
+                    bound_email = binding_info.get('bound_recovery_email', '')
+                    if bound_email:
+                        current_recovery = bound_email
+
+                # 判断绑定状态
+                if current_recovery in result['pool_emails']:
+                    bind_status = 'bound_pool'  # 已绑定池中邮箱
+                elif current_recovery:
+                    bind_status = 'bound_other'  # 绑定其他邮箱
+                else:
+                    bind_status = 'unbound'  # 未绑定
+
+                account_data = {
+                    'browser_id': str(browser_id),
+                    'email': email,
+                    'password': account.get('password', ''),
+                    'secret': account.get('secret', '') or account.get('secret_key', ''),
+                    'current_recovery_email': current_recovery,
+                    'bind_status': bind_status,
+                    'group_id': gid,
+                }
+                all_account_data.append(account_data)
+
+            result['all_account_data'] = all_account_data
+            result['cached_group_names'] = cached_group_names
+
+            self.finished_signal.emit(result)
+
+        except Exception as e:
+            self.log_signal.emit(f"❌ 加载数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+            self.finished_signal.emit({
+                'cached_browsers': [],
+                'cached_account_map': {},
+                'cached_group_names': {},
+                'all_account_data': [],
+                'bindings': {},
+                'pool_emails': set(),
+                'error': str(e),
+            })
 
 
 class ReplaceEmailV2Worker(QThread):
@@ -260,6 +408,8 @@ class ReplaceEmailV2Window(QDialog):
         self.setMinimumSize(1100, 800)
 
         self.worker = None
+        self.load_data_worker = None  # 异步加载线程
+        self.db_manager = DBManager()
         self.accounts = []  # 当前过滤后的账号列表
 
         # 数据缓存
@@ -269,9 +419,9 @@ class ReplaceEmailV2Window(QDialog):
         self._all_account_data = []
 
         self._init_ui()
-        self._fetch_all_data()
         self._refresh_pool_table()
-        self._apply_filter()
+        # 延迟异步加载数据
+        QTimer.singleShot(100, self._start_async_load)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -472,6 +622,48 @@ class ReplaceEmailV2Window(QDialog):
         self.tree.setRootIsDecorated(True)
         self.tree.setIndentation(15)
         self.tree.itemChanged.connect(lambda: self._update_selection_count())
+
+        # 骨架屏加载覆盖层
+        self.tree_loading_overlay = QWidget(self.tree)
+        self.tree_loading_overlay.setStyleSheet("""
+            QWidget {
+                background-color: rgba(255, 255, 255, 0.95);
+            }
+        """)
+        overlay_layout = QVBoxLayout(self.tree_loading_overlay)
+        overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.loading_label = QLabel("⏳ 正在加载账号列表...")
+        self.loading_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #666;
+                padding: 20px;
+            }
+        """)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        overlay_layout.addWidget(self.loading_label)
+
+        self.tree_loading_progress = QProgressBar()
+        self.tree_loading_progress.setRange(0, 100)
+        self.tree_loading_progress.setValue(0)
+        self.tree_loading_progress.setFixedWidth(200)
+        self.tree_loading_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                text-align: center;
+                height: 16px;
+            }
+            QProgressBar::chunk {
+                background-color: #9C27B0;
+                border-radius: 4px;
+            }
+        """)
+        overlay_layout.addWidget(self.tree_loading_progress, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.tree_loading_overlay.hide()  # 默认隐藏
+
         list_layout.addWidget(self.tree)
 
         layout.addWidget(list_group)
@@ -658,96 +850,95 @@ class ReplaceEmailV2Window(QDialog):
         self._log(f"✅ 已重置今日用量 ({deleted} 条记录)")
         self._refresh_pool_table()
 
-    # ==================== 账号处理方法 ====================
+    # ==================== 异步加载方法 ====================
 
-    def _fetch_all_data(self):
-        """从 API 和数据库获取所有数据并缓存"""
+    def _start_async_load(self):
+        """启动异步数据加载"""
+        self._show_loading(True)
+        self.tree.clear()
+
+        # 清理旧线程
+        if self.load_data_worker is not None:
+            if self.load_data_worker.isRunning():
+                self.load_data_worker.stop()
+                try:
+                    self.load_data_worker.progress_signal.disconnect()
+                    self.load_data_worker.finished_signal.disconnect()
+                    self.load_data_worker.log_signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self.load_data_worker.wait(1000)
+            self.load_data_worker = None
+
+        self.load_data_worker = LoadDataWorker(self.db_manager)
+        self.load_data_worker.progress_signal.connect(self._on_load_progress)
+        self.load_data_worker.finished_signal.connect(self._on_load_finished)
+        self.load_data_worker.log_signal.connect(self._log)
+        self.load_data_worker.start()
+
+    def _show_loading(self, show: bool):
+        """显示/隐藏加载状态"""
+        if show:
+            def adjust_overlay():
+                self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
+            QTimer.singleShot(10, adjust_overlay)
+            self.tree_loading_progress.setValue(0)
+            self.loading_label.setText("⏳ 正在加载账号列表...")
+            self.tree_loading_overlay.show()
+            self.tree_loading_overlay.raise_()
+            # 禁用工具栏按钮
+            self.refresh_btn.setEnabled(False)
+            self.select_all_btn.setEnabled(False)
+            self.deselect_all_btn.setEnabled(False)
+            self.start_btn.setEnabled(False)
+            # 禁用过滤器
+            self.filter_unbound.setEnabled(False)
+            self.filter_bound.setEnabled(False)
+            self.filter_other.setEnabled(False)
+        else:
+            self.tree_loading_overlay.hide()
+            # 恢复工具栏按钮
+            self.refresh_btn.setEnabled(True)
+            self.select_all_btn.setEnabled(True)
+            self.deselect_all_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
+            # 恢复过滤器
+            self.filter_unbound.setEnabled(True)
+            self.filter_bound.setEnabled(True)
+            self.filter_other.setEnabled(True)
+
+    def _on_load_progress(self, current: int, total: int, message: str):
+        """加载进度更新"""
+        if total > 0:
+            pct = int(current / total * 100)
+            self.tree_loading_progress.setValue(pct)
+            self.loading_label.setText(f"⏳ {message}")
+
+    def _on_load_finished(self, result: dict):
+        """加载完成回调"""
         try:
-            # 获取数据库账号
-            db_accounts = DBManager.get_all_accounts()
-            self._cached_account_map = {acc['email']: acc for acc in db_accounts}
+            # 更新缓存
+            self._cached_browsers = result.get('cached_browsers', [])
+            self._cached_account_map = result.get('cached_account_map', {})
+            self._cached_group_names = result.get('cached_group_names', {})
+            self._all_account_data = result.get('all_account_data', [])
 
-            # 获取分组列表
-            all_groups = get_group_list() or []
-            self._cached_group_names = {}
-            for g in all_groups:
-                gid = g.get('id')
-                title = g.get('title', '')
-                clean_title = ''.join(c for c in str(title) if c.isprintable())
-                if not clean_title or '\ufffd' in clean_title:
-                    clean_title = f"分组 {gid}"
-                self._cached_group_names[gid] = clean_title
-            self._cached_group_names[0] = "未分组"
-            self._cached_group_names[1] = "默认分组"
+            if result.get('error'):
+                self._log(f"⚠️ 加载数据时发生错误: {result.get('error')}")
+            else:
+                self._log(f"数据加载完成：共 {len(self._all_account_data)} 个账号")
 
-            # 获取浏览器列表
-            self._cached_browsers = get_browser_list(page=1, limit=1000) or []
-
-            # 获取账号绑定关系
-            bindings = DBManager.get_all_account_recovery_bindings()
-            pool_emails = set(RecoveryEmailManager.get_pool_emails())
-
-            # 预处理所有账号数据
-            self._all_account_data = []
-            for browser in self._cached_browsers:
-                gid = browser.get('group_id', 0) or 0
-
-                if gid not in self._cached_group_names:
-                    gname = browser.get('group_name', '') or ''
-                    clean_gname = ''.join(c for c in str(gname) if c.isprintable())
-                    if not clean_gname or '\ufffd' in clean_gname:
-                        clean_gname = f"分组 {gid}"
-                    self._cached_group_names[gid] = clean_gname
-
-                browser_id = browser.get('id', '') or browser.get('profile_id', '')
-                browser_name = browser.get('name', '')
-
-                # 从名称或备注中提取邮箱
-                email = browser_name
-                note = browser.get('note', '') or ''
-                if '----' in note:
-                    email = note.split('----')[0].strip()
-                elif '----' in browser_name:
-                    email = browser_name.split('----')[0].strip()
-
-                if '@' not in email:
-                    continue
-
-                # 获取对应的账号信息
-                account = self._cached_account_map.get(email, {})
-
-                # 获取当前绑定的辅助邮箱
-                current_recovery = account.get('recovery_email', '')
-                binding_info = bindings.get(email, {})
-                if binding_info:
-                    bound_email = binding_info.get('bound_recovery_email', '')
-                    if bound_email:
-                        current_recovery = bound_email
-
-                # 判断绑定状态
-                if current_recovery in pool_emails:
-                    bind_status = 'bound_pool'  # 已绑定池中邮箱
-                elif current_recovery:
-                    bind_status = 'bound_other'  # 绑定其他邮箱
-                else:
-                    bind_status = 'unbound'  # 未绑定
-
-                account_data = {
-                    'browser_id': str(browser_id),
-                    'email': email,
-                    'password': account.get('password', ''),
-                    'secret': account.get('secret', '') or account.get('secret_key', ''),
-                    'current_recovery_email': current_recovery,
-                    'bind_status': bind_status,
-                    'group_id': gid,
-                }
-                self._all_account_data.append(account_data)
-
-            self._log(f"数据加载完成：共 {len(self._all_account_data)} 个账号")
+            # 应用过滤器
+            self._apply_filter()
 
         except Exception as e:
-            self._log(f"❌ 加载数据失败: {e}")
+            self._log(f"❌ 处理加载结果失败: {e}")
+            import traceback
             traceback.print_exc()
+        finally:
+            self._show_loading(False)
+
+    # ==================== 账号处理方法 ====================
 
     def _apply_filter(self):
         """根据过滤器设置更新 UI"""
@@ -850,12 +1041,10 @@ class ReplaceEmailV2Window(QDialog):
         self._update_selection_count()
 
     def _refresh_data(self):
-        """刷新数据"""
+        """刷新数据（异步）"""
         self._log("正在刷新数据...")
-        self._fetch_all_data()
         self._refresh_pool_table()
-        self._apply_filter()
-        self._log("刷新完成")
+        self._start_async_load()
 
     def _select_all(self):
         """全选"""
@@ -959,6 +1148,12 @@ class ReplaceEmailV2Window(QDialog):
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.refresh_btn.setEnabled(False)
+        self.select_all_btn.setEnabled(False)
+        self.deselect_all_btn.setEnabled(False)
+        # 禁用过滤器
+        self.filter_unbound.setEnabled(False)
+        self.filter_bound.setEnabled(False)
+        self.filter_other.setEnabled(False)
 
         # 创建工作线程
         self.worker = ReplaceEmailV2Worker(
@@ -1022,6 +1217,12 @@ class ReplaceEmailV2Window(QDialog):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.refresh_btn.setEnabled(True)
+        self.select_all_btn.setEnabled(True)
+        self.deselect_all_btn.setEnabled(True)
+        # 恢复过滤器
+        self.filter_unbound.setEnabled(True)
+        self.filter_bound.setEnabled(True)
+        self.filter_other.setEnabled(True)
 
         self._log("=" * 50)
         self._log("任务执行完成！")
@@ -1045,10 +1246,21 @@ class ReplaceEmailV2Window(QDialog):
 
     def closeEvent(self, event):
         """关闭窗口时停止工作线程"""
+        # 停止数据加载线程
+        if self.load_data_worker and self.load_data_worker.isRunning():
+            self.load_data_worker.stop()
+            self.load_data_worker.wait(1000)
+        # 停止任务处理线程
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait(3000)
         event.accept()
+
+    def resizeEvent(self, event):
+        """窗口大小变化时调整覆盖层"""
+        super().resizeEvent(event)
+        if hasattr(self, 'tree_loading_overlay') and self.tree_loading_overlay.isVisible():
+            self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
 
 
 # 独立运行入口
