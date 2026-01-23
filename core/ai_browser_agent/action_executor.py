@@ -119,10 +119,25 @@ class ActionExecutor:
                     return True, f"点击元素: {action.target_description}"
                 except Exception as e1:
                     error_msg = str(e1)
-                    # 检查是否是被遮罩层阻止（对话框场景）
+                    # 检查是否是被 iframe 遮罩层阻止
                     if "intercepts pointer events" in error_msg:
-                        print(f"[AI Agent] 检测到遮罩层阻止点击，尝试在对话框中查找按钮...")
-                        # 尝试在对话框中查找相同含义的按钮
+                        # 检测是否被 iframe 遮挡
+                        is_iframe_blocking = "<iframe" in error_msg
+
+                        if is_iframe_blocking:
+                            print(f"[AI Agent] 检测到 iframe 遮挡，优先在 iframe 中查找按钮...")
+                            # 优先在 iframe 中查找按钮
+                            iframe_element = await self._find_element_in_all_frames(action.target_description)
+                            if iframe_element:
+                                try:
+                                    await iframe_element.click(timeout=self.timeout)
+                                    await self._wait_for_page_stable()
+                                    return True, f"点击 iframe 内按钮: {action.target_description}"
+                                except Exception as iframe_err:
+                                    print(f"[AI Agent] iframe 内按钮点击失败: {iframe_err}")
+
+                        print(f"[AI Agent] 尝试在对话框/iframe 中查找按钮...")
+                        # 尝试在对话框或 iframe 中查找相同含义的按钮
                         dialog_element = await self._find_dialog_button(action.target_description)
                         if dialog_element:
                             try:
@@ -131,6 +146,11 @@ class ActionExecutor:
                                 return True, f"点击对话框按钮: {action.target_description}"
                             except Exception as dialog_err:
                                 print(f"[AI Agent] 对话框按钮点击失败: {dialog_err}")
+
+                        # 如果是 iframe 遮挡，不要使用 force click，避免误点击 iframe 内容
+                        if is_iframe_blocking:
+                            print(f"[AI Agent] iframe 遮挡情况下跳过 force click，避免误点击")
+                            return False, f"被 iframe 遮挡，无法点击: {action.target_description}"
 
                     print(f"[AI Agent] 普通点击失败: {e1}, 尝试 force click...")
                     try:
@@ -171,6 +191,66 @@ class ActionExecutor:
 
         return False, "未指定点击目标"
 
+    async def _find_element_in_all_frames(self, description: str) -> Optional[Locator]:
+        """
+        在所有 frame（包括 iframe）中查找元素
+
+        专门用于处理被 iframe 遮挡的情况，在 iframe 中查找目标元素
+        """
+        desc_lower = description.lower().strip()
+
+        try:
+            frames = self.page.frames
+            print(f"[AI Agent] 在 {len(frames)} 个 frame 中查找 '{description}'...")
+
+            for frame in frames:
+                if frame == self.page.main_frame:
+                    continue
+
+                frame_url = frame.url
+                # 支持 Google Pay/Play 相关的 iframe
+                if not any(domain in frame_url for domain in [
+                    'google.com', 'gstatic.com', 'googleapis.com',
+                    'play.google.com', 'pay.google.com'
+                ]):
+                    continue
+
+                print(f"[AI Agent] 检查 iframe: {frame_url[:60]}...")
+
+                try:
+                    # 尝试多种定位策略
+                    strategies = [
+                        # 精确文本匹配按钮
+                        lambda: frame.get_by_role("button", name=re.compile(f"^{re.escape(description)}$", re.I)),
+                        # 包含文本的按钮
+                        lambda: frame.locator('button, [role="button"]').filter(has_text=re.compile(f"^{re.escape(description)}$", re.I)),
+                        # 宽松文本匹配
+                        lambda: frame.get_by_text(description, exact=True),
+                        # 链接
+                        lambda: frame.get_by_role("link", name=re.compile(description, re.I)),
+                    ]
+
+                    for strategy in strategies:
+                        try:
+                            locator = strategy()
+                            count = await locator.count()
+                            if count > 0:
+                                first = locator.first
+                                if await first.is_visible():
+                                    print(f"[AI Agent] 在 iframe 中找到元素: {description}")
+                                    return first
+                        except Exception:
+                            continue
+
+                except Exception as e:
+                    print(f"[AI Agent] 在 iframe 中查找失败: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"[AI Agent] 获取 frames 失败: {e}")
+
+        return None
+
     async def _find_dialog_button(self, original_target: str) -> Optional[Locator]:
         """
         在对话框中查找按钮
@@ -197,6 +277,12 @@ class ActionExecutor:
             "ok": ["确定", "确认", "好", "好的", "知道了", "OK", "確定"],
             "确定": ["OK", "确认", "好", "Got it"],
             "got it": ["知道了", "确定", "好的", "OK"],
+            # Cancel 类（用于支付对话框等场景）
+            "cancel": ["取消", "キャンセル", "취소", "Hủy", "Cancelar", "Annuler", "Abbrechen"],
+            "取消": ["Cancel", "キャンセル", "취소"],
+            # Continue 类
+            "continue": ["继续", "続行", "계속", "Tiếp tục", "Continuar", "Continuer", "Weiter"],
+            "继续": ["Continue", "続行", "계속"],
         }
 
         original_lower = original_target.lower().strip()
@@ -221,7 +307,43 @@ class ActionExecutor:
             '[class*="overlay" i]',
             'div[jsaction*="dismiss"]',  # Google 特有
             'div[class*="pZzBJe"]',  # Google 对话框容器类
+            'div[class*="TRBpHd"]',  # Google Payment 对话框
+            'div[class*="g3VIld"]',  # Google Payment 对话框底部按钮容器
+            'div[class*="XfpsVe"]',  # Google Pay UI 对话框
         ]
+
+        # 针对 Google Payment 对话框的特殊处理
+        # 先尝试直接查找按钮区域中的精确短文本按钮
+        for text in possible_texts:
+            if not text or len(text) < 2:
+                continue
+
+            try:
+                # 精确匹配短文本按钮（排除包含长文本的元素）
+                # 查找文本内容正好是 "Cancel" 或 "Continue" 的按钮
+                buttons = self.page.locator('button, [role="button"]')
+                count = await buttons.count()
+
+                for i in range(count):
+                    btn = buttons.nth(i)
+                    try:
+                        if not await btn.is_visible():
+                            continue
+
+                        # 获取按钮的直接文本内容
+                        btn_text = await btn.inner_text()
+                        btn_text_clean = btn_text.strip()
+
+                        # 精确匹配：按钮文本应该很短（单词级别），且完全匹配目标
+                        if len(btn_text_clean) < 30 and text.lower() in btn_text_clean.lower():
+                            # 确保不是长文本中的一部分（如 "Cancel anytime"）
+                            if btn_text_clean.lower() == text.lower() or len(btn_text_clean) < 15:
+                                print(f"[AI Agent] 找到精确匹配按钮: '{btn_text_clean}'")
+                                return btn
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"[AI Agent] 精确按钮匹配失败: {e}")
 
         for text in possible_texts:
             if not text or len(text) < 2:
@@ -283,6 +405,56 @@ class ActionExecutor:
             except Exception as e:
                 print(f"[AI Agent] 全局按钮搜索失败: {e}")
                 continue
+
+        # 最后尝试在所有 iframe 中查找按钮
+        print(f"[AI Agent] 在 iframe 中查找对话框按钮...")
+        try:
+            frames = self.page.frames
+            for frame in frames:
+                if frame == self.page.main_frame:
+                    continue
+
+                frame_url = frame.url
+                # 支持 Google Pay/Play 相关的 iframe
+                if not any(domain in frame_url for domain in [
+                    'google.com', 'gstatic.com', 'googleapis.com',
+                    'play.google.com', 'pay.google.com', 'tokenized.play'
+                ]):
+                    continue
+
+                print(f"[AI Agent] 在 iframe 中搜索按钮: {frame_url[:50]}...")
+
+                for text in possible_texts:
+                    if not text or len(text) < 2:
+                        continue
+
+                    try:
+                        # 在 iframe 中查找按钮
+                        buttons = frame.locator('button, [role="button"]')
+                        count = await buttons.count()
+
+                        for i in range(count):
+                            btn = buttons.nth(i)
+                            try:
+                                if not await btn.is_visible():
+                                    continue
+
+                                btn_text = await btn.inner_text()
+                                btn_text_clean = btn_text.strip()
+
+                                # 精确或近似匹配
+                                if len(btn_text_clean) < 30 and text.lower() in btn_text_clean.lower():
+                                    if btn_text_clean.lower() == text.lower() or len(btn_text_clean) < 15:
+                                        print(f"[AI Agent] 在 iframe 中找到按钮: '{btn_text_clean}'")
+                                        return btn
+                            except Exception:
+                                continue
+
+                    except Exception as e:
+                        continue
+
+        except Exception as e:
+            print(f"[AI Agent] iframe 按钮搜索失败: {e}")
 
         return None
 

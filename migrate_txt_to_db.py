@@ -1,7 +1,7 @@
 import os
 import sys
-from database import DBManager
-from account_manager import AccountManager
+from services.database import DBManager
+from services.account_manager import AccountManager
 
 # 确保路径正确
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

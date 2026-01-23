@@ -341,6 +341,29 @@ Google 页面上删除手机号的按钮可能是：
 - 持卡人姓名: {card_name}
 - 邮编: {card_zip_code}
 
+## ⚠️⚠️⚠️ 首要任务：等待 "Get student offer" 按钮加载
+
+**在执行任何操作之前，必须确认 "Get student offer" 按钮已经完全加载！**
+
+**如何判断按钮已加载：**
+- 页面上有明确的蓝色/绑色 "Get student offer" 或 "领取学生优惠" 按钮
+- 按钮不是灰色/禁用状态
+- 按钮文字完整可见
+
+**如果按钮未加载或页面还在加载中：**
+- 使用 `wait` 动作等待 5 秒
+- 然后再次检查按钮是否出现
+- **持续等待，直到按钮出现为止**
+
+**超时处理（90秒）：**
+- 如果经过多次等待（总计约 90 秒 = 约 18 次 wait 5秒），按钮仍未出现
+- 输出 error，error_type 为 "page_error"，error_message 为 "Get student offer 按钮加载超时（90秒）"
+
+**示例：**
+- 如果看到页面正在加载/空白/转圈 → `{{"action": "wait", "wait_seconds": 5, "reasoning": "页面正在加载，等待 Get student offer 按钮出现"}}`
+- 如果看到 "Loading..." 或加载动画 → `{{"action": "wait", "wait_seconds": 5, "reasoning": "页面加载中"}}`
+- 如果多次等待后按钮仍未出现 → `{{"action": "error", "error_type": "page_error", "error_message": "Get student offer 按钮加载超时（90秒）"}}`
+
 ## ⚠️ 重要：操作顺序与等待
 
 **点击任何按钮后必须等待页面完全加载！**
@@ -349,34 +372,78 @@ Google 页面上删除手机号的按钮可能是：
 2. 等待看到支付方式选择界面后再继续操作
 3. **不要重复点击同一个按钮！** 如果看到页面正在加载，使用 wait 动作等待
 
+## ⚠️⚠️⚠️ 识别支付 iframe 已弹出（极其重要！）
+
+**当你在截图中看到以下特征时，说明支付 iframe 已经弹出：**
+- 页面中央出现白色的支付界面框
+- 显示 "Choose how to pay" / "选择付款方式" / "Chọn cách thanh toán"
+- 显示支付方式列表（如 Cash App Pay、信用卡等）
+- 背景变暗/变灰
+
+**此时绝对不要再点击 "Get student offer"！** 这个按钮已经被 iframe 遮挡了。
+
+**正确的做法：**
+1. 识别到支付 iframe 已弹出
+2. 在 iframe 内操作（选择信用卡或关闭 Cash App Pay 对话框）
+3. 不要尝试操作 iframe 下面的元素
+
+## ⚠️⚠️⚠️ 关于 Cash App Pay / 其他支付方式对话框（极其重要！）
+
+**如果页面弹出 "Add Cash App Pay" 或其他非银行卡支付方式的对话框：**
+
+1. **不要尝试使用这些支付方式！** 我们需要使用银行卡支付
+2. **点击 "Cancel" 按钮关闭对话框**（注意：是对话框底部的 Cancel 按钮，不是页面上的其他文字）
+3. 对话框关闭后，**等待支付方式列表重新加载**（使用 wait 2-3 秒）
+4. 然后选择银行卡/信用卡支付方式：
+   - 寻找 "Add credit or debit card" / "添加信用卡或借记卡"
+   - 或者 "Add card" / "添加卡片"
+   - 或者已保存的卡片（显示卡号后4位）
+
+**识别 Cash App Pay 对话框的特征：**
+- 标题显示 "Add Cash App Pay" 或类似
+- 有 Cash App 的 logo（绿色美元符号）
+- 底部有 "Cancel" 和 "Continue" 两个按钮
+- 有半透明遮罩层覆盖背景
+
+**处理步骤：**
+1. 识别到这是 Cash App Pay 对话框
+2. 点击 "Cancel" 按钮（对话框底部左侧的按钮）
+3. 等待对话框关闭（wait 2 秒）
+4. 在支付方式列表中选择信用卡/银行卡选项
+
 ## 操作流程
 
 1. 如果页面要求登录或验证身份，先完成登录（邮箱 → 密码 → 可能的 2FA）
 2. 如果需要重新验证身份，输入密码或 2FA 验证码
 3. **点击 "Get student offer" / "领取学生优惠" 按钮**
 4. **等待页面加载支付界面（使用 wait 3-5 秒）**
-5. 在支付方式选择页面：
+5. **处理可能弹出的 Cash App Pay 对话框**（见上方说明）
+6. 在支付方式选择页面：
    - **优先选择已有的卡片**（如果有已保存的支付方式）
-   - 如果没有已保存的卡，才选择 "Add card" / "添加卡片"
-6. 如果需要填写卡片信息（**必须按顺序完成所有字段，不要中途停止！**）：
+   - 如果没有已保存的卡，选择 "Add credit or debit card" / "Add card" / "添加卡片"
+   - **不要选择 Cash App Pay、PayPal 等其他支付方式！**
+7. 如果需要填写卡片信息（**必须按顺序完成所有字段，不要中途停止！**）：
    - ① 填写卡号（不要包含空格）→ fill, target="Card number"
    - ② 填写有效期 → fill, target="MM/YY" 或 "Expiration", value="{card_exp_month}/{card_exp_year}"
    - ③ 填写 CVV 安全码 → fill, target="Security code" 或 "CVV", value="{card_cvv}"
    - ④ 填写邮编 → fill, target="Billing zip code" 或 "ZIP", value="{card_zip_code}"
    - **每填完一个字段就继续下一个，不要等待判断错误！**
-7. **所有字段填完后**，点击 "Save card" / "Subscribe" / "订阅" 按钮完成订阅
-8. 确认订阅成功后输出 done
+8. **所有字段填完后**，点击 "Save card" / "Subscribe" / "订阅" 按钮完成订阅
+9. 确认订阅成功后输出 done
 
 ## 支付方式选择
 
 **支付方式选择页面可能显示**：
 - 已保存的卡片（显示卡号后4位，如 •••• 1234）
-- "Add credit or debit card" / "添加信用卡或借记卡"
-- "Add card" / "添加卡片"
+- "Add credit or debit card" / "添加信用卡或借记卡" ← **选择这个！**
+- "Add card" / "添加卡片" ← **或者这个！**
+- Cash App Pay ← **不要选择！如果弹出对话框，点 Cancel 关闭**
+- PayPal ← **不要选择！**
 
 **选择规则**：
 - 如果已有保存的卡片（显示 •••• 后4位数字），**直接选择它**，不要添加新卡！
-- 只有在没有已保存卡片时，才点击 "Add card" 添加新卡
+- 只有在没有已保存卡片时，才点击 "Add credit or debit card" / "Add card" 添加新卡
+- **永远不要选择 Cash App Pay、PayPal 等非银行卡支付方式**
 
 ## 页面状态识别
 
@@ -388,6 +455,12 @@ Google 页面上删除手机号的按钮可能是：
 - 显示已保存的支付方式列表
 - 或显示添加新卡的选项
 - 可能在 iframe 中
+
+**Cash App Pay 对话框**（需要关闭！）：
+- 弹出对话框显示 "Add Cash App Pay"
+- 有 Cash App 的绿色 logo
+- 底部有 Cancel 和 Continue 按钮
+- **点击 Cancel 关闭它，然后选择银行卡！**
 
 **付款表单页面**：
 - 信用卡卡号输入框（Card number）

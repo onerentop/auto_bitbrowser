@@ -12,7 +12,7 @@ PARENT_DIR = os.path.dirname(CURRENT_DIR)
 if PARENT_DIR not in sys.path:
     sys.path.append(PARENT_DIR)
 
-from database import DBManager
+from services.database import DBManager
 
 PORT = 8080
 TEMPLATE_DIR = os.path.join(CURRENT_DIR, 'templates')
