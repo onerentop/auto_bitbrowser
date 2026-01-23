@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> **Last Updated**: 2026-01-20 18:03:27
+> **Last Updated**: 2026-01-23
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -15,64 +15,110 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Database**: SQLite
 - **ixBrowser SDK**: ixbrowser-local-api
 
+## Directory Structure
+
+```
+auto_bitbrowser/
+├── main.py                    # 统一入口
+├── gui/                       # GUI 窗口模块
+│   ├── main_window.py         # PyQt6 主界面
+│   ├── bind_card_ai_gui.py    # AI 绑卡窗口
+│   ├── get_sheerlink_ai_gui.py # AI SheerLink 窗口
+│   ├── modify_2sv_phone_gui.py # 2SV 手机号修改窗口
+│   ├── modify_authenticator_gui.py # 身份验证器修改窗口
+│   ├── replace_phone_gui.py   # 替换手机号窗口
+│   ├── replace_email_v2_gui.py # 替换辅助邮箱 V2 窗口
+│   ├── kick_devices_gui.py    # 踢出设备窗口
+│   ├── comprehensive_query_gui.py # 综合查询窗口
+│   ├── config_ui.py           # 配置管理界面
+│   └── sheerid_gui_v2.py      # SheerID 验证窗口
+├── automation/                # 自动化脚本模块
+│   ├── auto_bind_card_ai.py   # AI 自动绑卡
+│   ├── auto_get_sheerlink_ai.py # AI 获取 SheerLink
+│   ├── auto_modify_2sv_phone.py # 自动修改 2SV 手机
+│   ├── auto_modify_authenticator.py # 自动修改验证器
+│   ├── auto_replace_email.py  # 自动替换邮箱
+│   ├── auto_replace_phone.py  # 自动替换手机
+│   ├── auto_kick_devices.py   # 自动踢出设备
+│   └── auto_subscribe.py      # 自动订阅
+├── services/                  # 服务层模块
+│   ├── database.py            # SQLite 数据库管理
+│   ├── ix_api.py              # ixBrowser 底层 API
+│   ├── ix_window.py           # 窗口管理高级封装
+│   ├── sheerid_verifier.py    # SheerID API 客户端
+│   ├── account_manager.py     # 账号状态管理
+│   ├── email_code_reader.py   # 邮箱验证码读取
+│   ├── proxy_allocator.py     # 代理分配
+│   └── data_store.py          # 数据存储
+├── core/                      # 核心工具模块
+│   ├── ai_browser_agent/      # AI Agent 子模块
+│   ├── config_manager.py      # 配置管理
+│   ├── data_parser.py         # 数据解析
+│   └── retry_helper.py        # 重试助手
+├── ui/                        # UI 资源
+│   ├── icons/                 # 图标文件
+│   ├── icons.py               # 图标定义
+│   └── styles.py              # 样式定义
+├── web_admin/                 # Web 管理界面
+│   ├── server.py              # HTTP 服务器
+│   ├── templates/             # HTML 模板
+│   └── static/                # 静态资源
+├── tests/                     # 测试目录
+├── data/                      # 数据/配置文件
+└── assets/                    # 静态资源
+```
+
 ## Architecture Diagram
 
 ```mermaid
 graph TB
-    subgraph GUI["GUI Layer"]
-        CWG[create_window_gui.py<br/>PyQt6 主界面]
-        SG[sheerid_gui.py<br/>SheerID 验证窗口]
-        AAG[auto_all_in_one_gui.py<br/>一键全自动 GUI]
-        BCG[bind_card_gui.py<br/>绑卡 GUI]
+    subgraph GUI["gui/ - GUI Layer"]
+        MW[main_window.py<br/>PyQt6 主界面]
+        BG[bind_card_ai_gui.py]
+        SG[get_sheerlink_ai_gui.py]
+        KG[kick_devices_gui.py]
     end
 
-    subgraph Auto["Automation Layer"]
-        RPG[run_playwright_google.py<br/>Google 登录 + 链接提取]
-        ABC[auto_bind_card.py<br/>自动绑卡流程]
+    subgraph Auto["automation/ - Automation Layer"]
+        ABA[auto_bind_card_ai.py]
+        ASA[auto_get_sheerlink_ai.py]
+        AKD[auto_kick_devices.py]
     end
 
-    subgraph API["ixBrowser API Layer"]
-        IXA[ix_api.py<br/>底层 API 封装]
-        IXW[ix_window.py<br/>窗口管理高级封装]
+    subgraph Services["services/ - Service Layer"]
+        IXA[ix_api.py<br/>底层 API]
+        IXW[ix_window.py<br/>窗口管理]
+        DB[database.py<br/>DBManager]
+        SV[sheerid_verifier.py]
     end
 
-    subgraph Data["Data Layer"]
-        DB[database.py<br/>DBManager - SQLite]
-        AM[account_manager.py<br/>AccountManager]
-        SV[sheerid_verifier.py<br/>SheerID API]
+    subgraph Core["core/ - Core Utils"]
+        CM[config_manager.py]
+        AIA[ai_browser_agent/]
     end
 
-    subgraph WebAdmin["Web Admin (Port 8080)"]
-        WS[web_admin/server.py<br/>HTTP 服务]
-        WT[web_admin/templates/<br/>HTML 模板]
+    subgraph WebAdmin["web_admin/"]
+        WS[server.py]
     end
 
     subgraph External["External Services"]
-        IXB[(ixBrowser<br/>:53200)]
-        SID[(SheerID<br/>batch.1key.me)]
+        IXB[(ixBrowser :53200)]
+        SID[(SheerID API)]
         GOOG[(Google One)]
     end
 
-    CWG --> IXW
-    CWG --> RPG
-    CWG --> DB
-    CWG --> WS
+    MW --> BG & SG & KG
+    BG --> ABA
+    SG --> ASA
+    KG --> AKD
 
-    SG --> SV
-    AAG --> RPG
-    AAG --> ABC
-    BCG --> ABC
-
-    RPG --> IXA
-    RPG --> AM
-    ABC --> AM
+    ABA --> IXA & DB & AIA
+    ASA --> IXA & DB & AIA
+    AKD --> IXA & DB & AIA
 
     IXW --> IXA
     IXA --> IXB
-
-    AM --> DB
     SV --> SID
-    RPG --> GOOG
 
     WS --> DB
 ```
@@ -81,22 +127,19 @@ graph TB
 
 | Module | Path | Description |
 |--------|------|-------------|
-| **ix_api** | `ix_api.py` | ixBrowser 底层 API 封装 (open/close/create/delete) |
-| **ix_window** | `ix_window.py` | 窗口管理高级封装 (批量创建、模板克隆、代理分配) |
-| **database** | `database.py` | SQLite 数据库管理 (DBManager 类) |
-| **account_manager** | `account_manager.py` | 账号状态转换封装 (AccountManager 类) |
-| **run_playwright_google** | `run_playwright_google.py` | Google 登录 + SheerID 链接自动提取 |
-| **auto_bind_card** | `auto_bind_card.py` | 自动绑卡流程 (处理嵌套 iframe) |
-| **sheerid_verifier** | `sheerid_verifier.py` | SheerID API 调用 (SheerIDVerifier 类) |
-| **create_window_gui** | `create_window_gui.py` | PyQt6 主界面 + WorkerThread |
+| **main** | `main.py` | 统一入口，启动 GUI |
+| **gui** | `gui/` | 所有 PyQt6 GUI 窗口 |
+| **automation** | `automation/` | AI Agent 自动化脚本 |
+| **services** | `services/` | 数据库、API、外部服务 |
+| **core** | `core/` | 核心工具模块 |
 | **web_admin** | `web_admin/` | Web 管理界面 (Port 8080) |
-| **core** | `core/` | 核心工具模块 (ConfigManager, RetryHelper, DataParser) |
 
 ## Submodule Navigation
 
 | Module | CLAUDE.md |
 |--------|-----------|
 | core | [`core/CLAUDE.md`](core/CLAUDE.md) |
+| core/ai_browser_agent | [`core/ai_browser_agent/CLAUDE.md`](core/ai_browser_agent/CLAUDE.md) |
 | web_admin | [`web_admin/CLAUDE.md`](web_admin/CLAUDE.md) |
 
 ## Quick Start
@@ -109,25 +152,22 @@ pip install -r requirements.txt
 playwright install chromium
 
 # Run main GUI
-python create_window_gui.py
+python main.py
 ```
 
 ### Testing Commands
 
 ```bash
+# Run tests
+python -m pytest tests/
+
 # Test ixBrowser API connection
-python test_ixbrowser_api.py
-
-# Test SheerID verifier
-python sheerid_verifier.py
-
-# Test auto card binding
-python auto_bind_card.py
+python tests/test_ixbrowser_api.py
 ```
 
 ## Core Classes
 
-### DBManager (database.py)
+### DBManager (services/database.py)
 
 SQLite 数据库管理，是数据层的核心类。
 
@@ -145,18 +185,7 @@ pending → link_ready → verified → subscribed
                  ↘ error
 ```
 
-### AccountManager (account_manager.py)
-
-高层状态管理封装，自动同步文件。
-
-**Key Methods**:
-- `save_link(line)` - 保存到 link_ready 状态
-- `move_to_verified(line)` - 移动到已验证状态
-- `move_to_subscribed(line)` - 移动到已订阅状态
-- `move_to_ineligible(line)` - 移动到无资格状态
-- `move_to_error(line)` - 移动到错误状态
-
-### ixBrowser API Functions (ix_api.py)
+### ixBrowser API (services/ix_api.py)
 
 底层 API 封装，使用 ixbrowser-local-api SDK。
 
@@ -167,13 +196,34 @@ pending → link_ready → verified → subscribed
 - `deleteBrowser(profile_id)` - 删除窗口
 - `get_profile_list(page, limit)` - 获取窗口列表
 
-### SheerIDVerifier (sheerid_verifier.py)
+### SheerIDVerifier (services/sheerid_verifier.py)
 
 SheerID 批量验证 API 客户端。
 
 **Key Methods**:
 - `verify_batch(verification_ids, callback)` - 批量验证 (SSE 流)
 - `_get_csrf_token()` - 获取 CSRF token
+
+## Import Conventions
+
+```python
+# 导入服务层
+from services.database import DBManager
+from services.ix_api import openBrowser, closeBrowser
+from services.ix_window import get_browser_list
+
+# 导入自动化模块
+from automation.auto_bind_card_ai import auto_bind_card_ai
+from automation.auto_kick_devices import auto_kick_devices
+
+# 导入 GUI 模块
+from gui.main_window import MainWindow
+from gui.bind_card_ai_gui import BindCardAIDialog
+
+# 导入核心工具
+from core.config_manager import ConfigManager
+from core.ai_browser_agent import BrowserAgent
+```
 
 ## Key Dependencies
 
@@ -216,4 +266,4 @@ email----password----backup_email----2fa_secret
 
 ---
 
-*Generated by /init-project*
+*Last refactored: 2026-01-23 - Directory structure optimization*
