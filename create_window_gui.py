@@ -155,6 +155,47 @@ class WorkerThread(QThread):
             self.run_open()
         elif self.task_type == 'verify_sheerid':
             self.run_verify_sheerid()
+        elif self.task_type == 'load_browser_tree':
+            self.run_load_browser_tree()
+
+    def run_load_browser_tree(self):
+        """异步加载窗口列表数据"""
+        try:
+            self.log("正在加载窗口列表...")
+
+            # 1. 获取分组列表
+            all_groups = get_group_list() or []
+            self.emit_progress(1, 3)
+
+            if not self.is_running:
+                return
+
+            # 2. 获取窗口列表
+            browsers = get_browser_list() or []
+            self.emit_progress(2, 3)
+
+            if not self.is_running:
+                return
+
+            # 3. 完成
+            self.emit_progress(3, 3)
+
+            self.finished_signal.emit({
+                'type': 'load_browser_tree',
+                'groups': all_groups,
+                'browsers': browsers
+            })
+
+        except Exception as e:
+            import traceback
+            self.log(f"[错误] 加载窗口列表失败: {e}")
+            traceback.print_exc()
+            self.finished_signal.emit({
+                'type': 'load_browser_tree',
+                'groups': [],
+                'browsers': [],
+                'error': str(e)
+            })
 
     def run_verify_sheerid(self):
         links = self.kwargs.get('links', [])
@@ -424,6 +465,7 @@ class BrowserWindowCreatorGUI(QMainWindow):
 
         self.ensure_data_files()
         self.worker_thread = None
+        self.tree_load_thread = None  # 异步加载窗口列表的线程
         self.init_ui()
 
         # 加载保存的配置到UI
@@ -890,6 +932,50 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setRootIsDecorated(True)  # 显示展开/折叠箭头
         self.tree.setIndentation(15)  # 减小缩进宽度
+
+        # 骨架屏加载占位符（覆盖在树形控件上）
+        self.tree_loading_overlay = QWidget(self.tree)
+        self.tree_loading_overlay.setStyleSheet("""
+            QWidget {
+                background-color: rgba(255, 255, 255, 0.95);
+            }
+        """)
+        overlay_layout = QVBoxLayout(self.tree_loading_overlay)
+        overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 加载动画文字
+        self.loading_label = QLabel("⏳ 正在加载窗口列表...")
+        self.loading_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #666;
+                padding: 20px;
+            }
+        """)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        overlay_layout.addWidget(self.loading_label)
+
+        # 加载进度条
+        self.tree_loading_progress = QProgressBar()
+        self.tree_loading_progress.setRange(0, 100)
+        self.tree_loading_progress.setValue(0)
+        self.tree_loading_progress.setFixedWidth(200)
+        self.tree_loading_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                text-align: center;
+                height: 16px;
+            }
+            QProgressBar::chunk {
+                background-color: #2196F3;
+                border-radius: 4px;
+            }
+        """)
+        overlay_layout.addWidget(self.tree_loading_progress, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.tree_loading_overlay.hide()  # 默认隐藏
+
         list_layout.addWidget(self.tree)
         
         list_group.setLayout(list_layout)
@@ -979,94 +1065,148 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.status_text.setTextCursor(cursor)
 
     def refresh_browser_list(self):
-        """刷新窗口列表到树形控件（按分组显示）"""
+        """异步刷新窗口列表（启动后台线程加载）"""
+        # 显示骨架屏加载状态
+        self._show_tree_loading(True)
         self.tree.clear()
         self.select_all_checkbox.setChecked(False)
-        self.log("正在刷新窗口列表...")
-        QApplication.processEvents()
 
-        def clean_text(text):
-            """清理文本，移除不可显示字符"""
-            if not text:
-                return ""
-            # 只保留可打印字符
-            return ''.join(c for c in str(text) if c.isprintable())
+        # 清理旧线程（断开信号，防止回调混乱）
+        if self.tree_load_thread is not None:
+            if self.tree_load_thread.isRunning():
+                self.tree_load_thread.stop()
+                # 断开所有信号连接，防止旧线程回调干扰
+                try:
+                    self.tree_load_thread.log_signal.disconnect()
+                    self.tree_load_thread.progress_signal.disconnect()
+                    self.tree_load_thread.finished_signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass  # 信号未连接时忽略
+                self.tree_load_thread.wait(1000)
+            self.tree_load_thread = None
+
+        self.tree_load_thread = WorkerThread('load_browser_tree')
+        self.tree_load_thread.log_signal.connect(self.log)
+        self.tree_load_thread.progress_signal.connect(self._update_tree_loading_progress)
+        self.tree_load_thread.finished_signal.connect(self._on_tree_data_loaded)
+        self.tree_load_thread.start()
+
+    def _show_tree_loading(self, show: bool):
+        """显示/隐藏树形控件加载状态"""
+        if show:
+            # 调整覆盖层大小以匹配树形控件（延迟执行以确保布局完成）
+            def adjust_overlay():
+                self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
+            QTimer.singleShot(10, adjust_overlay)
+            self.tree_loading_progress.setValue(0)
+            self.loading_label.setText("⏳ 正在加载窗口列表...")
+            self.tree_loading_overlay.show()
+            self.tree_loading_overlay.raise_()
+        else:
+            self.tree_loading_overlay.hide()
+
+    def _update_tree_loading_progress(self, current, total, eta, speed):
+        """更新树形控件加载进度"""
+        if total > 0:
+            pct = int(current / total * 100)
+            self.tree_loading_progress.setValue(pct)
+            if current == 1:
+                self.loading_label.setText("⏳ 正在获取分组列表...")
+            elif current == 2:
+                self.loading_label.setText("⏳ 正在获取窗口列表...")
+            elif current >= total:
+                self.loading_label.setText("✅ 正在渲染...")
+
+    def _on_tree_data_loaded(self, result: dict):
+        """树形控件数据加载完成回调"""
+        if result.get('type') != 'load_browser_tree':
+            return
 
         try:
-            # 1. 获取所有分组（包括空分组）
-            all_groups = get_group_list() or []
-            # API 返回 {id, title}，转换为 {group_id: group_name}
-            group_names = {}
-            for g in all_groups:
-                gid = g.get('id')
-                title = clean_text(g.get('title', ''))
-                # 如果标题是乱码（包含替换字符），使用 ID 作为名称
-                if not title or '\ufffd' in title or any(ord(c) > 0xFFFF for c in title):
-                    title = f"分组 {gid}"
-                group_names[gid] = title
-            group_names[0] = "未分组"  # 确保有未分组
+            all_groups = result.get('groups', [])
+            browsers = result.get('browsers', [])
 
-            # 2. 获取所有窗口
-            browsers = get_browser_list() or []
-
-            # 3. 按 group_id 分组
-            grouped = {gid: [] for gid in group_names.keys()}  # 初始化所有分组为空列表
-            for b in browsers:
-                gid = b.get('group_id', 0) or 0
-                if gid not in grouped:
-                    grouped[gid] = []
-                    # 从浏览器数据获取分组名
-                    gname = clean_text(b.get('group_name', ''))
-                    if not gname or '\ufffd' in gname:
-                        gname = f"分组 {gid}"
-                    group_names[gid] = gname
-                grouped[gid].append(b)
-
-            # 4. 创建树形结构（所有分组，包括空的）
-            total_count = 0
-            for gid in sorted(grouped.keys()):
-                browser_list = grouped[gid]
-                group_name = group_names.get(gid, f"分组 {gid}")
-
-                # 分组节点
-                group_item = QTreeWidgetItem(self.tree)
-                group_item.setText(0, "")
-                group_item.setText(1, f"📁 {group_name} ({len(browser_list)})")
-                group_item.setFlags(
-                    group_item.flags() |
-                    Qt.ItemFlag.ItemIsAutoTristate |
-                    Qt.ItemFlag.ItemIsUserCheckable
-                )
-                group_item.setCheckState(0, Qt.CheckState.Unchecked)
-                group_item.setExpanded(True)
-                group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
-
-                # 设置分组行样式
-                font = group_item.font(1)
-                font.setBold(True)
-                group_item.setFont(1, font)
-
-                # 窗口子节点
-                for browser in browser_list:
-                    child = QTreeWidgetItem(group_item)
-                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.CheckState.Unchecked)
-                    child.setText(1, clean_text(browser.get('name', '')))
-                    child.setText(2, str(browser.get('profile_id', '')))
-                    child.setText(3, "")  # 2FA 初始为空
-                    child.setText(4, clean_text(browser.get('note', '')))
-                    child.setData(0, Qt.ItemDataRole.UserRole, {
-                        "type": "browser",
-                        "id": browser.get('profile_id')
-                    })
-                    total_count += 1
-
-            self.log(f"列表刷新完成，共 {len(grouped)} 个分组，{total_count} 个窗口")
+            # 填充树形控件
+            self._populate_browser_tree(all_groups, browsers)
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.log(f"[错误] 刷新列表失败: {e}")
+            self.log(f"[错误] 渲染列表失败: {e}")
+        finally:
+            # 隐藏加载状态
+            self._show_tree_loading(False)
+
+    def _populate_browser_tree(self, all_groups: list, browsers: list):
+        """填充窗口树形控件（在主线程执行）"""
+        def clean_text(text):
+            """清理文本，移除不可显示字符"""
+            if not text:
+                return ""
+            return ''.join(c for c in str(text) if c.isprintable())
+
+        # 1. 处理分组
+        group_names = {}
+        for g in all_groups:
+            gid = g.get('id')
+            title = clean_text(g.get('title', ''))
+            if not title or '\ufffd' in title or any(ord(c) > 0xFFFF for c in title):
+                title = f"分组 {gid}"
+            group_names[gid] = title
+        group_names[0] = "未分组"
+
+        # 2. 按 group_id 分组
+        grouped = {gid: [] for gid in group_names.keys()}
+        for b in browsers:
+            gid = b.get('group_id', 0) or 0
+            if gid not in grouped:
+                grouped[gid] = []
+                gname = clean_text(b.get('group_name', ''))
+                if not gname or '\ufffd' in gname:
+                    gname = f"分组 {gid}"
+                group_names[gid] = gname
+            grouped[gid].append(b)
+
+        # 3. 创建树形结构
+        total_count = 0
+        for gid in sorted(grouped.keys()):
+            browser_list = grouped[gid]
+            group_name = group_names.get(gid, f"分组 {gid}")
+
+            # 分组节点
+            group_item = QTreeWidgetItem(self.tree)
+            group_item.setText(0, "")
+            group_item.setText(1, f"📁 {group_name} ({len(browser_list)})")
+            group_item.setFlags(
+                group_item.flags() |
+                Qt.ItemFlag.ItemIsAutoTristate |
+                Qt.ItemFlag.ItemIsUserCheckable
+            )
+            group_item.setCheckState(0, Qt.CheckState.Unchecked)
+            group_item.setExpanded(True)
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
+
+            # 设置分组行样式
+            font = group_item.font(1)
+            font.setBold(True)
+            group_item.setFont(1, font)
+
+            # 窗口子节点
+            for browser in browser_list:
+                child = QTreeWidgetItem(group_item)
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.CheckState.Unchecked)
+                child.setText(1, clean_text(browser.get('name', '')))
+                child.setText(2, str(browser.get('profile_id', '')))
+                child.setText(3, "")  # 2FA 初始为空
+                child.setText(4, clean_text(browser.get('note', '')))
+                child.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "browser",
+                    "id": browser.get('profile_id')
+                })
+                total_count += 1
+
+        self.log(f"列表刷新完成，共 {len(grouped)} 个分组，{total_count} 个窗口")
 
     def action_get_sheerlink_ai(self):
         """打开一键获取 SheerLink AI 版窗口"""
@@ -1457,7 +1597,18 @@ class BrowserWindowCreatorGUI(QMainWindow):
     def closeEvent(self, event):
         """窗口关闭时保存配置"""
         self.save_config_from_ui()
+        # 清理加载线程
+        if self.tree_load_thread is not None and self.tree_load_thread.isRunning():
+            self.tree_load_thread.stop()
+            self.tree_load_thread.wait(500)
         event.accept()
+
+    def resizeEvent(self, event):
+        """窗口大小变化时调整覆盖层"""
+        super().resizeEvent(event)
+        # 如果覆盖层正在显示，调整其大小
+        if hasattr(self, 'tree_loading_overlay') and self.tree_loading_overlay.isVisible():
+            self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
 
 
 def main():
