@@ -41,6 +41,10 @@ class ConfigManager:
         "card_rotation_index": 0,
         "last_used_template_id": "",
         "window_name_prefix": "",
+        # 代理设置
+        "proxy": {
+            "max_windows_per_ip": 3  # 每个IP最大窗口数
+        },
         # AI Agent 配置 (Gemini Vision)
         "ai_agent": {
             "api_key": "",

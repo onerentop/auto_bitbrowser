@@ -368,18 +368,15 @@ class WorkerThread(QThread):
 
             self.log(f"[信息] 从数据库找到 {len(accounts)} 个待处理账户")
 
-            # 从数据库读取代理信息
-            db_proxies = DBManager.get_all_proxies()
-            proxies = []
-            for p in db_proxies:
-                proxies.append({
-                    'type': p.get('proxy_type', 'socks5'),
-                    'host': p.get('host', ''),
-                    'port': p.get('port', ''),
-                    'username': p.get('username', ''),
-                    'password': p.get('password', '')
-                })
-            self.log(f"[信息] 从数据库找到 {len(proxies)} 个代理")
+            # 使用代理分配器
+            from proxy_allocator import ProxyAllocator
+            max_per_ip = ProxyAllocator.get_max_windows_per_ip()
+            available_quota = ProxyAllocator.get_available_count()
+
+            if available_quota > 0:
+                self.log(f"[信息] 代理池可用配额: {available_quota} (每IP上限: {max_per_ip})")
+            else:
+                self.log(f"[信息] 代理池为空或已满，将不使用代理创建窗口")
             
             # 获取参考窗口信息
             if template_config:
@@ -414,13 +411,17 @@ class WorkerThread(QThread):
                 if not self.is_running:
                     self.log("\n[用户操作] 创建任务已停止")
                     break
-                
+
                 self.log(f"\n{'='*40}")
                 self.log(f"[进度] ({i}/{len(accounts)}) 创建: {account['email']}")
-                
-                # 获取对应的代理（如果有）
-                proxy = proxies[i - 1] if i - 1 < len(proxies) else None
-                
+
+                # 使用代理分配器获取代理（顺序分配策略）
+                proxy_data = ProxyAllocator.get_next_available_proxy()
+                proxy = ProxyAllocator.get_proxy_config_for_browser(proxy_data) if proxy_data else None
+
+                if proxy:
+                    self.log(f"[代理] 分配: {proxy['host']}:{proxy['port']}")
+
                 browser_id, error_msg = create_browser_window(
                     account,
                     template_id if not template_config else None,
@@ -429,10 +430,19 @@ class WorkerThread(QThread):
                     name_prefix=name_prefix,
                     group_id=group_id
                 )
-                
+
                 if browser_id:
                     success_count += 1
                     self.log(f"[成功] 窗口创建成功！ID: {browser_id}")
+
+                    # 记录代理绑定关系
+                    if proxy_data:
+                        DBManager.bind_proxy_to_window(
+                            proxy_data['id'],
+                            str(browser_id),
+                            account.get('email', '')
+                        )
+                        self.log(f"[绑定] 代理已绑定到窗口")
                 else:
                     self.log(f"[失败] 窗口创建失败: {error_msg}")
             

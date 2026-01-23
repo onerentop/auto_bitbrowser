@@ -18,6 +18,8 @@ class DBManager:
     def get_connection():
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        # 启用外键约束支持（SQLite 默认禁用）
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     @staticmethod
@@ -81,6 +83,19 @@ class DBManager:
                     host TEXT NOT NULL,
                     port TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 创建代理-窗口绑定表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS proxy_window_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    proxy_id INTEGER NOT NULL,
+                    browser_id TEXT NOT NULL,
+                    email TEXT,
+                    bound_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE,
+                    UNIQUE(browser_id)
                 )
             ''')
 
@@ -448,27 +463,58 @@ class DBManager:
 
     @staticmethod
     def save_all_proxies(proxies: list):
-        """保存所有代理（先清空再插入）"""
+        """
+        保存所有代理（增量更新策略，保留绑定关系）
+        通过 host:port 唯一键匹配更新现有记录，删除多余记录，添加新记录
+        """
         try:
             with lock:
                 conn = DBManager.get_connection()
                 cursor = conn.cursor()
 
-                # 清空现有数据
-                cursor.execute("DELETE FROM proxies")
+                # 获取现有代理（建立 host:port -> id 映射）
+                cursor.execute("SELECT id, host, port FROM proxies")
+                existing = {f"{row['host']}:{row['port']}": row['id'] for row in cursor.fetchall()}
+                existing_ids = set(existing.values())
 
-                # 插入新数据
+                # 处理传入的代理列表
+                new_keys = set()
                 for proxy in proxies:
-                    cursor.execute('''
-                        INSERT INTO proxies (proxy_type, username, password, host, port)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (
-                        proxy.get('proxy_type', 'socks5'),
-                        proxy.get('username', ''),
-                        proxy.get('password', ''),
-                        proxy.get('host', ''),
-                        proxy.get('port', '')
-                    ))
+                    key = f"{proxy.get('host', '')}:{proxy.get('port', '')}"
+                    new_keys.add(key)
+
+                    if key in existing:
+                        # 更新现有记录
+                        cursor.execute('''
+                            UPDATE proxies SET proxy_type=?, username=?, password=?
+                            WHERE id=?
+                        ''', (
+                            proxy.get('proxy_type', 'socks5'),
+                            proxy.get('username', ''),
+                            proxy.get('password', ''),
+                            existing[key]
+                        ))
+                    else:
+                        # 插入新记录
+                        cursor.execute('''
+                            INSERT INTO proxies (proxy_type, username, password, host, port)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (
+                            proxy.get('proxy_type', 'socks5'),
+                            proxy.get('username', ''),
+                            proxy.get('password', ''),
+                            proxy.get('host', ''),
+                            proxy.get('port', '')
+                        ))
+
+                # 删除不在新列表中的代理（这些代理的绑定关系会级联删除）
+                keys_to_delete = set(existing.keys()) - new_keys
+                for key in keys_to_delete:
+                    proxy_id = existing[key]
+                    # 先删除绑定关系
+                    cursor.execute("DELETE FROM proxy_window_bindings WHERE proxy_id = ?", (proxy_id,))
+                    # 再删除代理
+                    cursor.execute("DELETE FROM proxies WHERE id = ?", (proxy_id,))
 
                 conn.commit()
                 conn.close()
@@ -507,11 +553,165 @@ class DBManager:
             with lock:
                 conn = DBManager.get_connection()
                 cursor = conn.cursor()
+                # 先删除绑定关系
+                cursor.execute("DELETE FROM proxy_window_bindings WHERE proxy_id = ?", (proxy_id,))
+                # 再删除代理
                 cursor.execute("DELETE FROM proxies WHERE id = ?", (proxy_id,))
                 conn.commit()
                 conn.close()
         except Exception as e:
             print(f"[DB ERROR] delete_proxy 失败: {e}")
+
+    # ==================== Proxy Window Bindings ====================
+
+    @staticmethod
+    def get_proxy_binding_count(proxy_id: int) -> int:
+        """获取代理已绑定的窗口数量"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM proxy_window_bindings WHERE proxy_id = ?",
+                    (proxy_id,)
+                )
+                count = cursor.fetchone()[0]
+                conn.close()
+                return count
+        except Exception as e:
+            print(f"[DB ERROR] get_proxy_binding_count 失败: {e}")
+            return 0
+
+    @staticmethod
+    def get_proxy_bindings(proxy_id: int) -> list:
+        """获取代理关联的所有窗口"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM proxy_window_bindings WHERE proxy_id = ? ORDER BY bound_at DESC",
+                    (proxy_id,)
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_proxy_bindings 失败: {e}")
+            return []
+
+    @staticmethod
+    def get_all_proxy_usage_stats(max_per_ip: int) -> list:
+        """
+        获取所有代理的使用统计
+        返回: [{proxy_id, proxy_type, host, port, used_count, max_count, is_full}]
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT p.id, p.proxy_type, p.host, p.port, p.username, p.password,
+                           COUNT(b.id) as used_count
+                    FROM proxies p
+                    LEFT JOIN proxy_window_bindings b ON p.id = b.proxy_id
+                    GROUP BY p.id
+                    ORDER BY p.id
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+
+                result = []
+                for row in rows:
+                    used = row['used_count']
+                    result.append({
+                        'proxy_id': row['id'],
+                        'proxy_type': row['proxy_type'],
+                        'host': row['host'],
+                        'port': row['port'],
+                        'username': row['username'],
+                        'password': row['password'],
+                        'used_count': used,
+                        'max_count': max_per_ip,
+                        'is_full': used >= max_per_ip
+                    })
+                return result
+        except Exception as e:
+            print(f"[DB ERROR] get_all_proxy_usage_stats 失败: {e}")
+            return []
+
+    @staticmethod
+    def bind_proxy_to_window(proxy_id: int, browser_id: str, email: str = None) -> bool:
+        """绑定代理到窗口"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO proxy_window_bindings (proxy_id, browser_id, email)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(browser_id) DO UPDATE SET
+                        proxy_id = excluded.proxy_id,
+                        email = excluded.email,
+                        bound_at = CURRENT_TIMESTAMP
+                """, (proxy_id, browser_id, email))
+                conn.commit()
+                conn.close()
+                print(f"[DB] 绑定代理 {proxy_id} -> 窗口 {browser_id}")
+                return True
+        except Exception as e:
+            print(f"[DB ERROR] bind_proxy_to_window 失败: {e}")
+            return False
+
+    @staticmethod
+    def unbind_proxy_from_window(browser_id: str) -> bool:
+        """解绑窗口的代理"""
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM proxy_window_bindings WHERE browser_id = ?",
+                    (browser_id,)
+                )
+                affected = cursor.rowcount
+                conn.commit()
+                conn.close()
+                if affected > 0:
+                    print(f"[DB] 解绑窗口 {browser_id} 的代理")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] unbind_proxy_from_window 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_next_available_proxy(max_per_ip: int) -> dict | None:
+        """
+        获取下一个可用代理（顺序分配策略）
+        返回第一个未达上限的代理，如果都满了返回 None
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT p.*, COUNT(b.id) as used_count
+                    FROM proxies p
+                    LEFT JOIN proxy_window_bindings b ON p.id = b.proxy_id
+                    GROUP BY p.id
+                    HAVING used_count < ?
+                    ORDER BY p.id
+                    LIMIT 1
+                """, (max_per_ip,))
+                row = cursor.fetchone()
+                conn.close()
+
+                if row:
+                    return dict(row)
+                return None
+        except Exception as e:
+            print(f"[DB ERROR] get_next_available_proxy 失败: {e}")
+            return None
 
     # ==================== Phone Modification History ====================
 

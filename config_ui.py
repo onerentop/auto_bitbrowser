@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QFileDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QThread
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QBrush, QColor
 
 from ix_api import closeBrowser, deleteBrowser
 from ix_window import find_browser_by_email
@@ -1039,10 +1039,10 @@ class ProxiesTab(QWidget):
 
         layout.addLayout(toolbar)
 
-        # 表格
+        # 表格 - 增加使用情况列
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["类型", "主机", "端口", "用户名", "密码", "操作"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["类型", "主机", "端口", "用户名", "密码", "使用情况", "操作"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         layout.addWidget(self.table)
@@ -1050,8 +1050,17 @@ class ProxiesTab(QWidget):
     def load_data(self):
         """加载代理数据"""
         try:
+            from proxy_allocator import ProxyAllocator
+
             self.data_store.reload()
             proxies = self.data_store.get_proxies()
+            usage_stats = ProxyAllocator.get_all_usage_stats()
+
+            # 创建使用情况映射 (host:port -> stats)
+            usage_map = {}
+            for stat in usage_stats:
+                key = f"{stat['host']}:{stat['port']}"
+                usage_map[key] = stat
 
             self.table.setRowCount(0)
             for proxy in proxies:
@@ -1064,13 +1073,52 @@ class ProxiesTab(QWidget):
                 self.table.setItem(row, 3, QTableWidgetItem(proxy.username))
                 self.table.setItem(row, 4, QTableWidgetItem("***" if proxy.password else ""))
 
+                # 使用情况
+                key = f"{proxy.host}:{proxy.port}"
+                stat = usage_map.get(key, {})
+                used = stat.get('used_count', 0)
+                max_count = stat.get('max_count', 3)
+                is_full = stat.get('is_full', False)
+
+                usage_text = f"{used}/{max_count}"
+                usage_item = QTableWidgetItem(usage_text)
+                if is_full:
+                    usage_item.setForeground(QBrush(QColor("#f44336")))  # 红色
+                elif used > 0:
+                    usage_item.setForeground(QBrush(QColor("#ff9800")))  # 橙色
+                else:
+                    usage_item.setForeground(QBrush(QColor("#4caf50")))  # 绿色
+                self.table.setItem(row, 5, usage_item)
+
+                # 操作按钮
+                btn_container = QWidget()
+                btn_layout = QHBoxLayout(btn_container)
+                btn_layout.setContentsMargins(2, 2, 2, 2)
+                btn_layout.setSpacing(4)
+
                 btn_edit = QPushButton("编辑")
+                btn_edit.setFixedWidth(45)
                 btn_edit.clicked.connect(lambda checked, r=row: self.edit_proxy(r))
-                self.table.setCellWidget(row, 5, btn_edit)
+                btn_layout.addWidget(btn_edit)
+
+                proxy_id = stat.get('proxy_id')
+                if proxy_id and used > 0:
+                    btn_detail = QPushButton("详情")
+                    btn_detail.setFixedWidth(45)
+                    btn_detail.clicked.connect(lambda checked, pid=proxy_id: self.show_proxy_detail(pid))
+                    btn_layout.addWidget(btn_detail)
+
+                self.table.setCellWidget(row, 6, btn_container)
 
             self.count_label.setText(f"共 {len(proxies)} 个代理")
         except Exception as e:
             QMessageBox.warning(self, "错误", f"加载代理失败: {e}")
+
+    def show_proxy_detail(self, proxy_id: int):
+        """显示代理详情对话框"""
+        dialog = ProxyDetailDialog(self, proxy_id)
+        dialog.exec()
+        self.load_data()  # 刷新数据（解绑后需更新）
 
     def add_proxy(self):
         """添加新代理"""
@@ -1114,6 +1162,123 @@ class ProxiesTab(QWidget):
         """批量导入代理"""
         dialog = ProxyBatchImportDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.load_data()
+
+
+class ProxyDetailDialog(QDialog):
+    """代理详情对话框 - 显示关联窗口列表"""
+
+    def __init__(self, parent=None, proxy_id: int = None):
+        super().__init__(parent)
+        self.proxy_id = proxy_id
+        self.setWindowTitle("代理详情")
+        self.setMinimumSize(600, 400)
+        self._init_ui()
+        self.load_data()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+
+        # 代理信息
+        self.info_label = QLabel()
+        self.info_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 10px;")
+        layout.addWidget(self.info_label)
+
+        # 关联窗口表格
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["窗口 ID", "邮箱", "绑定时间", "操作"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.table)
+
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.btn_unbind_all = QPushButton("解绑全部")
+        self.btn_unbind_all.clicked.connect(self.unbind_all)
+        btn_layout.addWidget(self.btn_unbind_all)
+
+        self.btn_close = QPushButton("关闭")
+        self.btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(self.btn_close)
+
+        layout.addLayout(btn_layout)
+
+    def load_data(self):
+        """加载关联窗口数据"""
+        try:
+            from proxy_allocator import ProxyAllocator
+            from database import DBManager
+
+            # 获取代理信息
+            stats = ProxyAllocator.get_all_usage_stats()
+            proxy_info = None
+            for stat in stats:
+                if stat['proxy_id'] == self.proxy_id:
+                    proxy_info = stat
+                    break
+
+            if proxy_info:
+                self.info_label.setText(
+                    f"🌐 {proxy_info['proxy_type']}://{proxy_info['host']}:{proxy_info['port']}  "
+                    f"使用情况: {proxy_info['used_count']}/{proxy_info['max_count']}"
+                )
+            else:
+                self.info_label.setText(f"代理 ID: {self.proxy_id}")
+
+            # 获取绑定列表
+            bindings = DBManager.get_proxy_bindings(self.proxy_id)
+
+            self.table.setRowCount(0)
+            for binding in bindings:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+
+                self.table.setItem(row, 0, QTableWidgetItem(str(binding.get('browser_id', ''))))
+                self.table.setItem(row, 1, QTableWidgetItem(binding.get('email', '') or '-'))
+                self.table.setItem(row, 2, QTableWidgetItem(str(binding.get('bound_at', ''))))
+
+                btn_unbind = QPushButton("解绑")
+                browser_id = binding.get('browser_id')
+                btn_unbind.clicked.connect(lambda checked, bid=browser_id: self.unbind_single(bid))
+                self.table.setCellWidget(row, 3, btn_unbind)
+
+            self.btn_unbind_all.setEnabled(len(bindings) > 0)
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载数据失败: {e}")
+
+    def unbind_single(self, browser_id: str):
+        """解绑单个窗口"""
+        from proxy_allocator import ProxyAllocator
+
+        reply = QMessageBox.question(
+            self, "确认解绑",
+            f"确定要解绑窗口 {browser_id} 吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            ProxyAllocator.unbind_window(browser_id)
+            self.load_data()
+
+    def unbind_all(self):
+        """解绑全部窗口"""
+        from database import DBManager
+
+        bindings = DBManager.get_proxy_bindings(self.proxy_id)
+        if not bindings:
+            return
+
+        reply = QMessageBox.question(
+            self, "确认解绑",
+            f"确定要解绑全部 {len(bindings)} 个窗口吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            from proxy_allocator import ProxyAllocator
+            for binding in bindings:
+                ProxyAllocator.unbind_window(binding.get('browser_id'))
             self.load_data()
 
 
@@ -1371,6 +1536,23 @@ class SettingsTab(QWidget):
         other_group.setLayout(other_layout)
         layout.addWidget(other_group)
 
+        # 代理设置
+        proxy_group = QGroupBox("🌐 代理设置")
+        proxy_layout = QFormLayout()
+
+        self.proxy_max_windows_spin = QSpinBox()
+        self.proxy_max_windows_spin.setRange(1, 100)
+        self.proxy_max_windows_spin.setValue(3)
+        proxy_layout.addRow("每IP最大窗口数:", self.proxy_max_windows_spin)
+
+        proxy_hint = QLabel("提示: 批量创建窗口时，每个代理IP最多分配给指定数量的窗口")
+        proxy_hint.setStyleSheet("color: #666; font-size: 11px;")
+        proxy_hint.setWordWrap(True)
+        proxy_layout.addRow("", proxy_hint)
+
+        proxy_group.setLayout(proxy_layout)
+        layout.addWidget(proxy_group)
+
         layout.addStretch()
 
         # 保存按钮
@@ -1467,6 +1649,9 @@ class SettingsTab(QWidget):
 
             # Other
             self.thread_count_spin.setValue(ConfigManager.get("default_thread_count", 3))
+
+            # Proxy
+            self.proxy_max_windows_spin.setValue(ConfigManager.get("proxy.max_windows_per_ip", 3))
         except Exception as e:
             print(f"加载设置失败: {e}")
 
@@ -1502,6 +1687,9 @@ class SettingsTab(QWidget):
             # Other
             ConfigManager.set("default_thread_count", self.thread_count_spin.value())
 
+            # Proxy
+            ConfigManager.set("proxy.max_windows_per_ip", self.proxy_max_windows_spin.value())
+
             ConfigManager.save()
             QMessageBox.information(self, "成功", "设置已保存")
         except Exception as e:
@@ -1535,6 +1723,8 @@ class SettingsTab(QWidget):
             self.delay_save_spin.setValue(18)
             # Other
             self.thread_count_spin.setValue(3)
+            # Proxy
+            self.proxy_max_windows_spin.setValue(3)
 
     def _copy_to_clipboard(self, text: str):
         """复制文本到剪贴板"""
