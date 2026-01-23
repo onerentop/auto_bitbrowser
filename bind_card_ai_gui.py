@@ -24,8 +24,10 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QFormLayout,
     QAbstractItemView,
+    QProgressBar,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QBrush
 
 from ix_api import get_group_list
@@ -33,6 +35,134 @@ from ix_window import get_browser_list
 from database import DBManager
 from core.config_manager import ConfigManager
 from auto_bind_card_ai import auto_bind_card_ai
+
+
+class LoadDataWorker(QThread):
+    """异步加载数据的后台线程"""
+    progress_signal = pyqtSignal(int, int, str)  # current, total, message
+    finished_signal = pyqtSignal(dict)  # result data
+    log_signal = pyqtSignal(str)
+
+    def __init__(self, db_manager):
+        super().__init__()
+        self.db_manager = db_manager
+        self.is_running = True
+
+    def stop(self):
+        self.is_running = False
+
+    def run(self):
+        try:
+            result = {
+                'cards': [],
+                'cached_browsers': [],
+                'cached_account_map': {},
+                'cached_group_names': {},
+                'all_account_data': [],
+            }
+
+            # 阶段 1: 获取卡片数据
+            self.progress_signal.emit(1, 4, "正在读取卡片数据...")
+            if not self.is_running:
+                return
+
+            result['cards'] = self.db_manager.get_all_cards()
+
+            # 阶段 2: 获取数据库账号
+            self.progress_signal.emit(2, 4, "正在读取数据库...")
+            if not self.is_running:
+                return
+
+            db_accounts = self.db_manager.get_all_accounts()
+            result['cached_account_map'] = {acc['email']: acc for acc in db_accounts}
+
+            # 阶段 3: 获取分组列表
+            self.progress_signal.emit(3, 4, "正在获取分组列表...")
+            if not self.is_running:
+                return
+
+            all_groups = get_group_list() or []
+            cached_group_names = {}
+            for g in all_groups:
+                gid = g.get('id')
+                title = g.get('title', '')
+                clean_title = ''.join(c for c in str(title) if c.isprintable())
+                if not clean_title or '\ufffd' in clean_title:
+                    clean_title = f"分组 {gid}"
+                cached_group_names[gid] = clean_title
+            cached_group_names[0] = "未分组"
+            cached_group_names[1] = "默认分组"
+            result['cached_group_names'] = cached_group_names
+
+            # 阶段 4: 获取浏览器列表
+            self.progress_signal.emit(4, 4, "正在获取窗口列表...")
+            if not self.is_running:
+                return
+
+            browsers = get_browser_list(page=1, limit=1000) or []
+            result['cached_browsers'] = browsers
+
+            # 预处理所有账号数据（仅 verified 状态）
+            all_account_data = []
+            for browser in browsers:
+                gid = browser.get('group_id', 0) or 0
+
+                # 动态添加分组名称
+                if gid not in cached_group_names:
+                    gname = browser.get('group_name', '') or ''
+                    clean_gname = ''.join(c for c in str(gname) if c.isprintable())
+                    if not clean_gname or '\ufffd' in clean_gname:
+                        clean_gname = f"分组 {gid}"
+                    cached_group_names[gid] = clean_gname
+
+                browser_id = browser.get('id', '') or browser.get('profile_id', '')
+                browser_name = browser.get('name', '')
+
+                # 从名称或备注中提取邮箱
+                email = browser_name
+                note = browser.get('note', '') or ''
+                if '----' in note:
+                    email = note.split('----')[0].strip()
+                elif '----' in browser_name:
+                    email = browser_name.split('----')[0].strip()
+
+                if '@' not in email:
+                    continue
+
+                # 获取对应的账号信息
+                account = result['cached_account_map'].get(email, {})
+
+                # 只处理 verified 状态的账号（已验证未绑卡）
+                status = account.get('status', '')
+                if status != 'verified':
+                    continue
+
+                account_data = {
+                    'browser_id': str(browser_id),
+                    'email': email,
+                    'password': account.get('password', ''),
+                    'secret': account.get('secret', '') or account.get('secret_key', ''),
+                    'group_id': gid,
+                }
+                all_account_data.append(account_data)
+
+            result['all_account_data'] = all_account_data
+            result['cached_group_names'] = cached_group_names
+
+            self.finished_signal.emit(result)
+
+        except Exception as e:
+            self.log_signal.emit(f"❌ 加载数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+            self.finished_signal.emit({
+                'cards': [],
+                'cached_browsers': [],
+                'cached_account_map': {},
+                'cached_group_names': {},
+                'all_account_data': [],
+                'error': str(e),
+            })
 
 
 class BindCardAIWorker(QThread):
@@ -179,13 +309,20 @@ class BindCardAIDialog(QDialog):
         self.setMinimumSize(1000, 750)
 
         self.worker = None
+        self.load_data_worker = None  # 异步加载线程
         self.db_manager = DBManager()
         self.accounts = []
         self.cards = []
 
+        # 数据缓存（避免每次刷新都重新调用 API）
+        self._cached_browsers = []
+        self._cached_account_map = {}
+        self._cached_group_names = {}
+        self._all_account_data = []
+
         self._init_ui()
-        self._load_cards()
-        self._load_accounts()
+        # 延迟异步加载数据
+        QTimer.singleShot(100, self._start_async_load)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -273,6 +410,48 @@ class BindCardAIDialog(QDialog):
         self.tree.setRootIsDecorated(True)
         self.tree.setIndentation(15)
         self.tree.itemChanged.connect(lambda: self._update_selection_count())
+
+        # 骨架屏加载覆盖层
+        self.tree_loading_overlay = QWidget(self.tree)
+        self.tree_loading_overlay.setStyleSheet("""
+            QWidget {
+                background-color: rgba(255, 255, 255, 0.95);
+            }
+        """)
+        overlay_layout = QVBoxLayout(self.tree_loading_overlay)
+        overlay_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.loading_label = QLabel("⏳ 正在加载数据...")
+        self.loading_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #666;
+                padding: 20px;
+            }
+        """)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        overlay_layout.addWidget(self.loading_label)
+
+        self.tree_loading_progress = QProgressBar()
+        self.tree_loading_progress.setRange(0, 100)
+        self.tree_loading_progress.setValue(0)
+        self.tree_loading_progress.setFixedWidth(200)
+        self.tree_loading_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 5px;
+                text-align: center;
+                height: 16px;
+            }
+            QProgressBar::chunk {
+                background-color: #E65100;
+                border-radius: 4px;
+            }
+        """)
+        overlay_layout.addWidget(self.tree_loading_progress, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.tree_loading_overlay.hide()  # 默认隐藏
+
         list_layout.addWidget(self.tree)
 
         layout.addWidget(list_group)
@@ -307,9 +486,80 @@ class BindCardAIDialog(QDialog):
 
         layout.addLayout(btn_layout)
 
-    def _load_cards(self):
-        """加载卡片数据"""
-        self.cards = self.db_manager.get_all_cards()
+    def _start_async_load(self):
+        """启动异步数据加载"""
+        self._show_loading(True)
+        self.tree.clear()
+
+        # 清理旧线程
+        if self.load_data_worker is not None:
+            if self.load_data_worker.isRunning():
+                self.load_data_worker.stop()
+                try:
+                    self.load_data_worker.progress_signal.disconnect()
+                    self.load_data_worker.finished_signal.disconnect()
+                    self.load_data_worker.log_signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                self.load_data_worker.wait(1000)
+            self.load_data_worker = None
+
+        self.load_data_worker = LoadDataWorker(self.db_manager)
+        self.load_data_worker.progress_signal.connect(self._on_load_progress)
+        self.load_data_worker.finished_signal.connect(self._on_load_finished)
+        self.load_data_worker.log_signal.connect(self._log)
+        self.load_data_worker.start()
+
+    def _show_loading(self, show: bool):
+        """显示/隐藏加载状态"""
+        if show:
+            def adjust_overlay():
+                self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
+            QTimer.singleShot(10, adjust_overlay)
+            self.tree_loading_progress.setValue(0)
+            self.loading_label.setText("⏳ 正在加载数据...")
+            self.tree_loading_overlay.show()
+            self.tree_loading_overlay.raise_()
+            # 禁用刷新按钮
+            self.refresh_btn.setEnabled(False)
+        else:
+            self.tree_loading_overlay.hide()
+            self.refresh_btn.setEnabled(True)
+
+    def _on_load_progress(self, current: int, total: int, message: str):
+        """加载进度更新"""
+        if total > 0:
+            pct = int(current / total * 100)
+            self.tree_loading_progress.setValue(pct)
+            self.loading_label.setText(f"⏳ {message}")
+
+    def _on_load_finished(self, result: dict):
+        """加载完成回调"""
+        try:
+            # 更新缓存
+            self.cards = result.get('cards', [])
+            self._cached_browsers = result.get('cached_browsers', [])
+            self._cached_account_map = result.get('cached_account_map', {})
+            self._cached_group_names = result.get('cached_group_names', {})
+            self._all_account_data = result.get('all_account_data', [])
+
+            if result.get('error'):
+                self._log(f"⚠️ 加载数据时发生错误: {result.get('error')}")
+
+            # 更新卡片信息标签
+            self._update_card_info_label()
+
+            # 填充账号树
+            self._populate_account_tree()
+
+        except Exception as e:
+            self._log(f"❌ 处理加载结果失败: {e}")
+            traceback.print_exc()
+        finally:
+            self._show_loading(False)
+
+    def _update_card_info_label(self):
+        """更新卡片信息标签（使用缓存数据）"""
         if self.cards:
             card_count = len(self.cards)
             first_card = self.cards[0]
@@ -320,134 +570,74 @@ class BindCardAIDialog(QDialog):
             self.card_info_label.setText("⚠️ 未找到卡片数据，请在「配置管理 → 卡片管理」中添加")
             self.card_info_label.setStyleSheet("color: #f44336;")
 
-    def _load_accounts(self):
-        """从浏览器列表加载账号（按分组显示）"""
+    def _populate_account_tree(self):
+        """填充账号树（使用缓存数据）"""
         self.tree.clear()
         self.accounts = []
 
-        try:
-            # 获取数据库账号（用于获取密码等信息）
-            db_accounts = self.db_manager.get_all_accounts()
-            account_map = {acc['email']: acc for acc in db_accounts}
+        # 按分组组织账号
+        grouped = {}
+        for account_data in self._all_account_data:
+            gid = account_data.get('group_id', 0)
+            if gid not in grouped:
+                grouped[gid] = []
+            grouped[gid].append(account_data)
 
-            # 获取分组列表
-            all_groups = get_group_list() or []
-            group_names = {}
-            for g in all_groups:
-                gid = g.get('id')
-                title = g.get('title', '')
-                # 清理不可显示字符
-                clean_title = ''.join(c for c in str(title) if c.isprintable())
-                if not clean_title or '\ufffd' in clean_title:
-                    clean_title = f"分组 {gid}"
-                group_names[gid] = clean_title
-            group_names[0] = "未分组"
-            group_names[1] = "默认分组"
+        # 创建树形结构
+        total_count = 0
 
-            # 获取浏览器列表
-            browsers = get_browser_list(page=1, limit=1000) or []
+        for gid in sorted(grouped.keys()):
+            account_list = grouped[gid]
+            if not account_list:
+                continue  # 跳过空分组
 
-            # 按分组组织浏览器
-            grouped = {gid: [] for gid in group_names.keys()}
-            for browser in browsers:
-                gid = browser.get('group_id', 0) or 0
-                if gid not in grouped:
-                    grouped[gid] = []
-                    gname = browser.get('group_name', '') or ''
-                    clean_gname = ''.join(c for c in str(gname) if c.isprintable())
-                    if not clean_gname or '\ufffd' in clean_gname:
-                        clean_gname = f"分组 {gid}"
-                    group_names[gid] = clean_gname
+            group_name = self._cached_group_names.get(gid, f"分组 {gid}")
 
-                browser_id = browser.get('id', '') or browser.get('profile_id', '')
-                browser_name = browser.get('name', '')
+            # 分组节点
+            group_item = QTreeWidgetItem(self.tree)
+            group_item.setText(0, "")
+            group_item.setText(1, f"📁 {group_name} ({len(account_list)})")
+            group_item.setFlags(
+                group_item.flags() |
+                Qt.ItemFlag.ItemIsAutoTristate |
+                Qt.ItemFlag.ItemIsUserCheckable
+            )
+            group_item.setCheckState(0, Qt.CheckState.Unchecked)
+            group_item.setExpanded(True)
+            group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
 
-                # 从名称或备注中提取邮箱
-                email = browser_name
-                note = browser.get('note', '') or ''
-                if '----' in note:
-                    email = note.split('----')[0].strip()
-                elif '----' in browser_name:
-                    email = browser_name.split('----')[0].strip()
+            # 设置分组行样式
+            font = group_item.font(1)
+            font.setBold(True)
+            group_item.setFont(1, font)
 
-                if '@' not in email:
-                    continue
+            # 账号子节点
+            for account_data in account_list:
+                email = account_data['email']
+                browser_id = account_data['browser_id']
 
-                # 获取对应的账号信息
-                account = account_map.get(email, {})
+                child = QTreeWidgetItem(group_item)
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.CheckState.Checked)
+                child.setText(1, email)
+                child.setText(2, browser_id)
+                child.setText(3, "待处理")
+                child.setText(4, "-")  # 卡片将在执行时动态分配
+                child.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "browser",
+                    "data": account_data
+                })
 
-                # 只处理 verified 状态的账号（已验证未绑卡）
-                status = account.get('status', '')
-                if status != 'verified':
-                    continue
+                self.accounts.append(account_data)
+                total_count += 1
 
-                account_data = {
-                    'browser_id': str(browser_id),
-                    'email': email,
-                    'password': account.get('password', ''),
-                    'secret': account.get('secret', '') or account.get('secret_key', ''),
-                }
-                grouped[gid].append(account_data)
-
-            # 创建树形结构
-            total_count = 0
-
-            for gid in sorted(grouped.keys()):
-                account_list = grouped[gid]
-                if not account_list:
-                    continue  # 跳过空分组
-
-                group_name = group_names.get(gid, f"分组 {gid}")
-
-                # 分组节点
-                group_item = QTreeWidgetItem(self.tree)
-                group_item.setText(0, "")
-                group_item.setText(1, f"📁 {group_name} ({len(account_list)})")
-                group_item.setFlags(
-                    group_item.flags() |
-                    Qt.ItemFlag.ItemIsAutoTristate |
-                    Qt.ItemFlag.ItemIsUserCheckable
-                )
-                group_item.setCheckState(0, Qt.CheckState.Unchecked)
-                group_item.setExpanded(True)
-                group_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "group", "id": gid})
-
-                # 设置分组行样式
-                font = group_item.font(1)
-                font.setBold(True)
-                group_item.setFont(1, font)
-
-                # 账号子节点
-                for account_data in account_list:
-                    email = account_data['email']
-                    browser_id = account_data['browser_id']
-
-                    child = QTreeWidgetItem(group_item)
-                    child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    child.setCheckState(0, Qt.CheckState.Checked)
-                    child.setText(1, email)
-                    child.setText(2, browser_id)
-                    child.setText(3, "待处理")
-                    child.setText(4, "-")  # 卡片将在执行时动态分配
-                    child.setData(0, Qt.ItemDataRole.UserRole, {
-                        "type": "browser",
-                        "data": account_data
-                    })
-
-                    self.accounts.append(account_data)
-                    total_count += 1
-
-            self._log(f"加载完成：{total_count} 个 verified 账号，{len(self.cards)} 张卡片")
-            self._update_selection_count()
-
-        except Exception as e:
-            self._log(f"❌ 加载账号失败: {e}")
-            traceback.print_exc()
+        self._log(f"加载完成：{total_count} 个 verified 账号，{len(self.cards)} 张卡片")
+        self._update_selection_count()
 
     def _refresh_all(self):
-        """刷新所有数据"""
-        self._load_cards()
-        self._load_accounts()
+        """刷新所有数据（异步）"""
+        self._log("正在刷新数据...")
+        self._start_async_load()
 
     def _select_all(self):
         """全选"""
@@ -630,10 +820,21 @@ class BindCardAIDialog(QDialog):
 
     def closeEvent(self, event):
         """关闭窗口时停止工作线程"""
+        # 停止数据加载线程
+        if self.load_data_worker and self.load_data_worker.isRunning():
+            self.load_data_worker.stop()
+            self.load_data_worker.wait(1000)
+        # 停止任务处理线程
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait(3000)
         event.accept()
+
+    def resizeEvent(self, event):
+        """窗口大小变化时调整覆盖层"""
+        super().resizeEvent(event)
+        if hasattr(self, 'tree_loading_overlay') and self.tree_loading_overlay.isVisible():
+            self.tree_loading_overlay.setGeometry(0, 0, self.tree.width(), self.tree.height())
 
 
 # 独立运行入口
