@@ -520,11 +520,16 @@ class BindCardAIDialog(QDialog):
             self.loading_label.setText("⏳ 正在加载数据...")
             self.tree_loading_overlay.show()
             self.tree_loading_overlay.raise_()
-            # 禁用刷新按钮
+            # 禁用工具栏按钮
             self.refresh_btn.setEnabled(False)
+            self.select_all_btn.setEnabled(False)
+            self.deselect_all_btn.setEnabled(False)
         else:
             self.tree_loading_overlay.hide()
+            # 恢复工具栏按钮
             self.refresh_btn.setEnabled(True)
+            self.select_all_btn.setEnabled(True)
+            self.deselect_all_btn.setEnabled(True)
 
     def _on_load_progress(self, current: int, total: int, message: str):
         """加载进度更新"""
