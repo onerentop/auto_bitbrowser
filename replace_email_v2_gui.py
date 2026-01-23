@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QBrush
 
-from ix_api import get_group_list
+from ix_api import get_group_list, update_profile
 from ix_window import get_browser_list
 from database import DBManager
 from core.config_manager import ConfigManager
@@ -191,6 +191,24 @@ class ReplaceEmailV2Worker(QThread):
                         if success:
                             # 绑定成功
                             RecoveryEmailManager.record_bind_success(email, new_email)
+
+                            # 同步更新数据库 accounts 表的 recovery_email 字段
+                            try:
+                                DBManager.update_account_recovery_email(email, new_email)
+                                self._log(f"[{index + 1}] 📝 数据库已更新: {email} → {new_email}")
+                            except Exception as db_err:
+                                self._log(f"[{index + 1}] ⚠️ 数据库更新失败: {db_err}")
+
+                            # 同步更新 ixBrowser 窗口备注
+                            try:
+                                password = account.get('password', '')
+                                secret = account.get('secret', '')
+                                new_note = f"{email}----{password}----{new_email}----{secret}"
+                                update_profile(int(browser_id), note=new_note)
+                                self._log(f"[{index + 1}] 📝 窗口备注已更新")
+                            except Exception as note_err:
+                                self._log(f"[{index + 1}] ⚠️ 窗口备注更新失败: {note_err}")
+
                             self._log(f"[{index + 1}] ✅ {email}: 绑定成功 → {new_email}")
                             self.progress_signal.emit(browser_id, "成功", f"已绑定: {new_email}", new_email)
                             self.stats['success'] += 1

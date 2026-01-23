@@ -202,6 +202,26 @@ class DBManager:
         DBManager.upsert_account(email, status=status, message=message)
 
     @staticmethod
+    def update_account_recovery_email(email: str, recovery_email: str) -> bool:
+        """
+        更新账号的辅助邮箱
+
+        Args:
+            email: 账号邮箱
+            recovery_email: 新的辅助邮箱
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            DBManager.upsert_account(email, recovery_email=recovery_email)
+            print(f"[DB] 更新辅助邮箱: {email} → {recovery_email}")
+            return True
+        except Exception as e:
+            print(f"[DB ERROR] update_account_recovery_email 失败: {e}")
+            return False
+
+    @staticmethod
     def get_accounts_by_status(status):
         with lock:
             conn = DBManager.get_connection()
