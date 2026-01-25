@@ -358,7 +358,7 @@ async def run_with_ixbrowser(
     """
     # 导入 ixBrowser API
     try:
-        from ix_api import openBrowser, closeBrowser
+        from services.ix_api import openBrowser, closeBrowser
     except ImportError:
         return TaskResult.failure_result("无法导入 ix_api 模块")
 
