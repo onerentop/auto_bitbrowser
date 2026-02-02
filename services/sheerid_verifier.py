@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://batch.1key.me"
+BASE_URL = "https://neigui.1key.me"
 DEFAULT_API_KEY = ""  # 请在GUI中输入你的SheerID API密钥
 
 
