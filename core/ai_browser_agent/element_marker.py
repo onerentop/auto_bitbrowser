@@ -33,6 +33,13 @@ class MarkedElement:
     attributes: Dict[str, str] = field(default_factory=dict)  # 重要属性
     is_input: bool = False                     # 是否是输入元素
     is_visible: bool = True                    # 是否可见
+    # V2.3: Backend Node ID 支持 (借鉴 browser-use)
+    backend_node_id: Optional[int] = None      # CDP Backend Node ID（用于精确点击）
+    node_id: Optional[int] = None              # CDP Node ID（会话内有效）
+    # V2.3: 可交互性检测
+    is_clickable: bool = False                 # 是否可点击（多层检测结果）
+    cursor_style: Optional[str] = None         # CSS cursor 样式
+    has_event_listener: bool = False           # 是否有事件监听器
 
     def to_summary(self) -> str:
         """生成元素摘要文本"""

@@ -11,3 +11,4 @@ deep-translator
 selenium
 imap_tools
 openai
+anthropic

@@ -1,7 +1,7 @@
 """
 自动踢出非本机登录设备
 
-使用 Gemini Vision AI Agent 自动完成操作
+使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成操作
 1. 进入设备管理页面
 2. 识别本机设备（"您的当前会话"）
 3. 逐个踢出其他设备
@@ -24,7 +24,8 @@ async def auto_kick_devices(
     max_steps: int = 50,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
-    model: str = "gemini-2.5-flash",
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
 ) -> Tuple[bool, str, int]:
     """
     踢出非本机登录设备
@@ -34,9 +35,10 @@ async def auto_kick_devices(
         account_info: 账号信息 {'email', 'password', 'secret'}
         close_after: 完成后是否关闭浏览器
         max_steps: 最大执行步骤数
-        api_key: API Key（可选，默认从环境变量 GEMINI_API_KEY 读取）
-        base_url: API Base URL（可选，默认使用 Gemini OpenAI 兼容 API）
-        model: 使用的模型（默认 gemini-2.5-flash）
+        api_key: API Key（可选，默认从配置读取）
+        base_url: API Base URL（可选，用于第三方服务）
+        model: 使用的模型（可选，默认从配置读取）
+        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
 
     Returns:
         (success: bool, message: str, kicked_count: int)
@@ -46,6 +48,7 @@ async def auto_kick_devices(
 
     Environment Variables:
         GEMINI_API_KEY: Gemini API 密钥
+        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
@@ -90,6 +93,7 @@ async def auto_kick_devices(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            provider=provider,
         )
 
         # 执行踢出设备任务

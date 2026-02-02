@@ -236,7 +236,8 @@ class ModifyAuthenticatorWorker(QThread):
                         self.close_after,
                         api_key=self.ai_config.get('api_key'),
                         base_url=self.ai_config.get('base_url'),
-                        model=self.ai_config.get('model', 'gemini-2.5-flash'),
+                        model=self.ai_config.get('model'),
+                        provider=self.ai_config.get('provider'),
                         max_steps=self.ai_config.get('max_steps', 30),
                         save_to_file=self.save_to_file,
                         output_file=self.output_file,
@@ -775,6 +776,7 @@ class ModifyAuthenticatorDialog(QDialog):
             'api_key': api_key or None,
             'base_url': ConfigManager.get_ai_base_url() or None,
             'model': ConfigManager.get_ai_model(),
+            'provider': ConfigManager.get_ai_default_provider(),
             'max_steps': ConfigManager.get_ai_max_steps(),
         }
 

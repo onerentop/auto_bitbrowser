@@ -104,7 +104,7 @@ TASK_PROMPT_TEMPLATE = """## 当前任务
 - 当前 2FA 验证码: {totp_code}
 
 **重要**: 如果页面要求输入 Google Authenticator 验证码/2FA 验证码，请直接使用上面的「当前 2FA 验证码」填入！
-
+{elements_section}
 **额外参数**:
 {params}
 
@@ -116,7 +116,8 @@ TASK_PROMPT_TEMPLATE = """## 当前任务
 
 步骤 {current_step}/{max_steps}
 
-请分析截图中的页面内容，决定下一步操作。"""
+请分析截图中的页面内容，决定下一步操作。
+如果提供了页面元素列表，可以使用元素 ID（如 [1]、[2]）精确指定点击目标。"""
 
 
 # 特定任务的提示词
@@ -735,6 +736,7 @@ def build_task_prompt(
     current_step: int,
     max_steps: int,
     task_type: str = None,
+    elements_summary: str = "",
 ) -> str:
     """
     构建任务提示词
@@ -747,6 +749,7 @@ def build_task_prompt(
         current_step: 当前步骤
         max_steps: 最大步骤数
         task_type: 任务类型（用于加载特定提示词）
+        elements_summary: 页面元素摘要（SoM 提取的可交互元素）
 
     Returns:
         完整的任务提示词
@@ -765,6 +768,18 @@ def build_task_prompt(
             print(f"[AI Agent] 生成 TOTP 验证码失败: {e}")
             totp_code = f"生成失败: {str(e)}"
 
+    # 构建元素摘要部分
+    if elements_summary:
+        elements_section = f"""
+
+## 页面元素（使用 [ID] 可精确定位）
+
+{elements_summary}
+
+"""
+    else:
+        elements_section = "\n"
+
     # 基础任务提示 - 密码和密钥需要传递给 AI 以便填写表单
     prompt = TASK_PROMPT_TEMPLATE.format(
         goal=goal,
@@ -772,6 +787,7 @@ def build_task_prompt(
         password=account.get("password", "未提供"),
         secret=account.get("secret", "未提供"),
         totp_code=totp_code,
+        elements_section=elements_section,
         params=_format_params(params),
         history=history or "无历史操作",
         current_step=current_step,

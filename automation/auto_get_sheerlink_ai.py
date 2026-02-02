@@ -1,7 +1,7 @@
 """
 自动获取 Google One AI Student SheerID 验证链接 (AI Agent 版)
 
-使用 Gemini Vision AI Agent 自动检测账号状态并提取 SheerID 链接
+使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动检测账号状态并提取 SheerID 链接
 支持状态检测: subscribed, verified, link_ready, ineligible
 """
 
@@ -24,7 +24,8 @@ async def auto_get_sheerlink_ai(
     max_steps: int = 20,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
-    model: str = "gemini-2.5-flash",
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
     save_to_file: bool = True,
 ) -> Tuple[bool, str, Optional[str], Optional[str]]:
     """
@@ -35,9 +36,10 @@ async def auto_get_sheerlink_ai(
         account_info: 账号信息 {'email', 'password', 'secret'}
         close_after: 完成后是否关闭浏览器
         max_steps: 最大执行步骤数
-        api_key: API Key（可选，默认从环境变量 GEMINI_API_KEY 读取）
-        base_url: API Base URL（可选，默认使用 Gemini OpenAI 兼容 API）
-        model: 使用的模型（默认 gemini-2.5-flash）
+        api_key: API Key（可选，默认从配置读取）
+        base_url: API Base URL（可选，用于第三方服务）
+        model: 使用的模型（可选，默认从配置读取）
+        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
         save_to_file: 是否保存到对应状态文件
 
     Returns:
@@ -56,6 +58,7 @@ async def auto_get_sheerlink_ai(
 
     Environment Variables:
         GEMINI_API_KEY: Gemini API 密钥
+        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
@@ -101,6 +104,7 @@ async def auto_get_sheerlink_ai(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            provider=provider,
         )
 
         task_result = await agent.execute_task(

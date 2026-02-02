@@ -2,6 +2,11 @@
 ixBrowser API 封装模块
 
 API 文档: https://www.ixbrowser.com/doc/v2/local-api/en
+
+特性:
+- 自动重试机制 (TLS 连接错误、网络断开等)
+- 指数退避策略
+- 客户端自动重置
 """
 import time
 from ixbrowser_local_api import IXBrowserClient
@@ -9,6 +14,39 @@ from ixbrowser_local_api.entities import Profile, Proxy
 
 # 全局客户端实例
 _client = None
+
+# 重试配置
+MAX_RETRIES = 3
+BASE_DELAY = 1.0  # 基础延迟秒数
+BACKOFF_FACTOR = 2.0  # 指数退避因子
+
+# 可重试的错误关键词
+RETRYABLE_ERRORS = [
+    'socket disconnected',
+    'tls connection',
+    'connection refused',
+    'connection reset',
+    'network',
+    'timeout',
+    'process not found',
+    'econnrefused',
+    'econnreset',
+    'etimedout',
+]
+
+
+def _is_retryable_error(error_msg: str) -> bool:
+    """判断是否为可重试的错误"""
+    if not error_msg:
+        return False
+    error_lower = error_msg.lower()
+    return any(keyword in error_lower for keyword in RETRYABLE_ERRORS)
+
+
+def _reset_client():
+    """重置客户端连接"""
+    global _client
+    _client = None
 
 
 def get_client() -> IXBrowserClient:
@@ -19,12 +57,13 @@ def get_client() -> IXBrowserClient:
     return _client
 
 
-def openBrowser(profile_id):
+def openBrowser(profile_id, max_retries: int = MAX_RETRIES):
     """
-    打开浏览器窗口
+    打开浏览器窗口（支持自动重试）
 
     Args:
         profile_id: Profile ID (整数)
+        max_retries: 最大重试次数
 
     Returns:
         标准格式响应:
@@ -37,114 +76,235 @@ def openBrowser(profile_id):
             }
         }
     """
-    client = get_client()
-
     # 确保 profile_id 是整数类型
     profile_id = int(profile_id) if profile_id else None
     if not profile_id:
         return {'success': False, 'msg': 'Invalid profile_id', 'code': -1}
 
-    print(f"正在打开窗口 {profile_id}...")
-    result = client.open_profile(
-        profile_id,
-        cookies_backup=False,
-        load_profile_info_page=False
-    )
+    last_error = None
 
-    if result is None:
-        print(f"窗口打开失败: {client.message}")
-        return {
-            'success': False,
-            'msg': client.message,
-            'code': client.code
-        }
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    # 构建标准响应格式
-    response = {
-        'success': True,
-        'data': {
-            'ws': result.get('ws', ''),
-            'http': result.get('debugging_address', ''),
-            'driver': result.get('webdriver', ''),
-            'pid': result.get('pid', 0),
-            'profile_id': result.get('profile_id', profile_id)
-        }
+            print(f"正在打开窗口 {profile_id}..." + (f" (重试 {attempt}/{max_retries})" if attempt > 0 else ""))
+            result = client.open_profile(
+                profile_id,
+                cookies_backup=False,
+                load_profile_info_page=False
+            )
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                # 检查是否可重试
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"窗口打开失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()  # 重置客户端
+                    time.sleep(delay)
+                    continue
+
+                print(f"窗口打开失败: {error_msg}")
+                return {
+                    'success': False,
+                    'msg': error_msg,
+                    'code': client.code
+                }
+
+            # 构建标准响应格式
+            response = {
+                'success': True,
+                'data': {
+                    'ws': result.get('ws', ''),
+                    'http': result.get('debugging_address', ''),
+                    'driver': result.get('webdriver', ''),
+                    'pid': result.get('pid', 0),
+                    'profile_id': result.get('profile_id', profile_id)
+                }
+            }
+
+            print(f"窗口打开成功: profile_id={profile_id}")
+            return response
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"窗口打开异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"窗口打开异常: {last_error}")
+            return {
+                'success': False,
+                'msg': last_error,
+                'code': -1
+            }
+
+    # 所有重试都失败
+    return {
+        'success': False,
+        'msg': f"重试 {max_retries} 次后仍然失败: {last_error}",
+        'code': -1
     }
 
-    print(f"窗口打开响应: {response}")
-    return response
 
-
-def closeBrowser(profile_id):
+def closeBrowser(profile_id, max_retries: int = MAX_RETRIES):
     """
-    关闭浏览器窗口
+    关闭浏览器窗口（支持自动重试）
 
     Args:
         profile_id: Profile ID (整数)
+        max_retries: 最大重试次数
     """
-    client = get_client()
-
     # 确保 profile_id 是整数类型
     profile_id = int(profile_id) if profile_id else None
     if not profile_id:
         return {'success': False, 'msg': 'Invalid profile_id'}
 
-    print(f"正在关闭窗口 {profile_id}...")
-    result = client.close_profile(profile_id)
+    last_error = None
 
-    if result is None:
-        print(f"窗口关闭失败: {client.message}")
-        return {
-            'success': False,
-            'msg': client.message
-        }
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    print(f"窗口关闭成功")
-    return {'success': True}
+            print(f"正在关闭窗口 {profile_id}..." + (f" (重试 {attempt}/{max_retries})" if attempt > 0 else ""))
+            result = client.close_profile(profile_id)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                # 检查是否可重试
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"窗口关闭失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                # "Process not found" 视为成功（窗口已经关闭）
+                if 'process not found' in error_msg.lower():
+                    print(f"窗口 {profile_id} 已经关闭")
+                    return {'success': True, 'msg': '窗口已关闭'}
+
+                print(f"窗口关闭失败: {error_msg}")
+                return {
+                    'success': False,
+                    'msg': error_msg
+                }
+
+            print(f"窗口关闭成功: profile_id={profile_id}")
+            return {'success': True}
+
+        except Exception as e:
+            last_error = str(e)
+
+            # "Process not found" 视为成功
+            if 'process not found' in last_error.lower():
+                print(f"窗口 {profile_id} 已经关闭")
+                return {'success': True, 'msg': '窗口已关闭'}
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"窗口关闭异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"窗口关闭异常: {last_error}")
+            return {
+                'success': False,
+                'msg': last_error
+            }
+
+    return {
+        'success': False,
+        'msg': f"重试 {max_retries} 次后仍然失败: {last_error}"
+    }
 
 
-def deleteBrowser(profile_id):
+def deleteBrowser(profile_id, max_retries: int = MAX_RETRIES):
     """
-    删除浏览器窗口
+    删除浏览器窗口（支持自动重试）
 
     Args:
         profile_id: Profile ID (整数)
+        max_retries: 最大重试次数
     """
-    client = get_client()
-
     # 确保 profile_id 是整数类型
     profile_id = int(profile_id) if profile_id else None
     if not profile_id:
         return {'success': False, 'msg': 'Invalid profile_id'}
 
-    print(f"正在删除窗口 {profile_id}...")
-    result = client.delete_profile(profile_id)
+    last_error = None
 
-    if result is None:
-        print(f"窗口删除失败: {client.message}")
-        return {
-            'success': False,
-            'msg': client.message
-        }
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    print(f"窗口删除成功")
-    return {'success': True}
+            print(f"正在删除窗口 {profile_id}..." + (f" (重试 {attempt}/{max_retries})" if attempt > 0 else ""))
+            result = client.delete_profile(profile_id)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"窗口删除失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"窗口删除失败: {error_msg}")
+                return {
+                    'success': False,
+                    'msg': error_msg
+                }
+
+            print(f"窗口删除成功")
+            return {'success': True}
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"窗口删除异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"窗口删除异常: {last_error}")
+            return {
+                'success': False,
+                'msg': last_error
+            }
+
+    return {
+        'success': False,
+        'msg': f"重试 {max_retries} 次后仍然失败: {last_error}"
+    }
 
 
-def createBrowser(name: str = None, proxy_config: dict = None, **kwargs):
+def createBrowser(name: str = None, proxy_config: dict = None, max_retries: int = MAX_RETRIES, **kwargs):
     """
-    创建新的浏览器窗口
+    创建新的浏览器窗口（支持自动重试）
 
     Args:
         name: 窗口名称
         proxy_config: 代理配置 {'type': 'socks5', 'host': '', 'port': '', 'username': '', 'password': ''}
+        max_retries: 最大重试次数
         **kwargs: 其他配置参数
 
     Returns:
         新创建的 profile_id 或 None
     """
-    client = get_client()
-
     profile = Profile()
     profile.name = name or f"Profile_{int(time.time())}"
 
@@ -170,77 +330,172 @@ def createBrowser(name: str = None, proxy_config: dict = None, **kwargs):
     if kwargs.get('group_id'):
         profile.group_id = kwargs['group_id']
 
-    print(f"正在创建窗口: {profile.name}...")
-    result = client.create_profile(profile)
+    last_error = None
 
-    if result is None:
-        print(f"窗口创建失败: {client.message}")
-        return None
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    profile_id = result.get('profile_id')
-    print(f"窗口创建成功，ID: {profile_id}")
-    return profile_id
+            print(f"正在创建窗口: {profile.name}..." + (f" (重试 {attempt}/{max_retries})" if attempt > 0 else ""))
+            result = client.create_profile(profile)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"窗口创建失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"窗口创建失败: {error_msg}")
+                return None
+
+            profile_id = result.get('profile_id')
+            print(f"窗口创建成功，ID: {profile_id}")
+            return profile_id
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"窗口创建异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"窗口创建异常: {last_error}")
+            return None
+
+    print(f"窗口创建重试 {max_retries} 次后仍然失败: {last_error}")
+    return None
 
 
-def get_profile_list(page: int = 1, limit: int = 50, group_id: int = 0, keyword: str = None):
+def get_profile_list(page: int = 1, limit: int = 50, group_id: int = 0, keyword: str = None, max_retries: int = MAX_RETRIES):
     """
-    获取 Profile 列表
+    获取 Profile 列表（支持自动重试）
 
     Args:
         page: 页码 (从1开始)
         limit: 每页数量
         group_id: 分组ID (0=全部)
         keyword: 搜索关键词
+        max_retries: 最大重试次数
 
     Returns:
         Profile 列表
     """
-    client = get_client()
+    last_error = None
 
-    data = client.get_profile_list(
-        page=page,
-        limit=limit,
-        group_id=group_id,
-        keyword=keyword
-    )
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    if data is None:
-        print(f"获取列表失败: {client.message}")
-        return []
+            data = client.get_profile_list(
+                page=page,
+                limit=limit,
+                group_id=group_id,
+                keyword=keyword
+            )
 
-    return data
+            if data is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"获取列表失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"获取列表失败: {error_msg}")
+                return []
+
+            return data
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"获取列表异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"获取列表异常: {last_error}")
+            return []
+
+    print(f"获取列表重试 {max_retries} 次后仍然失败")
+    return []
 
 
-def get_profile_info(profile_id: int):
+def get_profile_info(profile_id: int, max_retries: int = MAX_RETRIES):
     """
-    获取单个 Profile 的详细信息
+    获取单个 Profile 的详细信息（支持自动重试）
 
     Args:
         profile_id: Profile ID
+        max_retries: 最大重试次数
 
     Returns:
         Profile 信息字典或 None
     """
-    client = get_client()
+    last_error = None
 
-    data = client.get_profile_list(profile_id=profile_id)
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    if data is None or len(data) == 0:
-        return None
+            data = client.get_profile_list(profile_id=profile_id)
 
-    return data[0]
+            if data is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"获取窗口信息失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                return None
+
+            if len(data) == 0:
+                return None
+
+            return data[0]
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"获取窗口信息异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"获取窗口信息异常: {last_error}")
+            return None
+
+    return None
 
 
-def update_profile(profile_id: int, **kwargs):
+def update_profile(profile_id: int, max_retries: int = MAX_RETRIES, **kwargs):
     """
-    更新 Profile 信息
+    更新 Profile 信息（支持自动重试）
 
     Args:
         profile_id: Profile ID
+        max_retries: 最大重试次数
         **kwargs: 要更新的字段
     """
-    client = get_client()
-
     profile = Profile()
     profile.profile_id = profile_id
 
@@ -255,20 +510,53 @@ def update_profile(profile_id: int, **kwargs):
     if 'tfa_secret' in kwargs:
         profile.tfa_secret = kwargs['tfa_secret']
 
-    result = client.update_profile(profile)
+    last_error = None
 
-    if result is None:
-        print(f"更新失败: {client.message}")
-        return False
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    return True
+            result = client.update_profile(profile)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"更新失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"更新失败: {error_msg}")
+                return False
+
+            return True
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"更新异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"更新异常: {last_error}")
+            return False
+
+    print(f"更新重试 {max_retries} 次后仍然失败")
+    return False
 
 
 def update_profile_proxy(profile_id: int, proxy_type: str = 'direct',
                          proxy_ip: str = None, proxy_port: str = None,
-                         proxy_user: str = None, proxy_password: str = None):
+                         proxy_user: str = None, proxy_password: str = None,
+                         max_retries: int = MAX_RETRIES):
     """
-    更新 Profile 的代理设置
+    更新 Profile 的代理设置（支持自动重试）
 
     Args:
         profile_id: Profile ID
@@ -277,62 +565,194 @@ def update_profile_proxy(profile_id: int, proxy_type: str = 'direct',
         proxy_port: 代理端口
         proxy_user: 代理用户名
         proxy_password: 代理密码
+        max_retries: 最大重试次数
     """
-    client = get_client()
+    last_error = None
 
-    result = client.update_profile_to_custom_proxy_mode(
-        profile_id=profile_id,
-        proxy_type=proxy_type,
-        proxy_ip=proxy_ip,
-        proxy_port=proxy_port,
-        proxy_user=proxy_user,
-        proxy_password=proxy_password
-    )
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    if result is None:
-        print(f"代理更新失败: {client.message}")
-        return False
+            result = client.update_profile_to_custom_proxy_mode(
+                profile_id=profile_id,
+                proxy_type=proxy_type,
+                proxy_ip=proxy_ip,
+                proxy_port=proxy_port,
+                proxy_user=proxy_user,
+                proxy_password=proxy_password
+            )
 
-    return True
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"代理更新失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"代理更新失败: {error_msg}")
+                return False
+
+            return True
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"代理更新异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"代理更新异常: {last_error}")
+            return False
+
+    print(f"代理更新重试 {max_retries} 次后仍然失败")
+    return False
 
 
-def copy_profile(profile_id: int, name: str = None, group_id: int = None):
+def copy_profile(profile_id: int, name: str = None, group_id: int = None, max_retries: int = MAX_RETRIES):
     """
-    复制 Profile
+    复制 Profile（支持自动重试）
 
     Args:
         profile_id: 源 Profile ID
         name: 新名称
         group_id: 目标分组ID
+        max_retries: 最大重试次数
 
     Returns:
         新 Profile ID 或 None
     """
-    client = get_client()
+    last_error = None
 
-    result = client.create_profile_by_copying(
-        profile_id=profile_id,
-        name=name,
-        group_id=group_id
-    )
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
 
-    if result is None:
-        print(f"复制失败: {client.message}")
-        return None
+            result = client.create_profile_by_copying(
+                profile_id=profile_id,
+                name=name,
+                group_id=group_id
+            )
 
-    return result.get('profile_id')
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"复制失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"复制失败: {error_msg}")
+                return None
+
+            return result.get('profile_id')
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"复制异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"复制异常: {last_error}")
+            return None
+
+    print(f"复制重试 {max_retries} 次后仍然失败")
+    return None
 
 
-def get_group_list(page: int = 1, limit: int = 100):
-    """获取分组列表"""
-    client = get_client()
-    return client.get_group_list(page=page, limit=limit)
+def get_group_list(page: int = 1, limit: int = 100, max_retries: int = MAX_RETRIES):
+    """获取分组列表（支持自动重试）"""
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
+            result = client.get_group_list(page=page, limit=limit)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"获取分组列表失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                return []
+
+            return result
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"获取分组列表异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"获取分组列表异常: {last_error}")
+            return []
+
+    return []
 
 
-def create_group(name: str, sort: int = 0):
-    """创建分组"""
-    client = get_client()
-    return client.create_group(name=name, sort=sort)
+def create_group(name: str, sort: int = 0, max_retries: int = MAX_RETRIES):
+    """创建分组（支持自动重试）"""
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            client = get_client()
+            result = client.create_group(name=name, sort=sort)
+
+            if result is None:
+                error_msg = client.message or "Unknown error"
+                last_error = error_msg
+
+                if attempt < max_retries and _is_retryable_error(error_msg):
+                    delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                    print(f"创建分组失败: {error_msg}，{delay:.1f}秒后重试...")
+                    _reset_client()
+                    time.sleep(delay)
+                    continue
+
+                print(f"创建分组失败: {error_msg}")
+                return None
+
+            return result
+
+        except Exception as e:
+            last_error = str(e)
+
+            if attempt < max_retries and _is_retryable_error(last_error):
+                delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt)
+                print(f"创建分组异常: {last_error}，{delay:.1f}秒后重试...")
+                _reset_client()
+                time.sleep(delay)
+                continue
+
+            print(f"创建分组异常: {last_error}")
+            return None
+
+    print(f"创建分组重试 {max_retries} 次后仍然失败")
+    return None
 
 
 # ============ 函数别名 ============

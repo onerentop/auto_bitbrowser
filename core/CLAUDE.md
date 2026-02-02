@@ -1,41 +1,59 @@
 # core Module
 
-> 📍 **Breadcrumb**: [Root](../CLAUDE.md) → core
+> [Root](../CLAUDE.md) > **core**
 
 ## Overview
 
-核心工具模块，提供配置管理、智能重试框架、统一数据解析等基础设施功能。
+Core utilities module. Provides configuration management, intelligent retry framework, unified data parsing, and the AI Browser Agent submodule.
 
 ## Module Structure
 
 ```
 core/
-├── __init__.py           # 模块导出
-├── config_manager.py     # 配置管理器 (单例模式)
-├── data_parser.py        # 统一数据解析器
-└── retry_helper.py       # 智能重试框架
+├── __init__.py           # Module exports
+├── config_manager.py     # Configuration manager (singleton)
+├── data_parser.py        # Unified data parser
+├── retry_helper.py       # Intelligent retry framework
+└── ai_browser_agent/     # AI Browser Agent submodule
+    └── CLAUDE.md         # Submodule documentation
 ```
+
+## Submodule Navigation
+
+| Submodule | Description | CLAUDE.md |
+|-----------|-------------|-----------|
+| ai_browser_agent | Multi-LLM Vision-based browser agent (Gemini, Anthropic) | [ai_browser_agent/CLAUDE.md](ai_browser_agent/CLAUDE.md) |
 
 ## Components
 
 ### ConfigManager (config_manager.py)
 
-**单例模式**的配置管理器，提供 JSON 配置文件的持久化读写。
+**Singleton** configuration manager with JSON file persistence.
 
 **Key Features**:
-- 嵌套 key 支持：`ConfigManager.get("timeouts.page_load", 30)`
-- 敏感信息加密：Base64 + XOR 混淆
-- 线程安全：使用 `threading.Lock`
-- 自动合并默认配置
+- Nested key support: `ConfigManager.get("timeouts.page_load", 30)`
+- Sensitive info encryption: Base64 + XOR obfuscation
+- Thread-safe: Uses `threading.Lock`
+- Auto-merge default config on load
 
 **Key Methods**:
 | Method | Description |
 |--------|-------------|
-| `load()` | 加载配置，不存在则创建默认 |
-| `get(key, default)` | 获取配置项 (支持嵌套 key) |
-| `set(key, value)` | 设置配置项并自动保存 |
-| `get_api_key()` | 获取解密后的 SheerID API Key |
-| `set_api_key(key)` | 加密保存 API Key |
+| `load()` | Load config, create default if not exists |
+| `get(key, default)` | Get config value (supports nested key) |
+| `set(key, value)` | Set config value and auto-save |
+| `get_api_key()` | Get decrypted SheerID API Key |
+| `set_api_key(key)` | Encrypt and save API Key |
+| `get_ai_api_key()` | Get decrypted AI API Key (backward compatible) |
+| `set_ai_api_key(key)` | Encrypt and save AI API Key (backward compatible) |
+| `get_ai_default_provider()` | Get default AI provider (gemini/anthropic) |
+| `set_ai_default_provider(provider)` | Set default AI provider |
+| `get_ai_provider_api_key(provider)` | Get API key for specific provider |
+| `set_ai_provider_api_key(provider, key)` | Set API key for specific provider |
+| `get_ai_provider_base_url(provider)` | Get base URL for specific provider |
+| `get_ai_provider_model(provider)` | Get model name for specific provider |
+| `get_llm_config(provider)` | Get full config for create_llm() |
+| `reload()` | Force reload config from file |
 
 **Default Config**:
 ```json
@@ -52,40 +70,64 @@ core/
     "after_offer": 8,
     "after_add_card": 10,
     "after_save": 18
+  },
+  "proxy": {
+    "max_windows_per_ip": 3
+  },
+  "ai_agent": {
+    "default_provider": "gemini",
+    "providers": {
+      "gemini": {
+        "enabled": true,
+        "api_key": "",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-2.5-flash",
+        "timeout": 60
+      },
+      "anthropic": {
+        "enabled": true,
+        "api_key": "",
+        "base_url": "",
+        "model": "claude-sonnet-4-20250514",
+        "timeout": 60
+      }
+    },
+    "max_steps": 25,
+    "max_tokens": 8192
   }
 }
 ```
 
 ### DataParser (data_parser.py)
 
-统一的账号信息解析器，确保所有模块使用一致的解析逻辑。
+Unified account info parser ensuring consistent parsing logic across all modules.
 
 **Supported Formats**:
-- `邮箱----密码----辅助邮箱----2FA密钥`
-- `链接----邮箱----密码----辅助邮箱----2FA密钥`
-- 自动检测分隔符：`----`, `---`, `|`, `,`, `;`, `\t`
+- `email----password----recovery_email----2fa_secret`
+- `link----email----password----recovery_email----2fa_secret`
+- Auto-detect separators: `----`, `---`, `|`, `,`, `;`, `\t`
 
 **Key Functions**:
 | Function | Description |
 |----------|-------------|
-| `parse_account_line(line)` | 解析账号行 → (email, password, recovery, secret, link) |
-| `build_account_line(...)` | 构建账号行字符串 |
+| `parse_account_line(line)` | Parse line -> (email, password, recovery, secret, link) |
+| `build_account_line(...)` | Build account line string |
 
 ### RetryHelper (retry_helper.py)
 
-智能重试框架，支持指数退避策略。
+Intelligent retry framework with exponential backoff.
 
 **Key Classes**:
 | Class | Description |
 |-------|-------------|
-| `RetryHelper` | 支持同步/异步函数的自动重试 |
-| `FailedTaskQueue` | 失败任务队列管理 (持久化到 JSON) |
+| `RetryHelper` | Supports sync/async function retry |
+| `FailedTaskQueue` | Failed task queue management (JSON persistence) |
 
-**RetryHelper Config**:
-- `max_retries`: 最大重试次数 (默认 3)
-- `base_delay`: 基础延迟 (默认 2.0s)
-- `backoff_factor`: 退避因子 (默认 2.0)
-- `max_delay`: 最大延迟 (默认 60.0s)
+**Configuration**:
+- `max_retries`: Maximum retry attempts (default: 3)
+- `base_delay`: Base delay seconds (default: 2.0)
+- `backoff_factor`: Backoff multiplier (default: 2.0)
+- `max_delay`: Maximum delay seconds (default: 60.0)
 
 **Decorators**:
 ```python
@@ -103,30 +145,54 @@ async def my_async_function():
 ## Usage Examples
 
 ```python
-# 配置管理
+# Configuration management
 from core import ConfigManager
 
 timeout = ConfigManager.get("timeouts.page_load", 30)
 ConfigManager.set("default_thread_count", 5)
+api_key = ConfigManager.get_ai_api_key()
 
-# 数据解析
+# Data parsing
 from core import parse_account_line, build_account_line
 
 email, pwd, rec, sec, link = parse_account_line("user@mail.com----pass----backup@mail.com----SECRET")
 line = build_account_line(email, pwd, rec, sec)
 
-# 重试框架
+# Retry framework
 from core import RetryHelper, FailedTaskQueue
 
 helper = RetryHelper(max_retries=3, base_delay=2.0)
 result = await helper.execute_async(async_func, arg1, arg2)
+
+# AI Browser Agent
+from core import AIBrowserAgent, AI_BROWSER_AGENT_AVAILABLE
+
+if AI_BROWSER_AGENT_AVAILABLE:
+    agent = AIBrowserAgent()
+```
+
+## Exports
+
+```python
+from core import (
+    # Configuration
+    ConfigManager,
+    # Retry
+    RetryHelper, FailedTaskQueue, with_retry, with_retry_async,
+    # Data parsing
+    parse_account_line, build_account_line,
+    # AI Browser Agent
+    AIBrowserAgent, VisionAnalyzer, ActionExecutor,
+    ActionType, AgentAction, AgentState, TaskResult, TaskContext,
+    AI_BROWSER_AGENT_AVAILABLE,
+)
 ```
 
 ## Dependencies
 
-- **内部依赖**: 无 (纯基础设施模块)
-- **外部使用**: 被 `auto_bind_card.py`, `run_playwright_google.py`, `create_window_gui.py` 等模块使用
+- **Internal dependencies**: None (pure infrastructure module)
+- **External usage**: Used by `automation/*`, `gui/*`, `services/*`
 
 ---
 
-*Generated by /init-project*
+*Updated: 2026-02-02*

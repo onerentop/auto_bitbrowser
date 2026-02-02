@@ -63,7 +63,7 @@ class VerifyWorkerV2(QThread):
             print(f"[VerifyWorkerV2] 加载 AI 配置失败: {e}")
             self.gemini_api_key = ""
             self.gemini_base_url = ""
-            self.gemini_model = "gemini-2.5-flash"
+            self.gemini_model = ""  # 让 VisionAnalyzer 使用默认模型
 
     def run(self):
         verifier = SheerIDVerifier(api_key=self.api_key)

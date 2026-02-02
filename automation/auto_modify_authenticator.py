@@ -1,7 +1,7 @@
 """
 自动修改 Google 身份验证器 (Authenticator App)
 
-使用 Gemini Vision AI Agent 自动完成操作
+使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成操作
 支持提取新密钥、生成 TOTP 验证码并保存到数据库
 """
 
@@ -39,7 +39,8 @@ async def auto_modify_authenticator(
     max_steps: int = 30,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
-    model: str = "gemini-2.5-flash",
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
     save_to_file: bool = True,
     output_file: str = "已修改密钥.txt",
 ) -> Tuple[bool, str, Optional[str]]:
@@ -51,9 +52,10 @@ async def auto_modify_authenticator(
         account_info: 账号信息 {'email', 'password', 'secret'}
         close_after: 完成后是否关闭浏览器
         max_steps: 最大执行步骤数
-        api_key: API Key（可选，默认从环境变量 GEMINI_API_KEY 读取）
-        base_url: API Base URL（可选，默认使用 Gemini OpenAI 兼容 API）
-        model: 使用的模型（默认 gemini-2.5-flash）
+        api_key: API Key（可选，默认从配置读取）
+        base_url: API Base URL（可选，用于第三方服务）
+        model: 使用的模型（可选，默认从配置读取）
+        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
         save_to_file: 是否保存到文件
         output_file: 输出文件名
 
@@ -109,6 +111,7 @@ async def auto_modify_authenticator(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            provider=provider,
         )
 
         # 第一阶段：导航到页面并提取密钥

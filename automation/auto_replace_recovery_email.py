@@ -1,7 +1,7 @@
 """
 自动替换 Google 辅助邮箱 (Recovery Email)
 
-使用 Gemini Vision AI Agent 自动完成操作
+使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成操作
 """
 
 import asyncio
@@ -23,7 +23,8 @@ async def auto_replace_recovery_email(
     max_steps: int = 25,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
-    model: str = "gemini-2.5-flash",
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
     email_imap_config: dict = None,
     pool_emails: list = None,
 ) -> Tuple[bool, str, Optional[str]]:
@@ -36,9 +37,10 @@ async def auto_replace_recovery_email(
         new_email: 新辅助邮箱
         close_after: 完成后是否关闭浏览器
         max_steps: 最大执行步骤数
-        api_key: API Key（可选，默认从环境变量 GEMINI_API_KEY 读取）
-        base_url: API Base URL（可选，默认使用 Gemini OpenAI 兼容 API）
-        model: 使用的模型（默认 gemini-2.5-flash）
+        api_key: API Key（可选，默认从配置读取）
+        base_url: API Base URL（可选，用于第三方服务）
+        model: 使用的模型（可选，默认从配置读取）
+        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
         email_imap_config: 邮箱 IMAP 配置 {'email': str, 'password': str}
                           用于自动读取邮箱验证码
         pool_emails: 邮箱池列表（可选），用于告诉 AI 如果当前邮箱在池中则无需修改
@@ -51,6 +53,7 @@ async def auto_replace_recovery_email(
 
     Environment Variables:
         GEMINI_API_KEY: Gemini API 密钥
+        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
@@ -81,6 +84,7 @@ async def auto_replace_recovery_email(
         api_key=api_key,
         base_url=base_url,
         model=model,
+        provider=provider,
         email_imap_config=email_imap_config,
     )
 

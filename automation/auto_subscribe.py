@@ -7,6 +7,7 @@
 3. 绑卡订阅 (AI Agent)
 
 支持断点续传：记录失败步骤，下次从失败处继续
+支持多 LLM 提供商 (Gemini/Anthropic)
 """
 
 import asyncio
@@ -58,7 +59,10 @@ class AutoSubscriber:
     def __init__(
         self,
         sheerid_api_key: Optional[str] = None,
-        gemini_api_key: Optional[str] = None,
+        ai_api_key: Optional[str] = None,
+        ai_provider: Optional[str] = None,
+        ai_base_url: Optional[str] = None,
+        ai_model: Optional[str] = None,
         max_steps: int = 25,
         close_browser_after: bool = False,
     ):
@@ -67,12 +71,18 @@ class AutoSubscriber:
 
         Args:
             sheerid_api_key: SheerID API 密钥（默认从配置读取）
-            gemini_api_key: Gemini API 密钥（默认从环境变量读取）
+            ai_api_key: AI API 密钥（默认从配置读取）
+            ai_provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
+            ai_base_url: AI API Base URL（用于第三方服务）
+            ai_model: 使用的模型（默认从配置读取）
             max_steps: AI Agent 最大步骤数
             close_browser_after: 完成后是否关闭浏览器
         """
         self.sheerid_api_key = sheerid_api_key or ConfigManager.get_api_key()
-        self.gemini_api_key = gemini_api_key or ConfigManager.get_ai_api_key()
+        self.ai_api_key = ai_api_key or ConfigManager.get_ai_api_key()
+        self.ai_provider = ai_provider or ConfigManager.get_ai_default_provider()
+        self.ai_base_url = ai_base_url
+        self.ai_model = ai_model
         self.max_steps = max_steps
         self.close_browser_after = close_browser_after
 
@@ -200,7 +210,10 @@ class AutoSubscriber:
 
             # 创建 AI Agent
             agent = AIBrowserAgent(
-                api_key=self.gemini_api_key,
+                api_key=self.ai_api_key,
+                base_url=self.ai_base_url,
+                model=self.ai_model,
+                provider=self.ai_provider,
                 screenshot_delay=2.5,
             )
 

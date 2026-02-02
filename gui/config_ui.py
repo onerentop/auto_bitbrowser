@@ -22,15 +22,18 @@ from core.config_manager import ConfigManager
 
 # 尝试导入 AI Agent 模块
 try:
-    from core.ai_browser_agent import VisionAnalyzer
+    from core.ai_browser_agent import VisionAnalyzer, create_llm, get_available_providers, LLM_ABSTRACTION_AVAILABLE
     AI_AGENT_AVAILABLE = True
 except ImportError:
     AI_AGENT_AVAILABLE = False
     VisionAnalyzer = None
+    create_llm = None
+    get_available_providers = None
+    LLM_ABSTRACTION_AVAILABLE = False
 
 
 class TestAIConnectionWorker(QThread):
-    """测试 AI 连接的后台线程"""
+    """测试 AI 连接的后台线程（支持多提供商）"""
     finished_signal = pyqtSignal(bool, str, dict)  # success, message, details
 
     def __init__(
@@ -38,15 +41,17 @@ class TestAIConnectionWorker(QThread):
         api_key: str,
         base_url: str,
         model: str,
+        provider: str = "gemini",
     ):
         super().__init__()
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.provider = provider
 
     def run(self):
         try:
-            if not VisionAnalyzer:
+            if not AI_AGENT_AVAILABLE:
                 self.finished_signal.emit(False, "AI Agent 模块不可用", {})
                 return
 
@@ -54,15 +59,34 @@ class TestAIConnectionWorker(QThread):
                 self.finished_signal.emit(False, "请输入 API Key", {})
                 return
 
-            # 创建 VisionAnalyzer 并测试连接
-            analyzer = VisionAnalyzer(
-                api_key=self.api_key,
-                base_url=self.base_url or None,
-                model=self.model,
-            )
+            # 优先使用 LLM 抽象层
+            if LLM_ABSTRACTION_AVAILABLE and create_llm:
+                try:
+                    llm = create_llm(
+                        provider=self.provider,
+                        api_key=self.api_key,
+                        base_url=self.base_url or None,
+                        model=self.model or None,
+                    )
+                    success, message, details = llm.test_connection()
+                    self.finished_signal.emit(success, message, details)
+                    return
+                except Exception as e:
+                    # 回退到 VisionAnalyzer
+                    pass
 
-            success, message, details = analyzer.test_connection()
-            self.finished_signal.emit(success, message, details)
+            # 回退: 使用 VisionAnalyzer
+            if VisionAnalyzer:
+                analyzer = VisionAnalyzer(
+                    api_key=self.api_key,
+                    base_url=self.base_url or None,
+                    model=self.model,
+                    provider=self.provider,
+                )
+                success, message, details = analyzer.test_connection()
+                self.finished_signal.emit(success, message, details)
+            else:
+                self.finished_signal.emit(False, "VisionAnalyzer 不可用", {})
 
         except Exception as e:
             self.finished_signal.emit(False, f"测试失败: {str(e)}", {"error": str(e)})
@@ -1387,54 +1411,116 @@ class SettingsTab(QWidget):
         api_group.setLayout(api_layout)
         layout.addWidget(api_group)
 
-        # AI Agent 配置区域
-        ai_group = QGroupBox("🤖 AI Agent 配置 (Gemini)")
-        ai_layout = QFormLayout()
+        # AI Agent 配置区域 (多提供商)
+        ai_group = QGroupBox("🤖 AI Agent 配置 (多提供商)")
+        ai_main_layout = QVBoxLayout()
 
-        # API Key
-        self.ai_api_key_input = QLineEdit()
-        self.ai_api_key_input.setPlaceholderText("Gemini API Key（或从环境变量 GEMINI_API_KEY 读取）")
-        self.ai_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        ai_layout.addRow("API Key:", self.ai_api_key_input)
+        # 默认提供商选择
+        provider_layout = QHBoxLayout()
+        provider_layout.addWidget(QLabel("默认提供商:"))
+        self.ai_provider_combo = QComboBox()
+        self.ai_provider_combo.addItems(["gemini", "anthropic"])
+        self.ai_provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        provider_layout.addWidget(self.ai_provider_combo)
+        provider_layout.addStretch()
+        ai_main_layout.addLayout(provider_layout)
 
-        # Base URL
-        self.ai_base_url_input = QLineEdit()
-        self.ai_base_url_input.setPlaceholderText("留空使用 Gemini 官方 API")
-        ai_layout.addRow("Base URL:", self.ai_base_url_input)
+        # 提供商配置选项卡
+        self.ai_provider_tabs = QTabWidget()
 
-        # 模型选择
-        self.ai_model_input = QComboBox()
-        self.ai_model_input.setEditable(True)
-        self.ai_model_input.addItems([
+        # Gemini 配置标签页
+        gemini_tab = QWidget()
+        gemini_layout = QFormLayout(gemini_tab)
+
+        self.gemini_api_key_input = QLineEdit()
+        self.gemini_api_key_input.setPlaceholderText("Gemini API Key（或从环境变量 GEMINI_API_KEY 读取）")
+        self.gemini_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        gemini_layout.addRow("API Key:", self.gemini_api_key_input)
+
+        self.gemini_base_url_input = QLineEdit()
+        self.gemini_base_url_input.setPlaceholderText("留空使用 Gemini 官方 API")
+        gemini_layout.addRow("Base URL:", self.gemini_base_url_input)
+
+        self.gemini_model_combo = QComboBox()
+        self.gemini_model_combo.setEditable(True)
+        self.gemini_model_combo.addItems([
             "gemini-2.5-flash",
             "gemini-2.5-pro",
             "gemini-2.0-flash",
             "gemini-2.5-flash-lite",
         ])
-        ai_layout.addRow("模型:", self.ai_model_input)
+        gemini_layout.addRow("模型:", self.gemini_model_combo)
 
-        # 最大步骤数
+        # Gemini 测试按钮
+        gemini_btn_layout = QHBoxLayout()
+        self.gemini_test_btn = QPushButton("🔗 测试 Gemini 连接")
+        self.gemini_test_btn.clicked.connect(lambda: self._test_provider_connection("gemini"))
+        self.gemini_test_btn.setStyleSheet("background-color: #4285F4; color: white; padding: 5px 15px;")
+        gemini_btn_layout.addWidget(self.gemini_test_btn)
+        gemini_btn_layout.addStretch()
+        gemini_layout.addRow("", gemini_btn_layout)
+
+        self.ai_provider_tabs.addTab(gemini_tab, "🔷 Gemini")
+
+        # Anthropic/Claude 配置标签页
+        anthropic_tab = QWidget()
+        anthropic_layout = QFormLayout(anthropic_tab)
+
+        self.anthropic_api_key_input = QLineEdit()
+        self.anthropic_api_key_input.setPlaceholderText("Anthropic API Key（或从环境变量 ANTHROPIC_API_KEY 读取）")
+        self.anthropic_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        anthropic_layout.addRow("API Key:", self.anthropic_api_key_input)
+
+        self.anthropic_base_url_input = QLineEdit()
+        self.anthropic_base_url_input.setPlaceholderText("留空使用官方 API，或填写第三方兼容服务 URL")
+        anthropic_layout.addRow("Base URL:", self.anthropic_base_url_input)
+
+        self.anthropic_model_combo = QComboBox()
+        self.anthropic_model_combo.setEditable(True)
+        self.anthropic_model_combo.addItems([
+            "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229",
+            "claude-3-haiku-20240307",
+        ])
+        anthropic_layout.addRow("模型:", self.anthropic_model_combo)
+
+        # 第三方服务提示
+        anthropic_hint = QLabel("💡 支持第三方 Claude API 服务，如 OpenRouter、Together 等")
+        anthropic_hint.setStyleSheet("color: #666; font-size: 11px;")
+        anthropic_hint.setWordWrap(True)
+        anthropic_layout.addRow("", anthropic_hint)
+
+        # Anthropic 测试按钮
+        anthropic_btn_layout = QHBoxLayout()
+        self.anthropic_test_btn = QPushButton("🔗 测试 Anthropic 连接")
+        self.anthropic_test_btn.clicked.connect(lambda: self._test_provider_connection("anthropic"))
+        self.anthropic_test_btn.setStyleSheet("background-color: #D97706; color: white; padding: 5px 15px;")
+        anthropic_btn_layout.addWidget(self.anthropic_test_btn)
+        anthropic_btn_layout.addStretch()
+        anthropic_layout.addRow("", anthropic_btn_layout)
+
+        self.ai_provider_tabs.addTab(anthropic_tab, "🟠 Anthropic/Claude")
+
+        ai_main_layout.addWidget(self.ai_provider_tabs)
+
+        # 通用配置
+        common_layout = QFormLayout()
+
         self.ai_max_steps_spin = QSpinBox()
         self.ai_max_steps_spin.setRange(5, 50)
         self.ai_max_steps_spin.setValue(25)
-        ai_layout.addRow("最大步骤:", self.ai_max_steps_spin)
-
-        # 测试连接按钮
-        ai_btn_layout = QHBoxLayout()
-        self.test_connection_btn = QPushButton("🔗 测试连接")
-        self.test_connection_btn.clicked.connect(self._test_ai_connection)
-        self.test_connection_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 15px;")
-        ai_btn_layout.addWidget(self.test_connection_btn)
-        ai_btn_layout.addStretch()
-        ai_layout.addRow("", ai_btn_layout)
+        common_layout.addRow("最大步骤:", self.ai_max_steps_spin)
 
         # 提示信息
         ai_hint = QLabel("提示: AI Agent 用于智能浏览器自动化任务（修改2SV手机、替换辅助邮箱等）")
         ai_hint.setStyleSheet("color: #666; font-size: 11px;")
         ai_hint.setWordWrap(True)
-        ai_layout.addRow("", ai_hint)
+        common_layout.addRow("", ai_hint)
 
-        ai_group.setLayout(ai_layout)
+        ai_main_layout.addLayout(common_layout)
+
+        ai_group.setLayout(ai_main_layout)
         layout.addWidget(ai_group)
 
         # Gmail IMAP 设置（用于接收验证码）
@@ -1573,34 +1659,58 @@ class SettingsTab(QWidget):
         scroll_area.setWidget(scroll_content)
         main_layout.addWidget(scroll_area)
 
-    def _test_ai_connection(self):
-        """测试 AI 连接"""
-        api_key = self.ai_api_key_input.text().strip() or ConfigManager.get_ai_api_key()
-        base_url = self.ai_base_url_input.text().strip() or ConfigManager.get_ai_base_url()
-        model = self.ai_model_input.currentText().strip() or ConfigManager.get_ai_model()
+    def _on_provider_changed(self, provider: str):
+        """切换默认提供商时切换标签页"""
+        if provider == "gemini":
+            self.ai_provider_tabs.setCurrentIndex(0)
+        elif provider == "anthropic":
+            self.ai_provider_tabs.setCurrentIndex(1)
+
+    def _test_provider_connection(self, provider: str):
+        """测试指定提供商的连接"""
+        if provider == "gemini":
+            api_key = self.gemini_api_key_input.text().strip() or ConfigManager.get_ai_provider_api_key("gemini")
+            base_url = self.gemini_base_url_input.text().strip() or ConfigManager.get_ai_provider_base_url("gemini")
+            model = self.gemini_model_combo.currentText().strip() or ConfigManager.get_ai_provider_model("gemini")
+            btn = self.gemini_test_btn
+        else:
+            api_key = self.anthropic_api_key_input.text().strip() or ConfigManager.get_ai_provider_api_key("anthropic")
+            base_url = self.anthropic_base_url_input.text().strip() or ConfigManager.get_ai_provider_base_url("anthropic")
+            model = self.anthropic_model_combo.currentText().strip() or ConfigManager.get_ai_provider_model("anthropic")
+            btn = self.anthropic_test_btn
 
         if not api_key:
-            QMessageBox.warning(self, "警告", "请先输入 API Key")
+            QMessageBox.warning(self, "警告", f"请先输入 {provider.upper()} API Key")
             return
 
         # 禁用按钮，显示进度
-        self.test_connection_btn.setEnabled(False)
-        self.test_connection_btn.setText("测试中...")
+        btn.setEnabled(False)
+        original_text = btn.text()
+        btn.setText("测试中...")
+
+        # 保存当前测试的按钮引用
+        self._current_test_btn = btn
+        self._current_test_btn_text = original_text
+        self._current_test_provider = provider
 
         # 创建测试线程
-        self.test_worker = TestAIConnectionWorker(api_key, base_url, model)
+        self.test_worker = TestAIConnectionWorker(api_key, base_url, model, provider)
         self.test_worker.finished_signal.connect(self._on_test_connection_finished)
         self.test_worker.start()
 
     def _on_test_connection_finished(self, success: bool, message: str, details: dict):
         """测试连接完成回调"""
         # 恢复按钮状态
-        self.test_connection_btn.setEnabled(True)
-        self.test_connection_btn.setText("🔗 测试连接")
+        if hasattr(self, '_current_test_btn') and self._current_test_btn:
+            self._current_test_btn.setEnabled(True)
+            self._current_test_btn.setText(self._current_test_btn_text)
+
+        provider = getattr(self, '_current_test_provider', 'AI')
 
         if success:
             # 显示详细信息
             detail_msg = f"连接测试成功!\n\n"
+            detail_msg += f"提供商: {details.get('provider', provider).upper()}\n"
             detail_msg += f"模型: {details.get('model', 'N/A')}\n"
             detail_msg += f"响应时间: {details.get('response_time_ms', 0)}ms\n"
             if details.get('response_preview'):
@@ -1624,10 +1734,27 @@ class SettingsTab(QWidget):
             api_key = ConfigManager.get("sheerid_api_key", "")
             self.api_key_input.setText(api_key)
 
-            # AI Agent 配置
-            self.ai_api_key_input.setText(ConfigManager.get_ai_api_key())
-            self.ai_base_url_input.setText(ConfigManager.get_ai_base_url())
-            self.ai_model_input.setCurrentText(ConfigManager.get_ai_model())
+            # AI Agent 配置 - 默认提供商
+            default_provider = ConfigManager.get_ai_default_provider()
+            idx = self.ai_provider_combo.findText(default_provider)
+            if idx >= 0:
+                self.ai_provider_combo.setCurrentIndex(idx)
+
+            # Gemini 配置
+            self.gemini_api_key_input.setText(ConfigManager.get_ai_provider_api_key("gemini"))
+            self.gemini_base_url_input.setText(ConfigManager.get_ai_provider_base_url("gemini"))
+            gemini_model = ConfigManager.get_ai_provider_model("gemini")
+            if gemini_model:
+                self.gemini_model_combo.setCurrentText(gemini_model)
+
+            # Anthropic 配置
+            self.anthropic_api_key_input.setText(ConfigManager.get_ai_provider_api_key("anthropic"))
+            self.anthropic_base_url_input.setText(ConfigManager.get_ai_provider_base_url("anthropic"))
+            anthropic_model = ConfigManager.get_ai_provider_model("anthropic")
+            if anthropic_model:
+                self.anthropic_model_combo.setCurrentText(anthropic_model)
+
+            # 通用配置
             self.ai_max_steps_spin.setValue(ConfigManager.get_ai_max_steps())
 
             # Gmail IMAP
@@ -1661,12 +1788,24 @@ class SettingsTab(QWidget):
             # API
             ConfigManager.set("sheerid_api_key", self.api_key_input.text())
 
-            # AI Agent 配置
-            ai_api_key = self.ai_api_key_input.text().strip()
-            if ai_api_key:
-                ConfigManager.set_ai_api_key(ai_api_key)
-            ConfigManager.set_ai_base_url(self.ai_base_url_input.text().strip())
-            ConfigManager.set_ai_model(self.ai_model_input.currentText().strip())
+            # AI Agent 配置 - 默认提供商
+            ConfigManager.set_ai_default_provider(self.ai_provider_combo.currentText())
+
+            # Gemini 配置
+            gemini_api_key = self.gemini_api_key_input.text().strip()
+            if gemini_api_key:
+                ConfigManager.set_ai_provider_api_key("gemini", gemini_api_key)
+            ConfigManager.set_ai_provider_base_url("gemini", self.gemini_base_url_input.text().strip())
+            ConfigManager.set_ai_provider_model("gemini", self.gemini_model_combo.currentText().strip())
+
+            # Anthropic 配置
+            anthropic_api_key = self.anthropic_api_key_input.text().strip()
+            if anthropic_api_key:
+                ConfigManager.set_ai_provider_api_key("anthropic", anthropic_api_key)
+            ConfigManager.set_ai_provider_base_url("anthropic", self.anthropic_base_url_input.text().strip())
+            ConfigManager.set_ai_provider_model("anthropic", self.anthropic_model_combo.currentText().strip())
+
+            # 通用配置
             ConfigManager.set_ai_max_steps(self.ai_max_steps_spin.value())
 
             # Gmail IMAP
@@ -1704,10 +1843,17 @@ class SettingsTab(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.api_key_input.setText("")
-            # AI Agent
-            self.ai_api_key_input.setText("")
-            self.ai_base_url_input.setText("")
-            self.ai_model_input.setCurrentText("gemini-2.5-flash")
+            # AI Agent - 默认提供商
+            self.ai_provider_combo.setCurrentText("gemini")
+            # Gemini
+            self.gemini_api_key_input.setText("")
+            self.gemini_base_url_input.setText("")
+            self.gemini_model_combo.setCurrentText("gemini-2.5-flash")
+            # Anthropic
+            self.anthropic_api_key_input.setText("")
+            self.anthropic_base_url_input.setText("")
+            self.anthropic_model_combo.setCurrentText("claude-sonnet-4-20250514")
+            # 通用
             self.ai_max_steps_spin.setValue(25)
             # Gmail
             self.gmail_email_input.setText("")
