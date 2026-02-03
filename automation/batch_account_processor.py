@@ -14,6 +14,7 @@ from core.retry_helper import RetryHelper
 from services.database import DBManager
 from services.sub2api_client import Sub2APIClient
 from services.ix_api import closeBrowser
+from services.proxy_smart_allocator import ProxySmartAllocator
 from automation.auto_google_login import auto_google_login, LoginResult
 from automation.auto_antigravity_oauth import auto_antigravity_oauth, OAuthResult
 from automation.auto_unlock_403 import auto_unlock_403, UnlockResult
@@ -251,6 +252,7 @@ class BatchAccountProcessor:
         model: str = None,
         provider: str = None,
         skip_login: bool = False,
+        auto_bind_proxy: bool = True,
     ) -> BatchResult:
         """
         批量执行 OAuth
@@ -263,6 +265,7 @@ class BatchAccountProcessor:
             model: AI 模型名称
             provider: AI 提供商
             skip_login: 是否跳过登录检查
+            auto_bind_proxy: 是否自动绑定代理（默认 True）
 
         Returns:
             BatchResult: 批量处理结果
@@ -284,6 +287,12 @@ class BatchAccountProcessor:
             await sub2api_client._ensure_session()
             client_created = True
 
+        # 创建代理智能分配器（如果启用）
+        proxy_allocator = None
+        if auto_bind_proxy:
+            proxy_allocator = ProxySmartAllocator(sub2api_client)
+            self._log("代理智能分配器已启用")
+
         try:
             # 创建任务
             tasks = []
@@ -297,6 +306,8 @@ class BatchAccountProcessor:
                     model=model,
                     provider=provider,
                     skip_login=skip_login,
+                    proxy_allocator=proxy_allocator,
+                    auto_bind_proxy=auto_bind_proxy,
                 )
                 tasks.append(task)
 
@@ -327,6 +338,8 @@ class BatchAccountProcessor:
         model: str = None,
         provider: str = None,
         skip_login: bool = False,
+        proxy_allocator: ProxySmartAllocator = None,
+        auto_bind_proxy: bool = True,
     ):
         """带信号量控制的 OAuth 任务"""
         email = account.get("email", "unknown")
@@ -360,6 +373,8 @@ class BatchAccountProcessor:
                     model=model,
                     provider=provider,
                     skip_login_check=skip_login,
+                    proxy_allocator=proxy_allocator,
+                    auto_bind_proxy=auto_bind_proxy,
                 )
 
                 if oauth_result.success:
@@ -392,6 +407,7 @@ class BatchAccountProcessor:
         api_key: str = None,
         model: str = None,
         provider: str = None,
+        auto_bind_proxy: bool = True,
     ) -> Dict[str, BatchResult]:
         """
         批量执行登录 + OAuth（先登录后 OAuth）
@@ -403,6 +419,7 @@ class BatchAccountProcessor:
             api_key: AI API Key
             model: AI 模型名称
             provider: AI 提供商
+            auto_bind_proxy: 是否自动绑定代理（默认 True）
 
         Returns:
             Dict: {"login": BatchResult, "oauth": BatchResult}
@@ -448,6 +465,7 @@ class BatchAccountProcessor:
             model=model,
             provider=provider,
             skip_login=True,
+            auto_bind_proxy=auto_bind_proxy,
         )
 
         return {"login": login_result, "oauth": oauth_result}
@@ -641,6 +659,377 @@ class BatchAccountProcessor:
             except Exception as e:
                 result.add_failed(email, str(e), "exception")
                 self._log(f"[{email}] ❌ 异常: {e}")
+
+    async def batch_detect_pro(
+        self,
+        accounts: List[Dict],
+        browser_ids: List[str],
+    ) -> BatchResult:
+        """
+        批量检测 Google One Pro 会员状态
+
+        Args:
+            accounts: 账号列表（需要已登录）
+            browser_ids: 浏览器窗口 ID 列表（与账号一一对应）
+
+        Returns:
+            BatchResult: 批量处理结果，包含 pro_count, non_pro_count
+        """
+        if len(accounts) != len(browser_ids):
+            raise ValueError("账号数量与浏览器窗口数量不匹配")
+
+        result = BatchResult(total=len(accounts))
+        result.start_time = datetime.now()
+        self._stop_flag = False
+        self._semaphore = asyncio.Semaphore(self.concurrency)
+
+        self._log(f"开始批量检测 Pro 状态，共 {len(accounts)} 个账号，并发数 {self.concurrency}")
+
+        # 创建任务
+        tasks = []
+        for account, browser_id in zip(accounts, browser_ids):
+            task = self._detect_pro_with_semaphore(
+                account=account,
+                browser_id=browser_id,
+                result=result,
+            )
+            tasks.append(task)
+
+        # 并发执行
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        result.end_time = datetime.now()
+
+        # 统计 Pro 和非 Pro 数量（Pro 包括普通 Pro 和家庭组 Pro）
+        pro_count = sum(1 for r in result.results if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "yes")
+        family_pro_count = sum(1 for r in result.results if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "family_yes")
+        non_pro_count = sum(1 for r in result.results if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "no")
+
+        self._log(
+            f"批量检测 Pro 完成: Pro(普通) {pro_count}, Pro(家庭组) {family_pro_count}, 非Pro {non_pro_count}, "
+            f"失败 {result.failed_count}, "
+            f"跳过 {result.skipped_count}, "
+            f"耗时 {result.duration_seconds:.1f}s"
+        )
+
+        # 在结果中添加 Pro 统计
+        result.results.append({
+            "_summary": True,
+            "pro_count": pro_count + family_pro_count,  # 总 Pro 数（用于兼容旧逻辑）
+            "pro_regular_count": pro_count,
+            "pro_family_count": family_pro_count,
+            "non_pro_count": non_pro_count,
+        })
+
+        return result
+
+    async def _detect_pro_with_semaphore(
+        self,
+        account: Dict,
+        browser_id: str,
+        result: BatchResult,
+    ):
+        """带信号量控制的 Pro 检测任务"""
+        from playwright.async_api import async_playwright
+        from services.ix_api import openBrowser
+
+        email = account.get("email", "unknown")
+
+        if self._stop_flag:
+            result.add_skipped(email, "用户停止")
+            return
+
+        async with self._semaphore:
+            if self._stop_flag:
+                result.add_skipped(email, "用户停止")
+                return
+
+            try:
+                self._log(f"[{email}] 开始检测 Pro 状态...")
+
+                # 打开浏览器
+                open_result = openBrowser(browser_id)
+                if not open_result.get("success"):
+                    error_msg = open_result.get("msg", "打开浏览器失败")
+                    result.add_failed(email, error_msg, "browser_open_failed")
+                    self._log(f"[{email}] ❌ 打开浏览器失败: {error_msg}")
+                    return
+
+                ws_endpoint = open_result.get("data", {}).get("ws", "")
+                if not ws_endpoint:
+                    result.add_failed(email, "无法获取 WebSocket 端点", "no_ws_endpoint")
+                    self._log(f"[{email}] ❌ 无法获取 WebSocket 端点")
+                    return
+
+                # 连接浏览器并检测
+                async with async_playwright() as playwright:
+                    browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
+                    contexts = browser.contexts
+                    if not contexts:
+                        result.add_failed(email, "没有浏览器上下文", "no_context")
+                        self._log(f"[{email}] ❌ 没有浏览器上下文")
+                        return
+
+                    context = contexts[0]
+                    pages = context.pages
+                    if pages:
+                        page = pages[0]
+                    else:
+                        page = await context.new_page()
+
+                    # 检测 Pro 状态
+                    pro_status = await self._check_google_one_pro_status(page, email)
+
+                    if pro_status is not None:
+                        # 更新数据库
+                        DBManager.update_pro_status(email, pro_status)
+
+                        # 根据状态生成显示文本
+                        status_text_map = {
+                            "yes": "Pro(普通)",
+                            "family_yes": "Pro(家庭组)",
+                            "no": "非Pro",
+                        }
+                        status_text = status_text_map.get(pro_status, pro_status)
+
+                        result.add_success(email, {
+                            "browser_id": browser_id,
+                            "is_pro": pro_status,
+                        })
+                        self._log(f"[{email}] ✅ Pro 状态: {status_text}")
+                    else:
+                        result.add_failed(email, "检测失败", "detection_failed")
+                        self._log(f"[{email}] ❌ 检测 Pro 状态失败")
+
+                    # 检测完成后关闭浏览器
+                    try:
+                        closeBrowser(browser_id)
+                        self._log(f"[{email}] 浏览器窗口已关闭")
+                    except Exception as e:
+                        self._log(f"[{email}] 关闭窗口失败: {e}")
+
+            except Exception as e:
+                result.add_failed(email, str(e), "exception")
+                self._log(f"[{email}] ❌ 异常: {e}")
+
+    async def _check_google_one_pro_status(self, page, email: str) -> str | None:
+        """
+        检测 Google One Pro 会员状态
+
+        Args:
+            page: Playwright Page 对象
+            email: 账号邮箱（用于日志）
+
+        Returns:
+            "yes" = 普通 Pro 会员（自己订阅）
+            "family_yes" = 家庭组 Pro 会员（被邀请）
+            "no" = 非 Pro 会员
+            None = 检测失败
+        """
+        try:
+            self._log(f"[{email}] 正在检测 Google One 会员状态...")
+
+            # 导航到 Google One 页面
+            await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(2000)
+
+            # 检查页面内容
+            page_text = await page.inner_text("body")
+
+            # Pro 会员标识关键词
+            pro_indicators = [
+                "Google One AI Premium",
+                "AI Premium",
+                "2 TB",
+                "Premium plan",
+                "Premium 方案",
+                "高级会员",
+                "您当前的方案",
+            ]
+
+            # 非会员标识
+            non_pro_indicators = [
+                "升级",
+                "Upgrade",
+                "Get Google One",
+                "加入 Google One",
+                "Choose a plan",
+                "选择方案",
+                "开始使用",
+            ]
+
+            # 检查是否是 Pro 会员
+            is_pro = False
+            for indicator in pro_indicators:
+                if indicator.lower() in page_text.lower():
+                    self._log(f"[{email}] 检测到 Pro 标识: {indicator}")
+                    is_pro = True
+                    break
+
+            # 如果没检测到 Pro 标识，检查是否明确是非会员
+            if not is_pro:
+                for indicator in non_pro_indicators:
+                    if indicator.lower() in page_text.lower():
+                        self._log(f"[{email}] 检测到非 Pro 标识: {indicator}")
+                        return "no"
+                # 无法确定，返回 None
+                return None
+
+            # 是 Pro 会员，进一步检测是普通 Pro 还是家庭组 Pro
+            self._log(f"[{email}] 检测到 Pro 会员，正在检测家庭组状态...")
+
+            try:
+                # 导航到家庭组页面（新地址，原 one.google.com/family 已 404）
+                await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(2000)
+
+                family_page_text = await page.inner_text("body")
+
+                # 输出页面文本用于调试（仅前500字符）
+                self._log(f"[{email}] 家庭组页面内容: {family_page_text[:500]}...")
+
+                # ========== 修复：颠倒检测顺序，先检测成员标识 ==========
+                # 家庭组成员标识 - 成员能看到的页面元素
+                # 根据 Google 帮助文档，成员可以"退出家庭群组"，而管理员不能
+                member_indicators = [
+                    "退出家庭群组",        # 最可靠 - 只有成员才有这个按钮
+                    "Leave family group",
+                    "离开家庭群组",
+                    "Leave family",
+                    "您已加入家庭群组",
+                    "You're a member of",
+                    "家庭群组成员",
+                    "Family group member",
+                    "Family member",       # 新增：英文页面可能的标识
+                ]
+
+                # 先检查是否是家庭成员（优先级最高，避免被管理员标识误判）
+                for indicator in member_indicators:
+                    if indicator.lower() in family_page_text.lower():
+                        self._log(f"[{email}] 检测到家庭组成员标识: {indicator}")
+                        return "family_yes"
+
+                # 普通 Pro (管理员/独立订阅) 标识
+                # 根据 Google 帮助文档：管理员可以"添加成员"、"删除家庭群组"、"邀请家庭成员"
+                manager_indicators = [
+                    "管理家庭群组",        # 管理员独有的操作按钮
+                    "Manage family group",
+                    "Manage family",
+                    "邀请家庭成员",        # 管理员独有
+                    "Invite family members",
+                    "Add family member",
+                    "添加家庭成员",
+                    "创建家庭群组",        # 独立订阅者创建家庭
+                    "Create family group",
+                    "Create a family",
+                    "删除家庭群组",        # 只有管理员可以删除
+                    "Delete family group",
+                    "您是家庭管理员",      # 精确匹配
+                    "You are the family manager",
+                    "Family manager",      # 管理员角色标识
+                ]
+
+                # 再检查是否是管理员
+                for indicator in manager_indicators:
+                    if indicator.lower() in family_page_text.lower():
+                        self._log(f"[{email}] 检测到普通 Pro 标识: {indicator}")
+                        # 检测家庭成员数量
+                        member_count = await self._get_family_member_count(page, email)
+                        if member_count > 0:
+                            DBManager.update_family_member_count(email, member_count)
+                        return "yes"
+
+                # 如果都没检测到，默认为普通 Pro（可能家庭页面结构变化或独立订阅）
+                self._log(f"[{email}] 未检测到明确的家庭组状态，默认为普通 Pro")
+                # 仍尝试检测家庭成员数量
+                member_count = await self._get_family_member_count(page, email)
+                if member_count > 0:
+                    DBManager.update_family_member_count(email, member_count)
+                return "yes"
+
+            except Exception as e:
+                self._log(f"[{email}] ⚠️ 检测家庭组状态失败: {e}，默认为普通 Pro")
+                return "yes"
+
+        except Exception as e:
+            self._log(f"[{email}] ⚠️ 检测 Pro 状态失败: {e}")
+            return None
+
+    async def _get_family_member_count(self, page, email: str) -> int:
+        """
+        获取家庭组成员数量
+
+        Args:
+            page: Playwright Page 对象（应已在家庭组页面）
+            email: 账号邮箱（用于日志）
+
+        Returns:
+            int: 家庭成员数量 (1-6)，0 表示检测失败
+        """
+        try:
+            self._log(f"[{email}] 正在检测家庭成员数量...")
+
+            # 当前页面应该是 https://myaccount.google.com/family
+            # 如果不是，先导航
+            current_url = page.url
+            if "myaccount.google.com/family" not in current_url:
+                await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(2000)
+
+            # 方法 1: 通过计数页面上的成员头像/卡片
+            # 家庭成员通常显示为卡片或头像列表
+            member_selectors = [
+                "[data-member-email]",  # 成员邮箱属性
+                "[role='listitem']",  # 列表项
+                ".family-member",  # 家庭成员 class
+                "[data-member]",  # 成员数据属性
+            ]
+
+            for selector in member_selectors:
+                try:
+                    members = await page.query_selector_all(selector)
+                    if members and len(members) > 0:
+                        count = len(members)
+                        self._log(f"[{email}] 通过选择器 '{selector}' 检测到 {count} 个成员")
+                        if 1 <= count <= 6:
+                            return count
+                except Exception:
+                    continue
+
+            # 方法 2: 从页面文本中提取数字
+            # 例如: "3 位家庭成员" / "3 family members"
+            import re
+            page_text = await page.inner_text("body")
+
+            # 中文模式: "X 位成员" / "X位家庭成员"
+            cn_patterns = [
+                r"(\d)\s*位\s*(?:家庭)?成员",
+                r"家庭群组\s*\((\d)\)",
+                r"(\d)\s*人",
+            ]
+
+            # 英文模式: "X members" / "X family members"
+            en_patterns = [
+                r"(\d)\s*(?:family\s+)?members?",
+                r"Family\s+group\s*\((\d)\)",
+            ]
+
+            all_patterns = cn_patterns + en_patterns
+            for pattern in all_patterns:
+                match = re.search(pattern, page_text, re.IGNORECASE)
+                if match:
+                    count = int(match.group(1))
+                    self._log(f"[{email}] 通过正则匹配检测到 {count} 个成员 (模式: {pattern})")
+                    if 1 <= count <= 6:
+                        return count
+
+            # 方法 3: 默认返回 1（至少有管理员自己）
+            self._log(f"[{email}] 无法精确检测成员数量，默认为 1（管理员自己）")
+            return 1
+
+        except Exception as e:
+            self._log(f"[{email}] ⚠️ 获取家庭成员数量失败: {e}")
+            return 0
 
 
 # ==================== 便捷函数 ====================

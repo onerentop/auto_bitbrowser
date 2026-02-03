@@ -158,7 +158,7 @@ async def auto_google_login(
         if not result.get("success"):
             error_msg = result.get("msg", "打开浏览器失败")
             log(f"❌ {error_msg}")
-            DBManager.update_login_status(email, "login_failed")
+            DBManager.update_login_status(email, "login_failed", last_error=error_msg)
             return LoginResult(
                 success=False,
                 message=error_msg,
@@ -170,11 +170,12 @@ async def auto_google_login(
 
         ws_endpoint = result.get("data", {}).get("ws", "")
         if not ws_endpoint:
-            log("❌ 无法获取 WebSocket 端点")
-            DBManager.update_login_status(email, "login_failed")
+            error_msg = "无法获取浏览器 WebSocket 端点"
+            log(f"❌ {error_msg}")
+            DBManager.update_login_status(email, "login_failed", last_error=error_msg)
             return LoginResult(
                 success=False,
-                message="无法获取浏览器 WebSocket 端点",
+                message=error_msg,
                 email=email,
                 browser_id=browser_id,
                 login_status="login_failed",
@@ -188,11 +189,12 @@ async def auto_google_login(
             browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
             contexts = browser.contexts
             if not contexts:
-                log("❌ 没有找到浏览器上下文")
-                DBManager.update_login_status(email, "login_failed")
+                error_msg = "没有找到浏览器上下文"
+                log(f"❌ {error_msg}")
+                DBManager.update_login_status(email, "login_failed", last_error=error_msg)
                 return LoginResult(
                     success=False,
-                    message="没有找到浏览器上下文",
+                    message=error_msg,
                     email=email,
                     browser_id=browser_id,
                     login_status="login_failed",
@@ -279,6 +281,13 @@ async def auto_google_login(
             if login_success:
                 log("✅ 登录成功")
                 DBManager.update_login_status(email, "logged_in")
+
+                # 检测 Google One Pro 会员状态
+                is_pro = await _check_google_one_pro_status(page, log)
+                if is_pro is not None:
+                    DBManager.update_pro_status(email, "yes" if is_pro else "no")
+                    log(f"📊 Pro 会员状态: {'是' if is_pro else '否'}")
+
                 return LoginResult(
                     success=True,
                     message="登录成功",
@@ -289,11 +298,12 @@ async def auto_google_login(
                     agent_state=task_result.state,
                 )
             else:
-                log(f"❌ 登录失败: {task_result.message}")
-                DBManager.update_login_status(email, "login_failed")
+                error_msg = task_result.message or "登录失败"
+                log(f"❌ 登录失败: {error_msg}")
+                DBManager.update_login_status(email, "login_failed", last_error=error_msg)
                 return LoginResult(
                     success=False,
-                    message=task_result.message or "登录失败",
+                    message=error_msg,
                     email=email,
                     browser_id=browser_id,
                     login_status="login_failed",
@@ -305,7 +315,7 @@ async def auto_google_login(
     except Exception as e:
         error_msg = str(e)
         log(f"❌ 异常: {error_msg}")
-        DBManager.update_login_status(email, "login_failed")
+        DBManager.update_login_status(email, "login_failed", last_error=error_msg)
         return LoginResult(
             success=False,
             message=f"登录异常: {error_msg}",
@@ -318,6 +328,84 @@ async def auto_google_login(
     finally:
         # 不关闭浏览器，保持登录状态供后续 OAuth 使用
         pass
+
+
+async def _check_google_one_pro_status(
+    page: Page,
+    log: Callable[[str], None] = None,
+) -> bool | None:
+    """
+    检测 Google One Pro 会员状态
+
+    通过访问 Google One 页面检测当前账号是否是 Pro 会员
+
+    Args:
+        page: Playwright Page 对象
+        log: 日志回调函数
+
+    Returns:
+        True = Pro 会员
+        False = 非 Pro 会员
+        None = 检测失败
+    """
+    def _log(msg: str):
+        if log:
+            log(msg)
+        else:
+            print(f"[ProCheck] {msg}")
+
+    try:
+        _log("正在检测 Google One 会员状态...")
+
+        # 导航到 Google One 页面
+        await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
+        await page.wait_for_timeout(2000)
+
+        # 检查页面内容，寻找 Pro 会员标识
+        page_text = await page.inner_text("body")
+
+        # Pro 会员标识关键词
+        pro_indicators = [
+            "Google One AI Premium",
+            "AI Premium",
+            "2 TB",
+            "Premium plan",
+            "Premium 方案",
+            "高级会员",
+            "您当前的方案",  # 有方案说明是会员
+        ]
+
+        # 非会员标识
+        non_pro_indicators = [
+            "升级",
+            "Upgrade",
+            "Get Google One",
+            "加入 Google One",
+            "Choose a plan",
+            "选择方案",
+            "开始使用",
+        ]
+
+        # 检查是否是 Pro 会员
+        is_pro = False
+        for indicator in pro_indicators:
+            if indicator.lower() in page_text.lower():
+                _log(f"检测到 Pro 标识: {indicator}")
+                is_pro = True
+                break
+
+        # 如果没检测到 Pro 标识，检查是否明确是非会员
+        if not is_pro:
+            for indicator in non_pro_indicators:
+                if indicator.lower() in page_text.lower():
+                    _log(f"检测到非 Pro 标识: {indicator}")
+                    return False
+
+        return is_pro
+
+    except Exception as e:
+        _log(f"⚠️ 检测 Pro 状态失败: {e}")
+        return None
 
 
 async def check_login_status(page: Page) -> bool:

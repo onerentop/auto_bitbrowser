@@ -483,6 +483,72 @@ class Sub2APIClient:
             return match.group(0)
         return ""
 
+    # ==================== Proxy Management Endpoints ====================
+
+    async def get_all_proxies_with_count(self) -> Sub2APIResponse:
+        """
+        获取所有代理及其关联账号数
+
+        GET /api/v1/admin/proxies/all?with_count=true
+
+        Returns:
+            Sub2APIResponse 包含代理列表:
+            [
+                {
+                    "id": 1,
+                    "name": "US Proxy 1",
+                    "protocol": "http",
+                    "host": "proxy.example.com",
+                    "port": 8080,
+                    "username": "user",
+                    "password": "pass",
+                    "account_count": 5,
+                    "status": "active"
+                }
+            ]
+        """
+        return await self._request(
+            method="GET",
+            endpoint="/api/v1/admin/proxies/all",
+            params={"with_count": "true"},
+            use_admin=True,
+        )
+
+    async def update_account(
+        self,
+        account_id: int,
+        proxy_id: int = None,
+        notes: str = None,
+    ) -> Sub2APIResponse:
+        """
+        更新账号信息（代理绑定、备注）
+
+        PUT /api/v1/admin/accounts/:id
+
+        Args:
+            account_id: Sub2API 账号 ID
+            proxy_id: 要绑定的代理 ID（可选）
+            notes: 账号备注（可选）
+
+        Returns:
+            Sub2APIResponse: 更新结果
+        """
+        payload = {}
+        if proxy_id is not None:
+            payload["proxy_id"] = proxy_id
+        if notes is not None:
+            payload["notes"] = notes
+
+        if not payload:
+            return Sub2APIResponse.from_error("没有要更新的字段")
+
+        return await self._request(
+            method="PUT",
+            endpoint=f"/api/v1/admin/accounts/{account_id}",
+            data=payload,
+            use_admin=True,
+        )
+
     @staticmethod
     def extract_validation_url(error_response: dict) -> str:
         """从 403 响应提取验证链接"""

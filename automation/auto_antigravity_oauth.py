@@ -28,6 +28,7 @@ except ImportError:
 from services.database import DBManager
 from services.ix_api import openBrowser
 from services.sub2api_client import Sub2APIClient
+from services.proxy_smart_allocator import ProxySmartAllocator
 from automation.auto_google_login import auto_google_login, LoginResult
 
 
@@ -49,6 +50,7 @@ OAUTH_AUTHORIZE_PROMPT = """
 
 ## 当前状态
 - 账号: {email}
+{totp_info}
 - 目标: 完成 Antigravity 平台的 OAuth 授权
 
 ## 任务目标
@@ -60,12 +62,15 @@ OAUTH_AUTHORIZE_PROMPT = """
 - 如果看到"选择账号"页面，选择 {email} 对应的账号
 - 如果看到"登录"页面，说明需要先登录（报告此情况）
 
-### 2. 授权页面
+### 2. 处理 2FA 验证（如果需要）
+{totp_instructions}
+
+### 3. 授权页面
 - 如果看到授权确认页面（"允许 XXX 访问您的 Google 账号"）
 - 点击"允许"或"继续"按钮完成授权
 - 可能需要勾选权限复选框
 
-### 3. 等待跳转到回调 URL
+### 4. 等待跳转到回调 URL
 - 授权完成后，页面会自动跳转到 localhost:8085/callback?...
 - 回调 URL 包含 code= 和 state= 参数
 
@@ -98,6 +103,8 @@ async def auto_antigravity_oauth(
     provider: str = None,
     max_steps: int = None,
     skip_login_check: bool = False,
+    proxy_allocator: ProxySmartAllocator = None,
+    auto_bind_proxy: bool = True,
 ) -> OAuthResult:
     """
     执行 Antigravity OAuth 自动化
@@ -112,11 +119,14 @@ async def auto_antigravity_oauth(
         provider: AI 提供商（可选）
         max_steps: 最大步骤数（可选）
         skip_login_check: 是否跳过登录检查
+        proxy_allocator: 代理智能分配器（可选）
+        auto_bind_proxy: 是否自动绑定代理（默认 True）
 
     Returns:
         OAuthResult: OAuth 结果
     """
     email = account.get("email", "")
+    secret_key = account.get("secret_key", "")
 
     def log(msg: str):
         """日志输出"""
@@ -287,8 +297,24 @@ async def auto_antigravity_oauth(
 
             base_url = ConfigManager.get_ai_provider_base_url(provider)
 
+            # 构建 2FA 信息
+            totp_info = ""
+            totp_instructions = ""
+            if secret_key:
+                totp_info = f"- 当前 2FA 验证码: {{totp_code}} (使用密钥 {secret_key[:4]}... 生成)"
+                totp_instructions = """- 如果看到需要输入验证码/Authenticator 的页面
+- 在验证码输入框中输入 6 位数字验证码
+- 验证码每 30 秒更新一次，请快速输入
+- 点击"下一步"或按 Enter 确认"""
+            else:
+                totp_instructions = "- 如果需要 2FA 验证但没有密钥，报告需要人工干预 (need_verification)"
+
             # 构建提示词
-            prompt = OAUTH_AUTHORIZE_PROMPT.format(email=email)
+            prompt = OAUTH_AUTHORIZE_PROMPT.format(
+                email=email,
+                totp_info=totp_info,
+                totp_instructions=totp_instructions,
+            )
 
             # 创建 AI Agent
             agent = AIBrowserAgent(
@@ -348,11 +374,20 @@ async def auto_antigravity_oauth(
 
             log("开始执行授权任务...")
 
+            # 构建 account 参数（AI Agent 使用 'secret' 字段名，需要转换）
+            agent_account = {
+                "email": email,
+                "password": account.get("password", ""),
+                "secret": secret_key,  # AI Agent 使用 'secret' 而不是 'secret_key'
+                "recovery_email": account.get("recovery_email", ""),
+            }
+
             # 执行授权任务
             task_result = await agent.execute_task(
                 page=page,
                 goal=prompt,
                 start_url=auth_url,
+                account=agent_account,  # 传递账号信息，让 AI Agent 能生成 TOTP 验证码
                 max_steps=max_steps,
                 navigate_first=False,  # 已经导航到 auth_url 了
             )
@@ -414,13 +449,40 @@ async def auto_antigravity_oauth(
                     total_steps=task_result.total_steps,
                 )
 
-            # 获取账号 ID
-            sub2api_account_id = complete_response.data.get("account_id")
+            # 获取账号 ID（尝试多种字段名）
+            response_data = complete_response.data or {}
+            sub2api_account_id = (
+                response_data.get("account_id") or
+                response_data.get("id") or
+                response_data.get("accountId")
+            )
+
+            # 如果响应中没有账号 ID，尝试通过邮箱查询
+            if not sub2api_account_id:
+                log("响应中没有账号 ID，尝试通过邮箱查询...")
+                sub2api_account_id = await sub2api_client.check_account_exists(email)
 
             log(f"✅ OAuth 成功，账号 ID: {sub2api_account_id}")
 
             # 更新数据库
             DBManager.update_sub2api_status(email, "linked", account_id=sub2api_account_id)
+
+            # 自动绑定代理（如果启用且有分配器）
+            log(f"代理绑定检查: auto_bind_proxy={auto_bind_proxy}, has_allocator={proxy_allocator is not None}, account_id={sub2api_account_id}")
+            if auto_bind_proxy and proxy_allocator and sub2api_account_id:
+                log("开始自动绑定代理...")
+                try:
+                    bind_success = await proxy_allocator.allocate_and_bind(
+                        sub2api_account_id=sub2api_account_id,
+                        browser_profile_id=browser_id,
+                        callback=callback,
+                    )
+                    if bind_success:
+                        log("✅ 代理绑定成功")
+                    else:
+                        log("⚠️ 代理绑定失败（不影响 OAuth 结果）")
+                except Exception as e:
+                    log(f"⚠️ 代理绑定异常: {e}（不影响 OAuth 结果）")
 
             return OAuthResult(
                 success=True,

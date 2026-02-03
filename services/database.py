@@ -115,9 +115,16 @@ class DBManager:
             # ==================== Google One Pro 会员状态 ====================
 
             # 动态添加 is_pro 列（Pro 会员状态）
-            # 状态值: unknown / yes / no
+            # 状态值: unknown / yes / no / family_yes
             try:
                 cursor.execute("ALTER TABLE accounts ADD COLUMN is_pro TEXT DEFAULT 'unknown'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_member_count 列（家庭组成员数量）
+            # 0 = 未检测/无家庭组, 1-6 = 当前家庭成员数（包括管理员自己）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_member_count INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
@@ -2117,3 +2124,102 @@ class DBManager:
         except Exception as e:
             print(f"[DB ERROR] get_accounts_needing_unlock 失败: {e}")
             return []
+
+    # ==================== 家庭组功能 ====================
+
+    @staticmethod
+    def update_family_member_count(email: str, count: int) -> bool:
+        """
+        更新账号的家庭组成员数量
+
+        Args:
+            email: 账号邮箱
+            count: 家庭成员数量 (0-6)
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    "UPDATE accounts SET family_member_count = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                    (count, email)
+                )
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新家庭成员数量: {email} -> {count}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_family_member_count 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_available_pro_accounts() -> list:
+        """
+        获取可以邀请家庭成员的普通 Pro 账户
+
+        条件：
+        - is_pro = 'yes' (普通 Pro，非家庭组 Pro)
+        - family_member_count < 6 (家庭组未满)
+        - login_status = 'logged_in' (已登录)
+        - browser_profile_id 已绑定 (有浏览器窗口)
+
+        Returns:
+            list: 可用的 Pro 账户列表，包含 available_slots 字段
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT *, (6 - COALESCE(family_member_count, 0)) as available_slots
+                    FROM accounts
+                    WHERE is_pro = 'yes'
+                    AND COALESCE(family_member_count, 0) < 6
+                    AND login_status = 'logged_in'
+                    AND browser_profile_id IS NOT NULL
+                    AND browser_profile_id != ''
+                    ORDER BY family_member_count ASC
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_available_pro_accounts 失败: {e}")
+            return []
+
+    @staticmethod
+    def get_family_pro_accounts() -> list:
+        """
+        获取家庭组 Pro 账户（可以加入其他家庭组的账户）
+
+        条件：
+        - is_pro = 'family_yes' (家庭组 Pro)
+        - login_status = 'logged_in' (已登录)
+
+        Returns:
+            list: 家庭组 Pro 账户列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM accounts
+                    WHERE is_pro = 'family_yes'
+                    AND login_status = 'logged_in'
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_family_pro_accounts 失败: {e}")
+            return []
+
