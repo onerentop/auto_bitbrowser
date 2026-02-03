@@ -756,6 +756,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         self.btn_account_manager.clicked.connect(self.action_open_account_manager)
         google_layout.addWidget(self.btn_account_manager)
 
+        # 导入 TOTP 密钥按钮
+        self.btn_import_totp = QPushButton("📲 导入 TOTP 密钥")
+        self.btn_import_totp.setFixedHeight(40)
+        self.btn_import_totp.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_import_totp.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #E91E63;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #C2185B; }
+        """)
+        self.btn_import_totp.clicked.connect(self.action_import_totp)
+        google_layout.addWidget(self.btn_import_totp)
+
         google_layout.addStretch()
         google_page.setLayout(google_layout)
         self.toolbox.addItem(google_page, "Google 专区")
@@ -1509,6 +1527,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.account_manager_dialog.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开账号管理窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_import_totp(self):
+        """打开 TOTP 密钥导入窗口"""
+        try:
+            from gui.import_totp_gui import ImportTOTPDialog
+
+            if not hasattr(self, 'import_totp_dialog') or self.import_totp_dialog is None:
+                self.import_totp_dialog = ImportTOTPDialog(self)
+
+            self.import_totp_dialog.show()
+            self.import_totp_dialog.raise_()
+            self.import_totp_dialog.activateWindow()
+        except ImportError as e:
+            QMessageBox.critical(self, "错误", f"无法加载 TOTP 导入模块:\n{e}")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开 TOTP 导入窗口: {e}")
             import traceback
             traceback.print_exc()
 

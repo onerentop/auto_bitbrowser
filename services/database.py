@@ -112,6 +112,15 @@ class DBManager:
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+            # ==================== Google One Pro 会员状态 ====================
+
+            # 动态添加 is_pro 列（Pro 会员状态）
+            # 状态值: unknown / yes / no
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN is_pro TEXT DEFAULT 'unknown'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
             # 创建卡片表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -213,7 +222,7 @@ class DBManager:
     @staticmethod
     def upsert_account(email, password=None, recovery_email=None, secret_key=None,
                        link=None, status=None, message=None, sheerid_steps=None,
-                       last_failed_step=None, last_error=None):
+                       last_failed_step=None, last_error=None, browser_profile_id=None):
         """插入或更新账号信息"""
         if not email:
             print(f"[DB] upsert_account: email 为空，跳过")
@@ -243,6 +252,7 @@ class DBManager:
                     # last_failed_step 和 last_error 支持传 "" 来清除
                     if last_failed_step is not None: fields.append("last_failed_step = ?"); values.append(last_failed_step if last_failed_step else None)
                     if last_error is not None: fields.append("last_error = ?"); values.append(last_error if last_error else None)
+                    if browser_profile_id is not None: fields.append("browser_profile_id = ?"); values.append(browser_profile_id)
 
                     if fields:
                         fields.append("updated_at = CURRENT_TIMESTAMP")
@@ -253,9 +263,9 @@ class DBManager:
                 else:
                     # 插入新记录
                     cursor.execute('''
-                        INSERT INTO accounts (email, password, recovery_email, secret_key, verification_link, status, message, sheerid_steps, last_failed_step, last_error)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (email, password, recovery_email, secret_key, link, status or 'pending', message, sheerid_steps or 0, last_failed_step, last_error))
+                        INSERT INTO accounts (email, password, recovery_email, secret_key, verification_link, status, message, sheerid_steps, last_failed_step, last_error, browser_profile_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (email, password, recovery_email, secret_key, link, status or 'pending', message, sheerid_steps or 0, last_failed_step, last_error, browser_profile_id))
                     print(f"[DB] 插入新账号: {email}, 状态: {status or 'pending'}")
 
                 conn.commit()
@@ -1879,13 +1889,14 @@ class DBManager:
             return []
 
     @staticmethod
-    def update_login_status(email: str, status: str) -> bool:
+    def update_login_status(email: str, status: str, last_error: str = None) -> bool:
         """
         更新账号登录状态
 
         Args:
             email: 账号邮箱
             status: 登录状态 (not_logged/logging_in/logged_in/login_failed)
+            last_error: 登录失败时的错误信息（可选）
 
         Returns:
             bool: 是否成功
@@ -1895,11 +1906,17 @@ class DBManager:
                 conn = DBManager.get_connection()
                 cursor = conn.cursor()
 
-                # 如果是登录成功，同时更新 last_login_at
+                # 如果是登录成功，同时更新 last_login_at，清除 last_error
                 if status == 'logged_in':
                     cursor.execute(
-                        "UPDATE accounts SET login_status = ?, last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                        "UPDATE accounts SET login_status = ?, last_login_at = CURRENT_TIMESTAMP, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
                         (status, email)
+                    )
+                elif last_error is not None:
+                    # 登录失败，保存错误信息
+                    cursor.execute(
+                        "UPDATE accounts SET login_status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                        (status, last_error, email)
                     )
                 else:
                     cursor.execute(
@@ -1916,6 +1933,39 @@ class DBManager:
                 return affected > 0
         except Exception as e:
             print(f"[DB ERROR] update_login_status 失败: {e}")
+            return False
+
+    @staticmethod
+    def update_pro_status(email: str, is_pro: str) -> bool:
+        """
+        更新账号 Pro 会员状态
+
+        Args:
+            email: 账号邮箱
+            is_pro: Pro 状态 (unknown/yes/no/family_yes)
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    "UPDATE accounts SET is_pro = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                    (is_pro, email)
+                )
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新 Pro 状态: {email} -> {is_pro}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_pro_status 失败: {e}")
             return False
 
     @staticmethod

@@ -12,3 +12,4 @@ selenium
 imap_tools
 openai
 anthropic
+pyzbar

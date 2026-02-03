@@ -14,8 +14,12 @@ core/
 ├── config_manager.py     # Configuration manager (singleton)
 ├── data_parser.py        # Unified data parser
 ├── retry_helper.py       # Intelligent retry framework
-└── ai_browser_agent/     # AI Browser Agent submodule
-    └── CLAUDE.md         # Submodule documentation
+├── ai_browser_agent/     # AI Browser Agent submodule
+│   └── CLAUDE.md         # Submodule documentation
+└── totp_extractor/       # TOTP 密钥提取模块
+    ├── __init__.py       # Module exports
+    ├── migration_decoder.py  # Google Authenticator Protobuf decoder
+    └── qr_scanner.py     # QR code scanner (pyzbar)
 ```
 
 ## Submodule Navigation
@@ -23,6 +27,7 @@ core/
 | Submodule | Description | CLAUDE.md |
 |-----------|-------------|-----------|
 | ai_browser_agent | Multi-LLM Vision-based browser agent (Gemini, Anthropic) | [ai_browser_agent/CLAUDE.md](ai_browser_agent/CLAUDE.md) |
+| totp_extractor | Extract TOTP secrets from Google Authenticator QR codes | - |
 
 ## Components
 

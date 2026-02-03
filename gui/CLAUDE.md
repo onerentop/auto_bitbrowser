@@ -21,7 +21,8 @@ gui/
 ├── kick_devices_gui.py          # Kick devices dialog
 ├── comprehensive_query_gui.py   # Comprehensive account query dialog
 ├── config_ui.py                 # Configuration management dialog
-└── sheerid_gui_v2.py            # SheerID verification dialog
+├── sheerid_gui_v2.py            # SheerID verification dialog
+└── import_totp_gui.py           # TOTP secret import dialog (Google Authenticator)
 ```
 
 ## Components
@@ -49,6 +50,7 @@ The main application window that serves as the entry point for all GUI operation
 | `ComprehensiveQueryDialog` | comprehensive_query_gui.py | Query all account data |
 | `ConfigDialog` | config_ui.py | Application configuration |
 | `SheerIDDialogV2` | sheerid_gui_v2.py | SheerID batch verification |
+| `ImportTOTPDialog` | import_totp_gui.py | Import TOTP secrets from Google Authenticator QR codes |
 
 ## Dialog Pattern
 
