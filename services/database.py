@@ -59,6 +59,59 @@ class DBManager:
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+            # ==================== Sub2API 集成字段 (V2.0) ====================
+
+            # 动态添加 sub2api_account_id 列（Sub2API 返回的账号 ID）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN sub2api_account_id INTEGER")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 sub2api_status 列（关联状态）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN sub2api_status TEXT DEFAULT 'not_linked'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 sub2api_session_id 列（OAuth 会话 ID）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN sub2api_session_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 login_status 列（登录状态）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN login_status TEXT DEFAULT 'not_logged'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 last_login_at 列（最后登录时间）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN last_login_at TIMESTAMP")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 browser_profile_id 列（绑定的浏览器窗口 ID）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN browser_profile_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # ==================== 403 解锁状态字段 ====================
+
+            # 动态添加 unlock_status 列（403 解锁状态）
+            # 状态值: none / needs_unlock / unlocking / unlocked / unlock_failed
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN unlock_status TEXT DEFAULT 'none'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 validation_url 列（403 验证链接）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN validation_url TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
             # 创建卡片表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -1670,3 +1723,347 @@ class DBManager:
         except Exception as e:
             print(f"[DB] get_all_account_recovery_bindings 失败: {e}")
             return {}
+
+    # ==================== Sub2API 集成方法 (V2.0) ====================
+
+    @staticmethod
+    def bind_account_to_browser(email: str, browser_profile_id: str) -> bool:
+        """
+        绑定账号到浏览器窗口
+
+        Args:
+            email: 账号邮箱
+            browser_profile_id: ixBrowser 窗口 ID
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE accounts SET browser_profile_id = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                    (browser_profile_id, email)
+                )
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+                if affected > 0:
+                    print(f"[DB] 绑定账号到窗口: {email} -> {browser_profile_id}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] bind_account_to_browser 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_account_by_browser(browser_profile_id: str) -> dict:
+        """
+        根据窗口 ID 获取绑定的账号
+
+        Args:
+            browser_profile_id: ixBrowser 窗口 ID
+
+        Returns:
+            dict: 账号信息，未找到返回 None
+        """
+        if not browser_profile_id:
+            return None
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE browser_profile_id = ?",
+                    (browser_profile_id,)
+                )
+                row = cursor.fetchone()
+                conn.close()
+                return dict(row) if row else None
+        except Exception as e:
+            print(f"[DB ERROR] get_account_by_browser 失败: {e}")
+            return None
+
+    @staticmethod
+    def get_unbound_accounts() -> list:
+        """
+        获取未绑定窗口的账号列表
+
+        Returns:
+            list: 未绑定窗口的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE browser_profile_id IS NULL OR browser_profile_id = ''"
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_unbound_accounts 失败: {e}")
+            return []
+
+    @staticmethod
+    def update_sub2api_status(email: str, status: str, account_id: int = None, session_id: str = None) -> bool:
+        """
+        更新账号的 Sub2API 关联状态
+
+        Args:
+            email: 账号邮箱
+            status: 关联状态 (not_linked/linking/linked/oauth_failed)
+            account_id: Sub2API 返回的账号 ID（可选）
+            session_id: OAuth 会话 ID（可选）
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 构建动态 SQL
+                fields = ["sub2api_status = ?", "updated_at = CURRENT_TIMESTAMP"]
+                values = [status]
+
+                if account_id is not None:
+                    fields.append("sub2api_account_id = ?")
+                    values.append(account_id)
+
+                if session_id is not None:
+                    fields.append("sub2api_session_id = ?")
+                    values.append(session_id)
+
+                values.append(email)
+                sql = f"UPDATE accounts SET {', '.join(fields)} WHERE email = ?"
+                cursor.execute(sql, values)
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新 Sub2API 状态: {email} -> {status}" + (f" (account_id={account_id})" if account_id else ""))
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_sub2api_status 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_accounts_by_sub2api_status(status: str) -> list:
+        """
+        根据 Sub2API 状态查询账号
+
+        Args:
+            status: 关联状态 (not_linked/linking/linked/oauth_failed)
+
+        Returns:
+            list: 符合条件的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE sub2api_status = ?",
+                    (status,)
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_accounts_by_sub2api_status 失败: {e}")
+            return []
+
+    @staticmethod
+    def update_login_status(email: str, status: str) -> bool:
+        """
+        更新账号登录状态
+
+        Args:
+            email: 账号邮箱
+            status: 登录状态 (not_logged/logging_in/logged_in/login_failed)
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 如果是登录成功，同时更新 last_login_at
+                if status == 'logged_in':
+                    cursor.execute(
+                        "UPDATE accounts SET login_status = ?, last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                        (status, email)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE accounts SET login_status = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                        (status, email)
+                    )
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新登录状态: {email} -> {status}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_login_status 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_accounts_by_login_status(status: str) -> list:
+        """
+        根据登录状态查询账号
+
+        Args:
+            status: 登录状态 (not_logged/logging_in/logged_in/login_failed)
+
+        Returns:
+            list: 符合条件的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE login_status = ?",
+                    (status,)
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_accounts_by_login_status 失败: {e}")
+            return []
+
+    @staticmethod
+    def get_accounts_for_sub2api() -> list:
+        """
+        获取可以添加到 Sub2API 的账号列表
+
+        条件：
+        - 已登录 (login_status = 'logged_in')
+        - 未关联 Sub2API (sub2api_status = 'not_linked' 或为空)
+
+        Returns:
+            list: 符合条件的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM accounts
+                    WHERE login_status = 'logged_in'
+                    AND (sub2api_status IS NULL OR sub2api_status = 'not_linked' OR sub2api_status = 'oauth_failed')
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_accounts_for_sub2api 失败: {e}")
+            return []
+
+    # ==================== 403 解锁状态管理 ====================
+
+    @staticmethod
+    def update_unlock_status(email: str, status: str, validation_url: str = None) -> bool:
+        """
+        更新账号的 403 解锁状态
+
+        Args:
+            email: 账号邮箱
+            status: 解锁状态 (none/needs_unlock/unlocking/unlocked/unlock_failed)
+            validation_url: 验证链接（可选）
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+
+                # 构建动态 SQL
+                fields = ["unlock_status = ?", "updated_at = CURRENT_TIMESTAMP"]
+                values = [status]
+
+                if validation_url is not None:
+                    fields.append("validation_url = ?")
+                    values.append(validation_url)
+
+                values.append(email)
+                sql = f"UPDATE accounts SET {', '.join(fields)} WHERE email = ?"
+                cursor.execute(sql, values)
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新解锁状态: {email} -> {status}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_unlock_status 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_accounts_by_unlock_status(status: str) -> list:
+        """
+        根据解锁状态查询账号
+
+        Args:
+            status: 解锁状态 (none/needs_unlock/unlocking/unlocked/unlock_failed)
+
+        Returns:
+            list: 符合条件的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM accounts WHERE unlock_status = ?",
+                    (status,)
+                )
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_accounts_by_unlock_status 失败: {e}")
+            return []
+
+    @staticmethod
+    def get_accounts_needing_unlock() -> list:
+        """
+        获取需要解锁的账号列表
+
+        返回 unlock_status 为 'needs_unlock' 或 'unlock_failed' 的账号
+
+        Returns:
+            list: 需要解锁的账号列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM accounts
+                    WHERE unlock_status IN ('needs_unlock', 'unlock_failed')
+                    AND validation_url IS NOT NULL
+                    AND validation_url != ''
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_accounts_needing_unlock 失败: {e}")
+            return []

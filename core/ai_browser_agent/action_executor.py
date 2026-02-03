@@ -258,29 +258,92 @@ class ActionExecutor:
         if not action.value:
             return False, "未指定填写内容"
 
-        if action.target_description:
-            element = await self._finder.find_element(action.target_description)
+        target = action.target_description
+        if not target:
+            return False, "未指定目标输入框"
+
+        # V2.3: 优先尝试通过元素 ID 定位 (支持 [N] 格式)
+        element = await self._finder.locate_by_element_id(target)
+        if element:
+            try:
+                await element.fill(action.value, timeout=self.timeout)
+                return True, f"填写内容到: {target}"
+            except Exception as e:
+                # 元素 ID 定位成功但 fill 失败，尝试点击后输入
+                try:
+                    await element.click(timeout=self.timeout)
+                    await element.fill(action.value, timeout=self.timeout)
+                    return True, f"填写内容到 (点击后): {target}"
+                except Exception:
+                    pass  # 继续尝试其他方法
+
+        # 尝试通过元素坐标定位输入框
+        coords = self._finder.get_element_coordinates(target)
+        if coords:
+            try:
+                x, y = coords
+                # 点击输入框获取焦点
+                await self.page.mouse.click(x, y)
+                await asyncio.sleep(0.2)
+                # 清空现有内容并输入
+                await self.page.keyboard.press("Control+a")
+                await self.page.keyboard.type(action.value, delay=30)
+                return True, f"填写内容到坐标 ({x}, {y}): {target}"
+            except Exception:
+                pass  # 继续尝试其他方法
+
+        # 回退：使用描述文本查找元素
+        try:
+            element = await self._finder.find_element(target)
             if element:
                 await element.fill(action.value, timeout=self.timeout)
-                return True, f"填写内容到: {action.target_description}"
-            else:
-                return False, f"未找到输入框: {action.target_description}"
+                return True, f"填写内容到: {target}"
+        except Exception:
+            pass
 
-        return False, "未指定目标输入框"
+        return False, f"未找到输入框: {target}"
 
     async def _execute_type(self, action: AgentAction) -> Tuple[bool, str]:
         """执行逐字输入操作"""
         if not action.value:
             return False, "未指定输入内容"
 
-        if action.target_description:
-            element = await self._finder.find_element(action.target_description)
+        target = action.target_description
+
+        if target:
+            # V2.3: 优先尝试通过元素 ID 定位 (支持 [N] 格式)
+            element = await self._finder.locate_by_element_id(target)
             if element:
-                await element.click(timeout=self.timeout)
-                await self.page.keyboard.type(action.value, delay=50)
-                return True, f"逐字输入到: {action.target_description}"
-            else:
-                return False, f"未找到输入框: {action.target_description}"
+                try:
+                    await element.click(timeout=self.timeout)
+                    await self.page.keyboard.type(action.value, delay=50)
+                    return True, f"逐字输入到: {target}"
+                except Exception:
+                    pass  # 继续尝试其他方法
+
+            # 尝试通过元素坐标定位
+            coords = self._finder.get_element_coordinates(target)
+            if coords:
+                try:
+                    x, y = coords
+                    await self.page.mouse.click(x, y)
+                    await asyncio.sleep(0.2)
+                    await self.page.keyboard.type(action.value, delay=50)
+                    return True, f"逐字输入到坐标 ({x}, {y}): {target}"
+                except Exception:
+                    pass  # 继续尝试其他方法
+
+            # 回退：使用描述文本查找元素
+            try:
+                element = await self._finder.find_element(target)
+                if element:
+                    await element.click(timeout=self.timeout)
+                    await self.page.keyboard.type(action.value, delay=50)
+                    return True, f"逐字输入到: {target}"
+            except Exception:
+                pass
+
+            return False, f"未找到输入框: {target}"
 
         # 直接在当前焦点输入
         await self.page.keyboard.type(action.value, delay=50)
@@ -315,14 +378,25 @@ class ActionExecutor:
         if not action.target_description:
             return False, "未指定等待目标"
 
+        target = action.target_description
+
         try:
-            element = await self._finder.find_element(
-                action.target_description, wait_timeout=self.timeout
-            )
+            # V2.3: 优先尝试通过元素 ID 定位 (支持 [N] 格式)
+            element = await self._finder.locate_by_element_id(target)
             if element:
-                return True, f"元素已出现: {action.target_description}"
+                # 等待元素可见
+                try:
+                    await element.wait_for(state="visible", timeout=self.timeout)
+                    return True, f"元素已出现: {target}"
+                except Exception:
+                    return False, f"等待元素可见超时: {target}"
+
+            # 回退：使用描述文本查找元素
+            element = await self._finder.find_element(target, wait_timeout=self.timeout)
+            if element:
+                return True, f"元素已出现: {target}"
             else:
-                return False, f"等待超时: {action.target_description}"
+                return False, f"等待超时: {target}"
         except Exception as e:
             return False, f"等待失败: {str(e)}"
 

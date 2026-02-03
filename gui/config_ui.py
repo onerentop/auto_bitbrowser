@@ -1883,6 +1883,466 @@ class SettingsTab(QWidget):
         QTimer.singleShot(1500, lambda: self.gmail_copy_link_btn.setText("复制链接"))
 
 
+class Sub2APISettingsTab(QWidget):
+    """Sub2API 设置标签页"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.login_worker = None
+        self.test_worker = None
+        self._init_ui()
+        self._load_settings()
+
+    def _init_ui(self):
+        """初始化界面"""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 添加滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Sub2API 服务设置
+        service_group = QGroupBox("Sub2API 服务设置")
+        service_layout = QFormLayout(service_group)
+
+        # 启用开关
+        self.enabled_checkbox = QCheckBox("启用 Sub2API 集成")
+        service_layout.addRow("", self.enabled_checkbox)
+
+        # 服务地址
+        self.base_url_edit = QLineEdit()
+        self.base_url_edit.setPlaceholderText("https://sub2api.topren.top")
+        service_layout.addRow("服务地址:", self.base_url_edit)
+
+        # API Key
+        api_key_layout = QHBoxLayout()
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setPlaceholderText("输入 Admin API Key...")
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        api_key_layout.addWidget(self.api_key_edit)
+
+        self.show_api_key_btn = QPushButton("👁")
+        self.show_api_key_btn.setFixedWidth(30)
+        self.show_api_key_btn.setCheckable(True)
+        self.show_api_key_btn.clicked.connect(self._toggle_api_key_visibility)
+        api_key_layout.addWidget(self.show_api_key_btn)
+
+        service_layout.addRow("API Key:", api_key_layout)
+
+        # 保存 API Key 按钮
+        save_key_layout = QHBoxLayout()
+        self.save_api_key_btn = QPushButton("💾 保存 API Key")
+        self.save_api_key_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px 15px;")
+        self.save_api_key_btn.clicked.connect(self._save_api_key)
+        save_key_layout.addWidget(self.save_api_key_btn)
+
+        self.api_key_result_label = QLabel("")
+        save_key_layout.addWidget(self.api_key_result_label)
+        save_key_layout.addStretch()
+
+        service_layout.addRow("", save_key_layout)
+
+        # API Key 状态显示
+        key_status_layout = QHBoxLayout()
+        self.key_status_label = QLabel("未配置")
+        self.key_status_label.setStyleSheet("color: #999;")
+        key_status_layout.addWidget(self.key_status_label)
+
+        self.clear_key_btn = QPushButton("清除")
+        self.clear_key_btn.setFixedWidth(50)
+        self.clear_key_btn.clicked.connect(self._clear_api_key)
+        key_status_layout.addWidget(self.clear_key_btn)
+        key_status_layout.addStretch()
+
+        service_layout.addRow("Key 状态:", key_status_layout)
+
+        # 默认分组
+        self.default_group_edit = QLineEdit()
+        self.default_group_edit.setPlaceholderText("claude_share")
+        service_layout.addRow("默认分组:", self.default_group_edit)
+
+        # 测试连接按钮
+        test_layout = QHBoxLayout()
+        self.test_btn = QPushButton("测试连接")
+        self.test_btn.clicked.connect(self._test_connection)
+        test_layout.addWidget(self.test_btn)
+
+        self.test_result_label = QLabel("")
+        test_layout.addWidget(self.test_result_label)
+        test_layout.addStretch()
+
+        service_layout.addRow("", test_layout)
+
+        layout.addWidget(service_group)
+
+        # 账号管理设置
+        account_group = QGroupBox("账号管理设置")
+        account_layout = QFormLayout(account_group)
+
+        # 登录并发数
+        self.login_concurrency_spin = QSpinBox()
+        self.login_concurrency_spin.setRange(1, 10)
+        self.login_concurrency_spin.setValue(3)
+        account_layout.addRow("登录并发数:", self.login_concurrency_spin)
+
+        # 登录超时
+        self.login_timeout_spin = QSpinBox()
+        self.login_timeout_spin.setRange(30, 300)
+        self.login_timeout_spin.setSuffix(" 秒")
+        self.login_timeout_spin.setValue(120)
+        account_layout.addRow("登录超时:", self.login_timeout_spin)
+
+        # OAuth 超时
+        self.oauth_timeout_spin = QSpinBox()
+        self.oauth_timeout_spin.setRange(60, 600)
+        self.oauth_timeout_spin.setSuffix(" 秒")
+        self.oauth_timeout_spin.setValue(180)
+        account_layout.addRow("OAuth 超时:", self.oauth_timeout_spin)
+
+        layout.addWidget(account_group)
+
+        # ==================== SMS-Bus 接码平台设置 ====================
+        sms_group = QGroupBox("SMS-Bus 接码平台设置 (403 解锁用)")
+        sms_layout = QFormLayout(sms_group)
+
+        # SMS-Bus API Token
+        sms_token_layout = QHBoxLayout()
+        self.sms_token_edit = QLineEdit()
+        self.sms_token_edit.setPlaceholderText("输入 SMS-Bus API Token...")
+        self.sms_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        sms_token_layout.addWidget(self.sms_token_edit)
+
+        self.show_sms_token_btn = QPushButton("👁")
+        self.show_sms_token_btn.setFixedWidth(30)
+        self.show_sms_token_btn.setCheckable(True)
+        self.show_sms_token_btn.clicked.connect(self._toggle_sms_token_visibility)
+        sms_token_layout.addWidget(self.show_sms_token_btn)
+
+        sms_layout.addRow("API Token:", sms_token_layout)
+
+        # 保存 SMS Token 按钮
+        save_sms_layout = QHBoxLayout()
+        self.save_sms_token_btn = QPushButton("💾 保存 Token")
+        self.save_sms_token_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px 15px;")
+        self.save_sms_token_btn.clicked.connect(self._save_sms_token)
+        save_sms_layout.addWidget(self.save_sms_token_btn)
+
+        self.sms_token_result_label = QLabel("")
+        save_sms_layout.addWidget(self.sms_token_result_label)
+        save_sms_layout.addStretch()
+
+        sms_layout.addRow("", save_sms_layout)
+
+        # Token 状态显示
+        sms_status_layout = QHBoxLayout()
+        self.sms_status_label = QLabel("未配置")
+        self.sms_status_label.setStyleSheet("color: #999;")
+        sms_status_layout.addWidget(self.sms_status_label)
+
+        self.clear_sms_token_btn = QPushButton("清除")
+        self.clear_sms_token_btn.setFixedWidth(50)
+        self.clear_sms_token_btn.clicked.connect(self._clear_sms_token)
+        sms_status_layout.addWidget(self.clear_sms_token_btn)
+        sms_status_layout.addStretch()
+
+        sms_layout.addRow("Token 状态:", sms_status_layout)
+
+        # 默认国家 ID
+        self.sms_country_spin = QSpinBox()
+        self.sms_country_spin.setRange(0, 999)
+        self.sms_country_spin.setValue(0)
+        self.sms_country_spin.setSpecialValueText("未设置")
+        sms_layout.addRow("默认国家 ID:", self.sms_country_spin)
+
+        # 默认服务 ID
+        self.sms_project_spin = QSpinBox()
+        self.sms_project_spin.setRange(0, 9999)
+        self.sms_project_spin.setValue(0)
+        self.sms_project_spin.setSpecialValueText("未设置")
+        sms_layout.addRow("默认服务 ID:", self.sms_project_spin)
+
+        # 验证码等待超时
+        self.sms_timeout_spin = QSpinBox()
+        self.sms_timeout_spin.setRange(30, 600)
+        self.sms_timeout_spin.setSuffix(" 秒")
+        self.sms_timeout_spin.setValue(120)
+        sms_layout.addRow("验证码等待超时:", self.sms_timeout_spin)
+
+        # 轮询间隔
+        self.sms_poll_spin = QSpinBox()
+        self.sms_poll_spin.setRange(1, 30)
+        self.sms_poll_spin.setSuffix(" 秒")
+        self.sms_poll_spin.setValue(5)
+        sms_layout.addRow("轮询间隔:", self.sms_poll_spin)
+
+        # 总尝试次数
+        self.sms_retries_spin = QSpinBox()
+        self.sms_retries_spin.setRange(1, 10)
+        self.sms_retries_spin.setValue(2)
+        sms_layout.addRow("总尝试次数:", self.sms_retries_spin)
+
+        layout.addWidget(sms_group)
+
+        # 按钮区
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        self.save_btn = QPushButton("保存设置")
+        self.save_btn.clicked.connect(self._save_settings)
+        btn_layout.addWidget(self.save_btn)
+
+        self.reset_btn = QPushButton("恢复默认")
+        self.reset_btn.clicked.connect(self._reset_to_default)
+        btn_layout.addWidget(self.reset_btn)
+
+        layout.addLayout(btn_layout)
+
+        layout.addStretch()
+
+        # 完成滚动区域设置
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area)
+
+    def _toggle_api_key_visibility(self):
+        """切换 API Key 可见性"""
+        if self.show_api_key_btn.isChecked():
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _update_api_key_status(self):
+        """更新 API Key 状态显示"""
+        ConfigManager.reload()
+        api_key = ConfigManager.get_sub2api_token()
+        if api_key:
+            masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            self.key_status_label.setText(f"已配置 ({masked})")
+            self.key_status_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.key_status_label.setText("未配置")
+            self.key_status_label.setStyleSheet("color: #999;")
+
+    def _save_api_key(self):
+        """保存 API Key"""
+        api_key = self.api_key_edit.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "警告", "请输入 API Key")
+            return
+
+        ConfigManager.set_sub2api_token(api_key)
+        ConfigManager.reload()
+
+        saved_key = ConfigManager.get_sub2api_token()
+        if saved_key:
+            self._update_api_key_status()
+            self.api_key_edit.clear()
+            self.api_key_result_label.setText("✅ 已保存")
+            self.api_key_result_label.setStyleSheet("color: green;")
+        else:
+            self.api_key_result_label.setText("❌ 保存失败")
+            self.api_key_result_label.setStyleSheet("color: red;")
+
+    def _clear_api_key(self):
+        """清除 API Key"""
+        ConfigManager.set_sub2api_token("")
+        self._update_api_key_status()
+        self.api_key_result_label.setText("已清除")
+        self.api_key_result_label.setStyleSheet("color: #666;")
+
+    # ==================== SMS-Bus Token 方法 ====================
+
+    def _toggle_sms_token_visibility(self):
+        """切换 SMS Token 可见性"""
+        if self.show_sms_token_btn.isChecked():
+            self.sms_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            self.sms_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
+    def _update_sms_token_status(self):
+        """更新 SMS Token 状态显示"""
+        ConfigManager.reload()
+        token = ConfigManager.get_sms_bus_token()
+        if token:
+            masked = token[:8] + "..." + token[-4:] if len(token) > 12 else "***"
+            self.sms_status_label.setText(f"已配置 ({masked})")
+            self.sms_status_label.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.sms_status_label.setText("未配置")
+            self.sms_status_label.setStyleSheet("color: #999;")
+
+    def _save_sms_token(self):
+        """保存 SMS Token"""
+        token = self.sms_token_edit.text().strip()
+        if not token:
+            QMessageBox.warning(self, "警告", "请输入 SMS-Bus API Token")
+            return
+
+        ConfigManager.set_sms_bus_token(token)
+        ConfigManager.reload()
+
+        saved_token = ConfigManager.get_sms_bus_token()
+        if saved_token:
+            self._update_sms_token_status()
+            self.sms_token_edit.clear()
+            self.sms_token_result_label.setText("✅ 已保存")
+            self.sms_token_result_label.setStyleSheet("color: green;")
+        else:
+            self.sms_token_result_label.setText("❌ 保存失败")
+            self.sms_token_result_label.setStyleSheet("color: red;")
+
+    def _clear_sms_token(self):
+        """清除 SMS Token"""
+        ConfigManager.set_sms_bus_token("")
+        self._update_sms_token_status()
+        self.sms_token_result_label.setText("已清除")
+        self.sms_token_result_label.setStyleSheet("color: #666;")
+
+    def _load_settings(self):
+        """加载设置"""
+        self.enabled_checkbox.setChecked(ConfigManager.get_sub2api_enabled())
+        self.base_url_edit.setText(ConfigManager.get_sub2api_base_url())
+        self.default_group_edit.setText(ConfigManager.get_sub2api_default_group())
+
+        self.login_concurrency_spin.setValue(ConfigManager.get_login_concurrency())
+        self.login_timeout_spin.setValue(ConfigManager.get_login_timeout())
+        self.oauth_timeout_spin.setValue(ConfigManager.get_oauth_timeout())
+
+        self._update_api_key_status()
+
+        # 加载 SMS-Bus 设置
+        self._update_sms_token_status()
+        country_id = ConfigManager.get_sms_bus_default_country_id()
+        self.sms_country_spin.setValue(country_id if country_id else 0)
+        project_id = ConfigManager.get_sms_bus_default_project_id()
+        self.sms_project_spin.setValue(project_id if project_id else 0)
+        self.sms_timeout_spin.setValue(ConfigManager.get_sms_bus_timeout())
+        self.sms_poll_spin.setValue(ConfigManager.get_sms_bus_poll_interval())
+        self.sms_retries_spin.setValue(ConfigManager.get_sms_bus_max_retries())
+
+    def _save_settings(self):
+        """保存设置"""
+        try:
+            ConfigManager.set_sub2api_enabled(self.enabled_checkbox.isChecked())
+            ConfigManager.set_sub2api_base_url(self.base_url_edit.text().strip())
+            ConfigManager.set_sub2api_default_group(self.default_group_edit.text().strip())
+
+            ConfigManager.set_login_concurrency(self.login_concurrency_spin.value())
+            ConfigManager.set_login_timeout(self.login_timeout_spin.value())
+            ConfigManager.set_oauth_timeout(self.oauth_timeout_spin.value())
+
+            # 保存 SMS-Bus 设置
+            country_val = self.sms_country_spin.value()
+            # 0 表示"未设置"，存储为 None
+            ConfigManager.set_sms_bus_default_country_id(country_val if country_val > 0 else None)
+            project_val = self.sms_project_spin.value()
+            ConfigManager.set_sms_bus_default_project_id(project_val if project_val > 0 else None)
+            ConfigManager.set_sms_bus_timeout(self.sms_timeout_spin.value())
+            ConfigManager.set_sms_bus_poll_interval(self.sms_poll_spin.value())
+            ConfigManager.set_sms_bus_max_retries(self.sms_retries_spin.value())
+
+            QMessageBox.information(self, "成功", "设置已保存")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存失败: {str(e)}")
+
+    def _reset_to_default(self):
+        """恢复默认设置"""
+        reply = QMessageBox.question(
+            self, "确认",
+            "确定要恢复默认设置吗？这不会清除已保存的 Token。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.enabled_checkbox.setChecked(True)
+        self.base_url_edit.setText("https://sub2api.topren.top")
+        self.default_group_edit.setText("claude_share")
+
+        self.login_concurrency_spin.setValue(3)
+        self.login_timeout_spin.setValue(120)
+        self.oauth_timeout_spin.setValue(180)
+
+        self.api_key_result_label.setText("")
+
+        # 重置 SMS-Bus 设置
+        self.sms_country_spin.setValue(0)
+        self.sms_project_spin.setValue(0)
+        self.sms_timeout_spin.setValue(120)
+        self.sms_poll_spin.setValue(5)
+        self.sms_retries_spin.setValue(2)
+        self.sms_token_result_label.setText("")
+
+    def _test_connection(self):
+        """测试 Sub2API 连接"""
+        import asyncio
+
+        self.test_btn.setEnabled(False)
+        self.test_result_label.setText("测试中...")
+
+        base_url = self.base_url_edit.text().strip()
+        # 如果 base_url 为空，使用默认值
+        if not base_url:
+            base_url = "https://sub2api.topren.top"
+            self.base_url_edit.setText(base_url)
+
+        # 强制重新加载配置，确保读取最新的 API Key
+        ConfigManager.reload()
+        api_key = ConfigManager.get_sub2api_token()
+
+        # 如果没有 API Key，给出警告
+        if not api_key:
+            self.test_result_label.setText("⚠️ 请先配置 API Key")
+            self.test_result_label.setStyleSheet("color: orange;")
+            self.test_btn.setEnabled(True)
+            return
+
+        from PyQt6.QtCore import QThread
+
+        class TestWorker(QThread):
+            finished = pyqtSignal(bool, str)
+
+            def __init__(self, base_url, api_key):
+                super().__init__()
+                self.base_url = base_url
+                self.api_key = api_key
+
+            def run(self):
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                    try:
+                        from services.sub2api_client import test_sub2api_connection
+                        success, message = loop.run_until_complete(
+                            test_sub2api_connection(self.base_url, self.api_key)
+                        )
+                        self.finished.emit(success, message)
+                    finally:
+                        loop.close()
+
+                except Exception as e:
+                    self.finished.emit(False, str(e))
+
+        def on_test_finished(success, message):
+            self.test_btn.setEnabled(True)
+            if success:
+                self.test_result_label.setText("✅ " + message)
+                self.test_result_label.setStyleSheet("color: green;")
+            else:
+                self.test_result_label.setText("❌ " + message)
+                self.test_result_label.setStyleSheet("color: red;")
+
+        self.test_worker = TestWorker(base_url, api_key)
+        self.test_worker.finished.connect(on_test_finished)
+        self.test_worker.start()
+
+
 class ConfigManagerWidget(QWidget):
     """配置管理主容器"""
 
@@ -1905,5 +2365,6 @@ class ConfigManagerWidget(QWidget):
         self.tabs.addTab(CardsTab(), "卡片管理")
         self.tabs.addTab(ProxiesTab(), "代理管理")
         self.tabs.addTab(SettingsTab(), "全局设置")
+        self.tabs.addTab(Sub2APISettingsTab(), "Sub2API 设置")
 
         layout.addWidget(self.tabs)

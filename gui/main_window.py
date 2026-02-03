@@ -437,12 +437,18 @@ class WorkerThread(QThread):
                     success_count += 1
                     self.log(f"[成功] 窗口创建成功！ID: {browser_id}")
 
+                    # 记录账号-窗口绑定关系
+                    email = account.get('email', '')
+                    if email:
+                        DBManager.bind_account_to_browser(email, str(browser_id))
+                        self.log(f"[绑定] 账号已绑定到窗口")
+
                     # 记录代理绑定关系
                     if proxy_data:
                         DBManager.bind_proxy_to_window(
                             proxy_data['id'],
                             str(browser_id),
-                            account.get('email', '')
+                            email
                         )
                         self.log(f"[绑定] 代理已绑定到窗口")
                 else:
@@ -731,6 +737,24 @@ class BrowserWindowCreatorGUI(QMainWindow):
         """)
         self.btn_comprehensive_query.clicked.connect(self.action_open_comprehensive_query)
         google_layout.addWidget(self.btn_comprehensive_query)
+
+        # 账号管理按钮 (Google 登录 + Sub2API OAuth)
+        self.btn_account_manager = QPushButton("👤 账号管理 (登录/OAuth)")
+        self.btn_account_manager.setFixedHeight(40)
+        self.btn_account_manager.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_account_manager.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                padding-left: 15px;
+                font-weight: bold;
+                color: white;
+                background-color: #673AB7;
+                border-radius: 5px;
+            }
+            QPushButton:hover { background-color: #512DA8; }
+        """)
+        self.btn_account_manager.clicked.connect(self.action_open_account_manager)
+        google_layout.addWidget(self.btn_account_manager)
 
         google_layout.addStretch()
         google_page.setLayout(google_layout)
@@ -1469,6 +1493,22 @@ class BrowserWindowCreatorGUI(QMainWindow):
             self.comprehensive_query_dialog.activateWindow()
         except Exception as e:
             QMessageBox.warning(self, "错误", f"无法打开综合查询窗口: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def action_open_account_manager(self):
+        """打开账号管理窗口 (Google 登录 + Sub2API OAuth)"""
+        try:
+            from gui.account_manager_gui import AccountManagerDialog
+
+            if not hasattr(self, 'account_manager_dialog') or self.account_manager_dialog is None:
+                self.account_manager_dialog = AccountManagerDialog(self)
+
+            self.account_manager_dialog.show()
+            self.account_manager_dialog.raise_()
+            self.account_manager_dialog.activateWindow()
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"无法打开账号管理窗口: {e}")
             import traceback
             traceback.print_exc()
 

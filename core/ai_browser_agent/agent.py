@@ -573,7 +573,7 @@ class AIBrowserAgent:
             return terminal_result
 
         # V2: 动作开始日志
-        self.logger.action_start(action.action_type.value, action.target or "")
+        self.logger.action_start(action.action_type.value, action.target_description or "")
 
         # 执行普通动作
         action_start = time.time()

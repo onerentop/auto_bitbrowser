@@ -45,6 +45,30 @@ class ConfigManager:
         "proxy": {
             "max_windows_per_ip": 3  # 每个IP最大窗口数
         },
+        # Sub2API 集成配置
+        "sub2api": {
+            "enabled": True,
+            "base_url": "https://sub2api.topren.top",
+            "username": "",       # 用户名
+            "password": "",       # 加密存储
+            "admin_token": "",    # 登录后获取的 Token (加密存储)
+            "default_group": "claude_share"
+        },
+        # 账号管理配置
+        "account_manager": {
+            "login_concurrency": 3,   # 并发登录数
+            "login_timeout": 120,     # 登录超时（秒）
+            "oauth_timeout": 180      # OAuth 超时（秒）
+        },
+        # SMS-Bus 接码平台配置
+        "sms_bus": {
+            "token": "",              # API Token
+            "default_country_id": None,   # 默认国家 ID (None = 自动选最便宜)
+            "default_project_id": None,   # 默认服务 ID (None = Google)
+            "sms_timeout": 120,       # 等待验证码超时（秒）
+            "sms_poll_interval": 5,   # 轮询间隔（秒）
+            "max_retries": 2          # 总尝试次数（不是额外重试次数）
+        },
         # AI Agent 配置 (多提供商支持)
         "ai_agent": {
             # 默认提供商
@@ -493,6 +517,168 @@ class ConfigManager:
     def set_gmail_imap_password(cls, password: str):
         """设置 Gmail IMAP 应用密码"""
         cls.set("gmail_imap_password", password)
+
+    # ============ Sub2API 配置方法 ============
+
+    @classmethod
+    def get_sub2api_enabled(cls) -> bool:
+        """获取 Sub2API 是否启用"""
+        return cls.get("sub2api.enabled", True)
+
+    @classmethod
+    def set_sub2api_enabled(cls, enabled: bool):
+        """设置 Sub2API 启用状态"""
+        cls.set("sub2api.enabled", enabled)
+
+    @classmethod
+    def get_sub2api_base_url(cls) -> str:
+        """获取 Sub2API 服务地址"""
+        return cls.get("sub2api.base_url", "https://sub2api.topren.top")
+
+    @classmethod
+    def set_sub2api_base_url(cls, base_url: str):
+        """设置 Sub2API 服务地址"""
+        cls.set("sub2api.base_url", base_url)
+
+    @classmethod
+    def get_sub2api_username(cls) -> str:
+        """获取 Sub2API 用户名"""
+        return cls.get("sub2api.username", "")
+
+    @classmethod
+    def set_sub2api_username(cls, username: str):
+        """设置 Sub2API 用户名"""
+        cls.set("sub2api.username", username)
+
+    @classmethod
+    def get_sub2api_password(cls) -> str:
+        """获取解密后的 Sub2API 密码"""
+        encrypted = cls.get("sub2api.password", "")
+        return cls.decrypt_sensitive(encrypted)
+
+    @classmethod
+    def set_sub2api_password(cls, password: str):
+        """加密保存 Sub2API 密码"""
+        encrypted = cls.encrypt_sensitive(password)
+        cls.set("sub2api.password", encrypted)
+
+    @classmethod
+    def get_sub2api_token(cls) -> str:
+        """获取解密后的 Sub2API Admin Token"""
+        encrypted = cls.get("sub2api.admin_token", "")
+        return cls.decrypt_sensitive(encrypted)
+
+    @classmethod
+    def set_sub2api_token(cls, token: str):
+        """加密保存 Sub2API Admin Token"""
+        encrypted = cls.encrypt_sensitive(token)
+        cls.set("sub2api.admin_token", encrypted)
+
+    @classmethod
+    def get_sub2api_default_group(cls) -> str:
+        """获取 Sub2API 默认分组"""
+        return cls.get("sub2api.default_group", "claude_share")
+
+    @classmethod
+    def set_sub2api_default_group(cls, group: str):
+        """设置 Sub2API 默认分组"""
+        cls.set("sub2api.default_group", group)
+
+    # ============ 账号管理配置方法 ============
+
+    @classmethod
+    def get_login_concurrency(cls) -> int:
+        """获取并发登录数"""
+        return cls.get("account_manager.login_concurrency", 3)
+
+    @classmethod
+    def set_login_concurrency(cls, concurrency: int):
+        """设置并发登录数"""
+        cls.set("account_manager.login_concurrency", concurrency)
+
+    @classmethod
+    def get_login_timeout(cls) -> int:
+        """获取登录超时时间（秒）"""
+        return cls.get("account_manager.login_timeout", 120)
+
+    @classmethod
+    def set_login_timeout(cls, timeout: int):
+        """设置登录超时时间（秒）"""
+        cls.set("account_manager.login_timeout", timeout)
+
+    @classmethod
+    def get_oauth_timeout(cls) -> int:
+        """获取 OAuth 超时时间（秒）"""
+        return cls.get("account_manager.oauth_timeout", 180)
+
+    @classmethod
+    def set_oauth_timeout(cls, timeout: int):
+        """设置 OAuth 超时时间（秒）"""
+        cls.set("account_manager.oauth_timeout", timeout)
+
+    # ============ SMS-Bus 配置方法 ============
+
+    @classmethod
+    def get_sms_bus_token(cls) -> str:
+        """获取 SMS-Bus API Token"""
+        encrypted = cls.get("sms_bus.token", "")
+        return cls.decrypt_sensitive(encrypted)
+
+    @classmethod
+    def set_sms_bus_token(cls, token: str):
+        """加密保存 SMS-Bus API Token"""
+        encrypted = cls.encrypt_sensitive(token)
+        cls.set("sms_bus.token", encrypted)
+
+    @classmethod
+    def get_sms_bus_default_country_id(cls) -> int:
+        """获取 SMS-Bus 默认国家 ID"""
+        return cls.get("sms_bus.default_country_id", None)
+
+    @classmethod
+    def set_sms_bus_default_country_id(cls, country_id: int):
+        """设置 SMS-Bus 默认国家 ID"""
+        cls.set("sms_bus.default_country_id", country_id)
+
+    @classmethod
+    def get_sms_bus_default_project_id(cls) -> int:
+        """获取 SMS-Bus 默认服务 ID"""
+        return cls.get("sms_bus.default_project_id", None)
+
+    @classmethod
+    def set_sms_bus_default_project_id(cls, project_id: int):
+        """设置 SMS-Bus 默认服务 ID"""
+        cls.set("sms_bus.default_project_id", project_id)
+
+    @classmethod
+    def get_sms_bus_timeout(cls) -> int:
+        """获取 SMS-Bus 等待验证码超时时间（秒）"""
+        return cls.get("sms_bus.sms_timeout", 120)
+
+    @classmethod
+    def set_sms_bus_timeout(cls, timeout: int):
+        """设置 SMS-Bus 等待验证码超时时间（秒）"""
+        cls.set("sms_bus.sms_timeout", timeout)
+
+    @classmethod
+    def get_sms_bus_poll_interval(cls) -> int:
+        """获取 SMS-Bus 轮询间隔（秒）"""
+        return cls.get("sms_bus.sms_poll_interval", 5)
+
+    @classmethod
+    def set_sms_bus_poll_interval(cls, interval: int):
+        """设置 SMS-Bus 轮询间隔（秒）"""
+        cls.set("sms_bus.sms_poll_interval", interval)
+
+    @classmethod
+    def get_sms_bus_max_retries(cls) -> int:
+        """获取 SMS-Bus 总尝试次数（不是额外重试次数）"""
+        return cls.get("sms_bus.max_retries", 2)
+
+    @classmethod
+    def set_sms_bus_max_retries(cls, retries: int):
+        """设置 SMS-Bus 总尝试次数（不是额外重试次数）"""
+        cls.set("sms_bus.max_retries", retries)
 
     @classmethod
     def reload(cls):
