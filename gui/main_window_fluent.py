@@ -26,6 +26,7 @@ from gui.kickdevices_interface import KickDevicesInterface
 from gui.query_interface import QueryInterface
 from gui.placeholder_interface import PlaceholderInterface
 from gui.account_manager_interface import AccountManagerInterface
+from gui.import_totp_interface import ImportTOTPInterface
 
 from core.config_manager import ConfigManager
 
@@ -84,6 +85,9 @@ class MainFluentWindow(FluentWindow):
 
         # 账号管理 - 使用完整的账号管理界面
         self.accountInterface = AccountManagerInterface(self)
+
+        # TOTP 密钥导入
+        self.importTOTPInterface = ImportTOTPInterface(self)
 
         # 全自动订阅 (占位界面)
         self.subscribeInterface = PlaceholderInterface(
@@ -163,6 +167,13 @@ class MainFluentWindow(FluentWindow):
             self.accountInterface,
             FIF.PEOPLE,
             "账号管理"
+        )
+
+        # TOTP 密钥导入
+        self.addSubInterface(
+            self.importTOTPInterface,
+            FIF.FINGERPRINT,
+            "导入 TOTP"
         )
 
         # 全自动订阅

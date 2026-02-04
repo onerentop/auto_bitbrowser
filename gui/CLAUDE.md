@@ -29,6 +29,8 @@ gui/
 ├── modifyauth_interface.py      # AI modify authenticator
 ├── kickdevices_interface.py     # AI kick devices
 ├── query_interface.py           # Comprehensive query
+├── account_manager_interface.py # Google account management
+├── import_totp_interface.py     # TOTP key import from QR
 │
 └── (legacy dialogs...)          # Original PyQt6 dialogs preserved
 ```
@@ -52,7 +54,8 @@ MainFluentWindow (FluentWindow)
 │   ├── 踢出设备 (KickDevicesInterface)
 │   ├── 综合查询 (QueryInterface)
 │   ├── ─── 分隔线 ───
-│   ├── 账号管理 (PlaceholderInterface)
+│   ├── 账号管理 (AccountManagerInterface)
+│   ├── 导入 TOTP (ImportTOTPInterface)
 │   ├── 全自动订阅 (PlaceholderInterface)
 │   └── 设置 (SettingInterface) [底部]
 └── StackedWidget (右侧内容区)
@@ -64,6 +67,8 @@ MainFluentWindow (FluentWindow)
 QFrame
 ├── BaseInterface
 │   ├── HomeInterface
+│   ├── AccountManagerInterface
+│   ├── ImportTOTPInterface
 │   └── BaseDialogInterface
 │       ├── PlaceholderInterface
 │       └── AITaskInterface
@@ -116,6 +121,8 @@ The main application window using FluentWindow with sidebar navigation.
 | `ModifyAuthInterface` | modifyauth_interface.py | AI modify authenticator |
 | `KickDevicesInterface` | kickdevices_interface.py | AI kick devices |
 | `QueryInterface` | query_interface.py | Comprehensive account query |
+| `AccountManagerInterface` | account_manager_interface.py | Google account management |
+| `ImportTOTPInterface` | import_totp_interface.py | TOTP key import from QR |
 
 ## Component Mapping (PyQt6 → Fluent)
 
