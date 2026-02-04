@@ -31,7 +31,8 @@ from core.config_manager import ConfigManager
 
 class AccountWorkerThread(QThread):
     """账号处理工作线程"""
-    progress = pyqtSignal(str)
+    progress = pyqtSignal(str)  # 日志消息
+    progress_value = pyqtSignal(int, int)  # current, total
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
 
@@ -81,10 +82,29 @@ class AccountWorkerThread(QThread):
     async def _run_async(self):
         """异步执行任务"""
         from automation.batch_account_processor import BatchAccountProcessor
+        import re
+
+        total = len(self.accounts)
+        self._completed_count = 0
+
+        def progress_callback(msg: str):
+            """进度回调，解析消息并发送进度"""
+            self.progress.emit(msg)
+            # 检测完成标记：成功/失败/跳过
+            if any(keyword in msg for keyword in ["✓", "✗", "成功", "失败", "跳过", "完成:"]):
+                # 尝试从消息中提取 [X/Y] 格式
+                match = re.search(r'\[(\d+)/(\d+)\]', msg)
+                if match:
+                    current = int(match.group(1))
+                    self.progress_value.emit(current, total)
+                else:
+                    # 简单计数
+                    self._completed_count += 1
+                    self.progress_value.emit(min(self._completed_count, total), total)
 
         processor = BatchAccountProcessor(
             concurrency=self.concurrency,
-            callback=lambda msg: self.progress.emit(msg),
+            callback=progress_callback,
         )
 
         if self.task_type == "login":
@@ -139,12 +159,190 @@ class AccountWorkerThread(QThread):
         return {"type": "unknown"}
 
 
+class Detect403Worker(QThread):
+    """检测 403 工作线程"""
+    progress = pyqtSignal(str)  # 日志消息
+    progress_value = pyqtSignal(int, int)  # current, total
+    finished_detect = pyqtSignal(dict)  # 结果
+    error = pyqtSignal(str)
+
+    def __init__(self, accounts: List[dict], parent=None):
+        super().__init__(parent)
+        self.accounts = accounts  # 传入的账号列表
+
+    def run(self):
+        """执行检测"""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                result = loop.run_until_complete(self._run_async())
+                self.finished_detect.emit(result)
+            finally:
+                loop.close()
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+    async def _run_async(self):
+        """异步执行检测"""
+        async with Sub2APIClient() as client:
+            # 使用传入的账号列表，只检测已关联的账号
+            accounts_to_check = [
+                acc for acc in self.accounts
+                if acc.get("sub2api_status") == "linked"
+            ]
+
+            if not accounts_to_check:
+                return {"total": 0, "needs_unlock": 0, "accounts": []}
+
+            total = len(accounts_to_check)
+            needs_unlock = []
+
+            for i, account in enumerate(accounts_to_check):
+                email = account.get("email", "")
+                account_id = account.get("sub2api_account_id")
+
+                if not account_id:
+                    self.progress.emit(f"[{email}] 缺少 account_id，正在查询...")
+                    account_id = await client.check_account_exists(email)
+                    if account_id:
+                        DBManager.update_sub2api_status(email, "linked", account_id=account_id)
+                        self.progress.emit(f"[{email}] 已获取 account_id: {account_id}")
+                    else:
+                        self.progress.emit(f"[{email}] 在 Sub2API 中未找到，修正状态为未关联")
+                        DBManager.update_sub2api_status(email, "not_linked")
+                        self.progress_value.emit(i + 1, total)
+                        continue
+
+                self.progress.emit(f"[{email}] 检测中...")
+                response = await client.test_account_connection(account_id)
+
+                if not response.success:
+                    data = response.data or {}
+                    if data.get("needs_unlock"):
+                        validation_url = data.get("validation_url", "")
+                        DBManager.update_unlock_status(email, "needs_unlock", validation_url)
+                        needs_unlock.append(email)
+                        self.progress.emit(f"[{email}] 需要解锁")
+                    else:
+                        self.progress.emit(f"[{email}] 检测失败: {response.error}")
+                else:
+                    self.progress.emit(f"[{email}] 正常")
+
+                self.progress_value.emit(i + 1, total)
+
+            return {
+                "total": total,
+                "needs_unlock": len(needs_unlock),
+                "accounts": needs_unlock,
+            }
+
+
+class BatchBindWorker(QThread):
+    """批量绑定窗口工作线程"""
+    progress = pyqtSignal(str)  # 日志消息
+    progress_value = pyqtSignal(int, int)  # current, total
+    finished_bind = pyqtSignal(dict)  # 结果
+    error = pyqtSignal(str)
+
+    def __init__(self, matched_pairs: list, parent=None):
+        super().__init__(parent)
+        self.matched_pairs = matched_pairs  # [(email, browser_id), ...]
+
+    def run(self):
+        """执行绑定"""
+        try:
+            total = len(self.matched_pairs)
+            success_count = 0
+
+            for i, (email, browser_id) in enumerate(self.matched_pairs):
+                try:
+                    DBManager.bind_account_to_browser(email, browser_id)
+                    self.progress.emit(f"绑定: {email} -> {browser_id}")
+                    success_count += 1
+                except Exception as e:
+                    self.progress.emit(f"绑定失败: {email} - {e}")
+
+                self.progress_value.emit(i + 1, total)
+
+            self.finished_bind.emit({
+                "total": total,
+                "success_count": success_count,
+            })
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class BatchDeleteWorker(QThread):
+    """批量删除工作线程"""
+    progress = pyqtSignal(str)  # 日志消息
+    progress_value = pyqtSignal(int, int)  # current, total
+    finished_delete = pyqtSignal(dict)  # 结果
+    error = pyqtSignal(str)
+
+    def __init__(self, accounts: list, browser_ids: list, with_windows: bool = False, parent=None):
+        super().__init__(parent)
+        self.accounts = accounts
+        self.browser_ids = browser_ids
+        self.with_windows = with_windows
+
+    def run(self):
+        """执行删除"""
+        from services.ix_api import closeBrowser, deleteBrowser
+
+        try:
+            total = len(self.accounts)
+            deleted_accounts = 0
+            deleted_windows = 0
+
+            for i, (account, browser_id) in enumerate(zip(self.accounts, self.browser_ids)):
+                email = account.get("email", "")
+
+                try:
+                    if self.with_windows and browser_id:
+                        try:
+                            closeBrowser(browser_id)
+                        except Exception:
+                            pass
+
+                        try:
+                            result = deleteBrowser(browser_id)
+                            if result.get("success"):
+                                deleted_windows += 1
+                        except Exception:
+                            pass
+
+                    DBManager.delete_account(email)
+                    deleted_accounts += 1
+                    self.progress.emit(f"已删除: {email}")
+
+                except Exception as e:
+                    self.progress.emit(f"删除 {email} 失败: {e}")
+
+                self.progress_value.emit(i + 1, total)
+
+            self.finished_delete.emit({
+                "total": total,
+                "deleted_accounts": deleted_accounts,
+                "deleted_windows": deleted_windows,
+            })
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class AccountManagerInterface(BaseInterface):
     """账号管理界面 - Fluent Design 版本"""
 
     def __init__(self, parent=None):
         super().__init__('accountManagerInterface', parent)
         self.worker_thread: Optional[AccountWorkerThread] = None
+        self.detect403_worker: Optional[Detect403Worker] = None
+        self.batch_bind_worker: Optional[BatchBindWorker] = None
+        self.batch_delete_worker: Optional[BatchDeleteWorker] = None
         self._initUI()
         self._loadData()
 
@@ -324,7 +522,7 @@ class AccountManagerInterface(BaseInterface):
         self.concurrencySpin = SpinBox(self)
         self.concurrencySpin.setRange(1, 10)
         self.concurrencySpin.setValue(ConfigManager.get_login_concurrency())
-        self.concurrencySpin.setFixedWidth(80)
+        self.concurrencySpin.setMinimumWidth(120)
         toolbar2Layout.addWidget(self.concurrencySpin)
 
         toolbar2Layout.addSpacing(8)
@@ -346,46 +544,42 @@ class AccountManagerInterface(BaseInterface):
             "窗口ID", "Sub2API", "解锁状态", "更新时间", "操作"
         ])
 
-        # 设置列宽
+        # 设置列宽 - 使用 Interactive 模式允许用户调整
         header = table.horizontalHeader()
         header.setStretchLastSection(False)
 
-        # 列0: 选择 - 固定
+        # 列0: 选择 - 固定宽度（复选框）
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(0, 50)
+        table.setColumnWidth(0, 40)
 
-        # 列1: 邮箱 - 拉伸
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # 列1: 邮箱 - 可调整，初始宽度较大
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(1, 220)
 
-        # 列2: 登录状态 - 固定
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(2, 100)
+        # 列2: 登录状态 - 按内容自适应
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列3: Pro - 固定
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(3, 60)
+        # 列3: Pro - 按内容自适应
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列4: 窗口名称 - 拉伸
+        # 列4: 窗口名称 - 拉伸填充剩余空间
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
 
-        # 列5: 窗口ID - 固定
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(5, 80)
+        # 列5: 窗口ID - 按内容自适应
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列6: Sub2API - 固定
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(6, 80)
+        # 列6: Sub2API - 按内容自适应
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列7: 解锁状态 - 固定
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(7, 80)
+        # 列7: 解锁状态 - 按内容自适应
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列8: 更新时间 - 固定
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(8, 140)
+        # 列8: 更新时间 - 按内容自适应
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
 
-        # 列9: 操作 - 自适应内容
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        # 列9: 操作 - 固定宽度（确保按钮完整显示）
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(9, 110)
 
         # 启用右键菜单
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -473,6 +667,7 @@ class AccountManagerInterface(BaseInterface):
                 "yes": "普通 Pro 会员（自己订阅）",
                 "no": "非 Pro 会员",
                 "family_yes": "家庭组 Pro 会员（被邀请加入）",
+                "detection_failed": "Pro 检测失败（页面无法识别）",
             }
             pro_item.setToolTip(pro_tooltip_map.get(is_pro, "未知状态"))
             self.table.setItem(row, 3, pro_item)
@@ -500,20 +695,17 @@ class AccountManagerInterface(BaseInterface):
             # 操作按钮
             btnWidget = QWidget()
             btnLayout = QHBoxLayout(btnWidget)
-            btnLayout.setContentsMargins(4, 2, 4, 2)
-            btnLayout.setSpacing(4)
+            btnLayout.setContentsMargins(2, 2, 2, 2)
+            btnLayout.setSpacing(0)
 
             if login_status != "logged_in":
                 btn = TransparentPushButton(FIF.DOWNLOAD, "登录", self)
-                btn.setFixedWidth(70)
                 btn.clicked.connect(lambda _, e=email: self._singleLogin(e))
             else:
                 btn = TransparentPushButton(FIF.LINK, "OAuth", self)
-                btn.setFixedWidth(70)
                 btn.clicked.connect(lambda _, e=email: self._singleOAuth(e))
 
             btnLayout.addWidget(btn)
-            btnLayout.addStretch()
             self.table.setCellWidget(row, 9, btnWidget)
 
         # 更新状态栏
@@ -549,6 +741,7 @@ class AccountManagerInterface(BaseInterface):
             "yes": "Pro",
             "no": "非Pro",
             "family_yes": "家庭",
+            "detection_failed": "检测失败",
         }
         return mapping.get(status, "-")
 
@@ -559,6 +752,7 @@ class AccountManagerInterface(BaseInterface):
             "yes": QColor("#4CAF50"),
             "no": QColor("#F44336"),
             "family_yes": QColor("#2196F3"),
+            "detection_failed": QColor("#FF9800"),  # 橙色表示检测失败
         }
         return mapping.get(status, QColor("#888888"))
 
@@ -848,6 +1042,10 @@ class AccountManagerInterface(BaseInterface):
 
     def onBatchBind(self):
         """批量绑定窗口（根据窗口名称匹配邮箱）"""
+        if self.batch_bind_worker and self.batch_bind_worker.isRunning():
+            self._showWarning("警告", "批量绑定任务正在执行中")
+            return
+
         # 获取未绑定窗口的选中账号
         unbound_accounts = []
         for row in range(self.table.rowCount()):
@@ -927,21 +1125,48 @@ class AccountManagerInterface(BaseInterface):
             if not w.exec():
                 return
 
-            # 执行绑定
-            success_count = 0
-            for email, browser_id in matched:
-                DBManager.bind_account_to_browser(email, browser_id)
-                self.log(f"绑定: {email} -> {browser_id}")
-                success_count += 1
+            # 使用异步线程执行绑定
+            self.log(f"开始批量绑定，共 {len(matched)} 个账号...")
+            self.progressBar.setVisible(True)
+            self.progressBar.setRange(0, len(matched))
+            self.progressBar.setValue(0)
+            self._setButtonsEnabled(False)
 
-            self.log(f"批量绑定完成: {success_count}/{len(unbound_accounts)}")
-            if not_matched:
-                self.log(f"未匹配: {len(not_matched)} 个")
-            self._loadData()
+            # 保存未匹配数量用于完成回调
+            self._batch_bind_not_matched_count = len(not_matched)
+
+            self.batch_bind_worker = BatchBindWorker(matched, self)
+            self.batch_bind_worker.progress.connect(self.log)
+            self.batch_bind_worker.progress_value.connect(self._onProgressValue)
+            self.batch_bind_worker.finished_bind.connect(self._onBatchBindFinished)
+            self.batch_bind_worker.error.connect(self._onBatchBindError)
+            self.batch_bind_worker.start()
 
         except Exception as e:
             self.log(f"批量绑定失败: {e}")
             self._showError("错误", f"批量绑定失败:\n{e}")
+
+    def _onBatchBindFinished(self, result: dict):
+        """批量绑定完成回调"""
+        self._setButtonsEnabled(True)
+
+        total = result.get("total", 0)
+        success_count = result.get("success_count", 0)
+        not_matched_count = getattr(self, '_batch_bind_not_matched_count', 0)
+
+        self.log(f"批量绑定完成: {success_count}/{total}")
+        if not_matched_count:
+            self.log(f"未匹配: {not_matched_count} 个")
+
+        self._showInfo("绑定完成", f"成功绑定 {success_count}/{total} 个账号")
+        self._loadData()
+
+    def _onBatchBindError(self, error: str):
+        """批量绑定错误回调"""
+        self._setButtonsEnabled(True)
+        self.progressBar.setVisible(False)
+        self.log(f"批量绑定失败: {error}")
+        self._showError("错误", f"批量绑定失败:\n{error}")
 
     def onDetectPro(self):
         """检测选中账号的 Pro 会员状态"""
@@ -993,78 +1218,77 @@ class AccountManagerInterface(BaseInterface):
         self._startTask("detect_pro", valid_accounts, valid_browser_ids)
 
     def onDetect403(self):
-        """检测 403 需要解锁的账号"""
-        self.log("正在检测需要解锁的账号...")
+        """检测 403 需要解锁的账号（异步执行）- 只检测选中的账号"""
+        if self.detect403_worker and self.detect403_worker.isRunning():
+            self._showWarning("警告", "检测任务正在执行中")
+            return
 
-        try:
-            async def detect_403_accounts():
-                async with Sub2APIClient() as client:
-                    linked_accounts = DBManager.get_accounts_by_sub2api_status("linked")
-                    if not linked_accounts:
-                        return {"total": 0, "needs_unlock": 0, "accounts": []}
+        # 获取选中的账号
+        selected_accounts, _ = self._getSelectedAccounts()
 
-                    needs_unlock = []
-                    for account in linked_accounts:
-                        email = account.get("email", "")
-                        account_id = account.get("sub2api_account_id")
+        if not selected_accounts:
+            self._showInfo("提示", "请先选择要检测的账号")
+            return
 
-                        if not account_id:
-                            self.log(f"[{email}] 缺少 account_id，正在查询...")
-                            account_id = await client.check_account_exists(email)
-                            if account_id:
-                                DBManager.update_sub2api_status(email, "linked", account_id=account_id)
-                                self.log(f"[{email}] 已获取 account_id: {account_id}")
-                            else:
-                                self.log(f"[{email}] 在 Sub2API 中未找到，修正状态为未关联")
-                                DBManager.update_sub2api_status(email, "not_linked")
-                                continue
+        # 筛选出已关联的账号
+        linked_accounts = [
+            acc for acc in selected_accounts
+            if acc.get("sub2api_status") == "linked"
+        ]
 
-                        self.log(f"[{email}] 检测中...")
-                        response = await client.test_account_connection(account_id)
+        if not linked_accounts:
+            self._showWarning(
+                "提示",
+                f"选中的 {len(selected_accounts)} 个账号中没有已关联的账号\n\n"
+                "只有 Sub2API 状态为「已关联」的账号才能检测 403"
+            )
+            return
 
-                        if not response.success:
-                            data = response.data or {}
-                            if data.get("needs_unlock"):
-                                validation_url = data.get("validation_url", "")
-                                DBManager.update_unlock_status(email, "needs_unlock", validation_url)
-                                needs_unlock.append(email)
-                                self.log(f"[{email}] 需要解锁")
-                            else:
-                                self.log(f"[{email}] 检测失败: {response.error}")
-                        else:
-                            self.log(f"[{email}] 正常")
+        self.log(f"正在检测选中账号的 403 状态，共 {len(linked_accounts)} 个已关联账号...")
 
-                    return {
-                        "total": len(linked_accounts),
-                        "needs_unlock": len(needs_unlock),
-                        "accounts": needs_unlock,
-                    }
+        # 显示进度条
+        self.progressBar.setVisible(True)
+        self.progressBar.setRange(0, len(linked_accounts))
+        self.progressBar.setValue(0)
+        self._setButtonsEnabled(False)
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(detect_403_accounts())
-            finally:
-                loop.close()
+        # 创建并启动工作线程（传入选中的账号）
+        self.detect403_worker = Detect403Worker(selected_accounts, self)
+        self.detect403_worker.progress.connect(self.log)
+        self.detect403_worker.progress_value.connect(self._onProgressValue)
+        self.detect403_worker.finished_detect.connect(self._onDetect403Finished)
+        self.detect403_worker.error.connect(self._onDetect403Error)
+        self.detect403_worker.start()
 
-            self.log(f"检测完成: 共 {result['total']} 个账号，{result['needs_unlock']} 个需要解锁")
+    def _onDetect403Finished(self, result: dict):
+        """检测 403 完成回调"""
+        self._setButtonsEnabled(True)
 
-            if result['needs_unlock'] > 0:
-                self._showInfo(
-                    "检测完成",
-                    f"共检测 {result['total']} 个已关联账号\n"
-                    f"发现 {result['needs_unlock']} 个需要解锁\n\n"
-                    f"账号: {', '.join(result['accounts'][:5])}"
-                    + (f"\n...等 {result['needs_unlock']} 个" if result['needs_unlock'] > 5 else "")
-                )
-            else:
-                self._showInfo("检测完成", f"共检测 {result['total']} 个账号，无需解锁")
+        total = result.get("total", 0)
+        needs_unlock = result.get("needs_unlock", 0)
+        accounts = result.get("accounts", [])
 
-            self._loadData()
+        self.log(f"检测完成: 共 {total} 个账号，{needs_unlock} 个需要解锁")
 
-        except Exception as e:
-            self.log(f"检测失败: {e}")
-            self._showError("错误", f"检测失败:\n{e}")
+        if needs_unlock > 0:
+            self._showInfo(
+                "检测完成",
+                f"共检测 {total} 个已关联账号\n"
+                f"发现 {needs_unlock} 个需要解锁\n\n"
+                f"账号: {', '.join(accounts[:5])}"
+                + (f"\n...等 {needs_unlock} 个" if needs_unlock > 5 else "")
+            )
+        else:
+            self._showInfo("检测完成", f"共检测 {total} 个账号，无需解锁")
+
+        self._loadData()
+
+    def _onDetect403Error(self, error: str):
+        """检测 403 错误回调"""
+        self._setButtonsEnabled(True)
+        self.progressBar.setVisible(False)
+        self.log(f"检测失败: {error}")
+        self._showError("错误", f"检测失败:\n{error}")
 
     def onBatchUnlock403(self):
         """批量解锁 403 账号"""
@@ -1177,8 +1401,10 @@ class AccountManagerInterface(BaseInterface):
 
         self._setButtonsEnabled(False)
 
+        # 设置进度条范围和初始值
         self.progressBar.setVisible(True)
-        self.progressBar.setRange(0, 0)
+        self.progressBar.setRange(0, len(accounts))
+        self.progressBar.setValue(0)
 
         self.worker_thread = AccountWorkerThread(
             task_type=task_type,
@@ -1189,6 +1415,7 @@ class AccountManagerInterface(BaseInterface):
         )
 
         self.worker_thread.progress.connect(self.log)
+        self.worker_thread.progress_value.connect(self._onProgressValue)
         self.worker_thread.finished.connect(self._onTaskFinished)
         self.worker_thread.error.connect(self._onTaskError)
 
@@ -1213,8 +1440,10 @@ class AccountManagerInterface(BaseInterface):
 
         self._setButtonsEnabled(False)
 
+        # 设置进度条范围和初始值
         self.progressBar.setVisible(True)
-        self.progressBar.setRange(0, 0)
+        self.progressBar.setRange(0, len(accounts))
+        self.progressBar.setValue(0)
 
         self.worker_thread = AccountWorkerThread(
             task_type="unlock_403",
@@ -1228,6 +1457,7 @@ class AccountManagerInterface(BaseInterface):
         )
 
         self.worker_thread.progress.connect(self.log)
+        self.worker_thread.progress_value.connect(self._onProgressValue)
         self.worker_thread.finished.connect(self._onTaskFinished)
         self.worker_thread.error.connect(self._onTaskError)
 
@@ -1236,7 +1466,8 @@ class AccountManagerInterface(BaseInterface):
     def _onTaskFinished(self, result: dict):
         """任务完成"""
         self._setButtonsEnabled(True)
-        self.progressBar.setVisible(False)
+        # 进度条保持显示，显示完成状态
+        # self.progressBar.setVisible(False)  # 不再隐藏
 
         task_type = result.get("type", "")
 
@@ -1272,6 +1503,11 @@ class AccountManagerInterface(BaseInterface):
         self.progressBar.setVisible(False)
         self.log(f"错误: {error}")
         self._showError("错误", f"任务执行出错:\n{error}")
+
+    def _onProgressValue(self, current: int, total: int):
+        """进度值更新"""
+        self.progressBar.setValue(current)
+        self.statusLabel.setText(f"处理中: {current}/{total}")
 
     def _setButtonsEnabled(self, enabled: bool):
         """设置按钮启用状态"""
@@ -1514,8 +1750,10 @@ class AccountManagerInterface(BaseInterface):
             self._showError("错误", f"删除操作失败:\n{e}")
 
     def _deleteSelectedAccounts(self, with_windows: bool = False):
-        """批量删除选中的账号"""
-        from services.ix_api import closeBrowser, deleteBrowser
+        """批量删除选中的账号（异步执行）"""
+        if self.batch_delete_worker and self.batch_delete_worker.isRunning():
+            self._showWarning("警告", "批量删除任务正在执行中")
+            return
 
         accounts, browser_ids = self._getSelectedAccounts()
 
@@ -1532,32 +1770,31 @@ class AccountManagerInterface(BaseInterface):
         if not w.exec():
             return
 
-        deleted_accounts = 0
-        deleted_windows = 0
+        # 使用异步线程执行删除
+        self.log(f"开始批量删除，共 {len(accounts)} 个账号...")
+        self.progressBar.setVisible(True)
+        self.progressBar.setRange(0, len(accounts))
+        self.progressBar.setValue(0)
+        self._setButtonsEnabled(False)
 
-        for account, browser_id in zip(accounts, browser_ids):
-            email = account.get("email", "")
+        # 保存 with_windows 标志用于完成回调
+        self._batch_delete_with_windows = with_windows
 
-            try:
-                if with_windows and browser_id:
-                    try:
-                        closeBrowser(browser_id)
-                    except Exception:
-                        pass
+        self.batch_delete_worker = BatchDeleteWorker(accounts, browser_ids, with_windows, self)
+        self.batch_delete_worker.progress.connect(self.log)
+        self.batch_delete_worker.progress_value.connect(self._onProgressValue)
+        self.batch_delete_worker.finished_delete.connect(self._onBatchDeleteFinished)
+        self.batch_delete_worker.error.connect(self._onBatchDeleteError)
+        self.batch_delete_worker.start()
 
-                    try:
-                        result = deleteBrowser(browser_id)
-                        if result.get("success"):
-                            deleted_windows += 1
-                    except Exception:
-                        pass
+    def _onBatchDeleteFinished(self, result: dict):
+        """批量删除完成回调"""
+        self._setButtonsEnabled(True)
 
-                DBManager.delete_account(email)
-                deleted_accounts += 1
-                self.log(f"已删除: {email}")
-
-            except Exception as e:
-                self.log(f"删除 {email} 失败: {e}")
+        total = result.get("total", 0)
+        deleted_accounts = result.get("deleted_accounts", 0)
+        deleted_windows = result.get("deleted_windows", 0)
+        with_windows = getattr(self, '_batch_delete_with_windows', False)
 
         self._loadData()
 
@@ -1565,6 +1802,13 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("删除完成", f"已删除 {deleted_accounts} 个账号\n已删除 {deleted_windows} 个窗口")
         else:
             self._showInfo("删除完成", f"已删除 {deleted_accounts} 个账号")
+
+    def _onBatchDeleteError(self, error: str):
+        """批量删除错误回调"""
+        self._setButtonsEnabled(True)
+        self.progressBar.setVisible(False)
+        self.log(f"批量删除失败: {error}")
+        self._showError("错误", f"批量删除失败:\n{error}")
 
     # ==================== 家庭组功能 ====================
 

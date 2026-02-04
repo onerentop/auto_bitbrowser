@@ -798,6 +798,8 @@ class BatchAccountProcessor:
                         })
                         self._log(f"[{email}] ✅ Pro 状态: {status_text}")
                     else:
+                        # 检测失败时也要保存状态到数据库
+                        DBManager.update_pro_status(email, "detection_failed")
                         result.add_failed(email, "检测失败", "detection_failed")
                         self._log(f"[{email}] ❌ 检测 Pro 状态失败")
 
@@ -836,43 +838,88 @@ class BatchAccountProcessor:
             # 检查页面内容
             page_text = await page.inner_text("body")
 
-            # Pro 会员标识关键词
-            pro_indicators = [
-                "Google One AI Premium",
-                "AI Premium",
-                "2 TB",
-                "Premium plan",
-                "Premium 方案",
-                "高级会员",
-                "您当前的方案",
-            ]
+            # ========== 重要修复：改变检测顺序，先检测非会员标识 ==========
+            # 原因：非会员页面也会显示 "Premium plan" 等作为套餐推广/选项
+            # 因此需要先排除非会员情况，再检测 Pro 会员标识
 
-            # 非会员标识
+            # 非会员标识 - 明确表示用户尚未订阅的关键词
+            # 注意：这些标识在已订阅用户页面上通常不会出现
             non_pro_indicators = [
-                "升级",
-                "Upgrade",
-                "Get Google One",
-                "加入 Google One",
-                "Choose a plan",
-                "选择方案",
+                # ===== 最重要：Upgrade 按钮（非会员页面左侧导航栏必有）=====
+                "Upgrade",            # 英文 - 升级按钮（只有非会员才有）
+                "升级",               # 中文简体
+                "升級",               # 中文繁体
+                "アップグレード",      # 日语
+                "업그레이드",          # 韩语
+                "Nâng cấp",           # 越南语
+                "Tingkatkan",         # 印尼语/马来语
+                "อัปเกรด",            # 泰语
+                # ===== 其他非会员标识 =====
+                "Get started",        # 页面显示"开始使用"按钮（家庭组创建页面）
                 "开始使用",
+                "Sign up now",        # 注册按钮
+                "立即注册",
+                "Get Google One",     # 获取 Google One
+                "获取 Google One",
+                "加入 Google One",
+                "Get Basic",          # 获取基础套餐按钮
+                "获取 Basic",
+                "Get Premium",        # 获取高级套餐按钮
+                "获取 Premium",
+                "Get Google AI Pro",  # 获取 AI Pro 按钮
+                "Choose a plan",      # 选择方案页面
+                "选择方案",
+                "Pick a plan",
+                "Choose your plan",
+                "You can create a Family Group",  # 家庭组创建提示（非会员）
+                "可以创建家庭群组",
+                "Get more out of Google",  # 非会员页面底部推广语
+                "With a Google One membership",  # 非会员页面推广语
             ]
 
-            # 检查是否是 Pro 会员
+            # Pro 会员标识 - 明确表示用户已订阅的关键词
+            # 注意：只使用已订阅用户页面上才会出现的标识
+            pro_indicators = [
+                "Manage membership",  # 管理会员（只有订阅者才有）
+                "管理会员",
+                "管理成员资格",
+                "Cancel membership",  # 取消会员（只有订阅者才有）
+                "取消会员",
+                "取消成员资格",
+                "Change membership plan",  # 更改会员计划
+                "更改成员资格方案",
+                "Your membership",    # 您的会员资格
+                "您的成员资格",
+                "您的会员",
+                "Member since",       # 会员起始日期
+                "成为会员的时间",
+                "Next payment",       # 下次付款
+                "下次付款",
+                "Renews on",          # 续订时间
+                "续订日期",
+                "您当前的方案",       # 表示已订阅某个方案
+                "Your current plan",  # 英文版
+            ]
+
+            page_text_lower = page_text.lower()
+
+            # 第一步：先检查是否有明确的非会员标识
+            for indicator in non_pro_indicators:
+                if indicator.lower() in page_text_lower:
+                    self._log(f"[{email}] 检测到非会员标识: {indicator}")
+                    return "no"
+
+            # 第二步：检查是否有 Pro 会员标识
             is_pro = False
             for indicator in pro_indicators:
-                if indicator.lower() in page_text.lower():
+                if indicator.lower() in page_text_lower:
                     self._log(f"[{email}] 检测到 Pro 标识: {indicator}")
                     is_pro = True
                     break
 
-            # 如果没检测到 Pro 标识，检查是否明确是非会员
+            # 如果没检测到任何明确标识，返回 None（无法确定）
             if not is_pro:
-                for indicator in non_pro_indicators:
-                    if indicator.lower() in page_text.lower():
-                        self._log(f"[{email}] 检测到非 Pro 标识: {indicator}")
-                        return "no"
-                # 无法确定，返回 None
+                self._log(f"[{email}] 未检测到明确的会员/非会员标识")
                 return None
 
             # 是 Pro 会员，进一步检测是普通 Pro 还是家庭组 Pro
