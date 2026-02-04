@@ -4,80 +4,167 @@
 
 ## Overview
 
-PyQt6 GUI windows module. Contains all user interface components for the ixBrowser Automation Tool.
+PyQt6-Fluent-Widgets GUI windows module. Contains all user interface components for the ixBrowser Automation Tool with modern Windows 11 Fluent Design style.
 
 ## Module Structure
 
 ```
 gui/
-├── __init__.py                  # Module initialization
-├── main_window.py               # Main application window
-├── bind_card_ai_gui.py          # AI card binding dialog
-├── get_sheerlink_ai_gui.py      # AI SheerLink retrieval dialog
-├── modify_2sv_phone_gui.py      # 2SV phone modification dialog
-├── modify_authenticator_gui.py  # Authenticator modification dialog
-├── replace_phone_gui.py         # Replace recovery phone dialog
-├── replace_email_v2_gui.py      # Replace recovery email V2 dialog
-├── kick_devices_gui.py          # Kick devices dialog
-├── comprehensive_query_gui.py   # Comprehensive account query dialog
-├── config_ui.py                 # Configuration management dialog
-├── sheerid_gui_v2.py            # SheerID verification dialog
-└── import_totp_gui.py           # TOTP secret import dialog (Google Authenticator)
+├── __init__.py                  # Module initialization and exports
+├── main_window_fluent.py        # FluentWindow main application window
+├── main_window.py               # Legacy main window (preserved)
+├── fluent_utils.py              # Fluent UI utility functions
+├── base_interface.py            # Base classes for all interfaces
+├── ai_task_interface.py         # Base class for AI task interfaces
+├── placeholder_interface.py     # Placeholder for unimplemented features
+│
+├── home_interface.py            # Home - window management
+├── setting_interface.py         # Settings configuration
+├── sheerid_interface.py         # SheerID verification
+├── bindcard_interface.py        # AI card binding
+├── sheerlink_interface.py       # AI SheerLink retrieval
+├── replacephone_interface.py    # AI replace phone
+├── replaceemail_interface.py    # AI replace email
+├── modify2sv_interface.py       # AI modify 2SV phone
+├── modifyauth_interface.py      # AI modify authenticator
+├── kickdevices_interface.py     # AI kick devices
+├── query_interface.py           # Comprehensive query
+│
+└── (legacy dialogs...)          # Original PyQt6 dialogs preserved
+```
+
+## Architecture
+
+### FluentWindow Navigation Structure
+
+```
+MainFluentWindow (FluentWindow)
+├── NavigationInterface (左侧导航栏)
+│   ├── 首页 (HomeInterface)
+│   ├── ─── 分隔线 ───
+│   ├── SheerID 验证 (SheerIDInterface)
+│   ├── 绑卡订阅 (BindCardInterface)
+│   ├── 获取 SheerLink (GetSheerlinkInterface)
+│   ├── 替换手机号 (ReplacePhoneInterface)
+│   ├── 替换辅助邮箱 (ReplaceEmailInterface)
+│   ├── 修改 2SV 手机 (Modify2SVInterface)
+│   ├── 修改验证器 (ModifyAuthInterface)
+│   ├── 踢出设备 (KickDevicesInterface)
+│   ├── 综合查询 (QueryInterface)
+│   ├── ─── 分隔线 ───
+│   ├── 账号管理 (PlaceholderInterface)
+│   ├── 全自动订阅 (PlaceholderInterface)
+│   └── 设置 (SettingInterface) [底部]
+└── StackedWidget (右侧内容区)
+```
+
+### Class Hierarchy
+
+```
+QFrame
+├── BaseInterface
+│   ├── HomeInterface
+│   └── BaseDialogInterface
+│       ├── PlaceholderInterface
+│       └── AITaskInterface
+│           ├── GetSheerlinkInterface
+│           ├── ReplacePhoneInterface
+│           ├── ReplaceEmailInterface
+│           ├── Modify2SVInterface
+│           ├── ModifyAuthInterface
+│           └── KickDevicesInterface
+
+ScrollArea
+├── SettingInterface
+├── SheerIDInterface
+├── BindCardInterface
+└── QueryInterface
 ```
 
 ## Components
 
-### MainWindow (main_window.py)
+### MainFluentWindow (main_window_fluent.py)
 
-The main application window that serves as the entry point for all GUI operations.
+The main application window using FluentWindow with sidebar navigation.
 
 **Key Features**:
-- Menu-based navigation to all feature dialogs
-- Account list display and management
-- Status monitoring
+- Left sidebar navigation with icons
+- Theme support (Light/Dark/Auto)
+- Persistent window configuration
+- All sub-interfaces integrated
 
-### Feature Dialogs
+### Base Classes
 
-| Dialog | File | Description |
-|--------|------|-------------|
-| `BindCardAIDialog` | bind_card_ai_gui.py | AI-powered card binding workflow |
-| `GetSheerlinkAIDialog` | get_sheerlink_ai_gui.py | AI-powered SheerID link retrieval |
-| `Modify2SVPhoneDialog` | modify_2sv_phone_gui.py | Modify 2-Step Verification phone |
-| `ModifyAuthenticatorDialog` | modify_authenticator_gui.py | Modify Google Authenticator |
-| `ReplacePhoneDialog` | replace_phone_gui.py | Replace recovery phone number |
-| `ReplaceEmailV2Dialog` | replace_email_v2_gui.py | Replace recovery email (V2) |
-| `KickDevicesDialog` | kick_devices_gui.py | Remove logged-in devices |
-| `ComprehensiveQueryDialog` | comprehensive_query_gui.py | Query all account data |
-| `ConfigDialog` | config_ui.py | Application configuration |
-| `SheerIDDialogV2` | sheerid_gui_v2.py | SheerID batch verification |
-| `ImportTOTPDialog` | import_totp_gui.py | Import TOTP secrets from Google Authenticator QR codes |
+| Class | File | Description |
+|-------|------|-------------|
+| `BaseInterface` | base_interface.py | Base for all sub-interfaces with common layout |
+| `BaseDialogInterface` | base_interface.py | Base with start/stop buttons and progress |
+| `AITaskInterface` | ai_task_interface.py | Template for AI automation tasks |
 
-## Dialog Pattern
+### Feature Interfaces
 
-All dialogs follow a common pattern:
+| Interface | File | Description |
+|-----------|------|-------------|
+| `HomeInterface` | home_interface.py | Browser window list management |
+| `SettingInterface` | setting_interface.py | Application configuration |
+| `SheerIDInterface` | sheerid_interface.py | SheerID batch verification |
+| `BindCardInterface` | bindcard_interface.py | AI-powered card binding |
+| `GetSheerlinkInterface` | sheerlink_interface.py | AI SheerID link retrieval |
+| `ReplacePhoneInterface` | replacephone_interface.py | AI replace recovery phone |
+| `ReplaceEmailInterface` | replaceemail_interface.py | AI replace recovery email |
+| `Modify2SVInterface` | modify2sv_interface.py | AI modify 2SV phone |
+| `ModifyAuthInterface` | modifyauth_interface.py | AI modify authenticator |
+| `KickDevicesInterface` | kickdevices_interface.py | AI kick devices |
+| `QueryInterface` | query_interface.py | Comprehensive account query |
 
-1. **Initialization**: Load accounts/data from DBManager
-2. **User Input**: Collect parameters (thread count, target accounts, etc.)
-3. **Execution**: Call corresponding automation script from `automation/`
-4. **Progress Reporting**: Display progress via QProgressDialog or embedded log
-5. **Result Handling**: Update database and refresh display
+## Component Mapping (PyQt6 → Fluent)
+
+| Original | Fluent | Notes |
+|----------|--------|-------|
+| `QPushButton` | `PushButton` / `PrimaryPushButton` | Primary for main actions |
+| `QLineEdit` | `LineEdit` / `SearchLineEdit` | SearchLineEdit for search |
+| `QTextEdit` | `TextEdit` | Used in log areas |
+| `QSpinBox` | `SpinBox` | Same API |
+| `QCheckBox` | `CheckBox` | Same API |
+| `QComboBox` | `ComboBox` | Same API |
+| `QProgressBar` | `ProgressBar` / `ProgressRing` | Ring for indeterminate |
+| `QGroupBox` | `CardWidget` | Card-based layout |
+| `QTreeWidget` | `TreeWidget` | Enhanced styling |
+| `QTableWidget` | `TableWidget` | Enhanced styling |
+| `QMessageBox` | `MessageBox` / `InfoBar` | InfoBar for toast |
 
 ## Usage Example
 
 ```python
-from PyQt6.QtWidgets import QApplication
-from gui.main_window import MainWindow
+from gui import MainFluentWindow, run_fluent_app
 
+# Run the application
+if __name__ == "__main__":
+    run_fluent_app()
+
+# Or create window manually
+from PyQt6.QtWidgets import QApplication
 app = QApplication([])
-window = MainWindow()
+window = MainFluentWindow()
 window.show()
 app.exec()
+```
+
+## Theme Support
+
+```python
+from qfluentwidgets import setTheme, Theme
+
+# Switch theme
+setTheme(Theme.DARK)   # Dark mode
+setTheme(Theme.LIGHT)  # Light mode
+setTheme(Theme.AUTO)   # Follow system
 ```
 
 ## Dependencies
 
 - **Internal**: `automation/*`, `services/database.py`, `core/config_manager.py`
-- **External**: PyQt6
+- **External**: PyQt6, PyQt6-Fluent-Widgets
 
 ## Thread Safety
 
@@ -85,4 +172,4 @@ GUI operations use `QThread` workers for background tasks to prevent UI freezing
 
 ---
 
-*Generated: 2026-02-02*
+*Updated: 2024 - Fluent UI Migration Complete*
