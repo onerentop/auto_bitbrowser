@@ -14,6 +14,13 @@ from core.retry_helper import RetryHelper
 from services.database import DBManager
 from services.sub2api_client import Sub2APIClient
 from services.ix_api import closeBrowser
+
+# 尝试导入 CDP 服务
+try:
+    from core.ai_browser_agent import create_cdp_service, CDP_SERVICE_AVAILABLE
+except ImportError:
+    CDP_SERVICE_AVAILABLE = False
+    create_cdp_service = None
 from services.proxy_smart_allocator import ProxySmartAllocator
 from automation.auto_google_login import auto_google_login, LoginResult
 from automation.auto_antigravity_oauth import auto_antigravity_oauth, OAuthResult
@@ -814,9 +821,195 @@ class BatchAccountProcessor:
                 result.add_failed(email, str(e), "exception")
                 self._log(f"[{email}] ❌ 异常: {e}")
 
+    async def _check_pro_status_via_cdp(self, page, email: str) -> str | None:
+        """
+        使用 CDP 检测 Pro 会员状态
+
+        Args:
+            page: Playwright Page 对象
+            email: 账号邮箱（用于日志）
+
+        Returns:
+            "pro" = Pro 会员（需进一步检测家庭组状态）
+            "no" = 非 Pro 会员
+            None = 检测失败
+        """
+        # 检查 CDP 服务是否可用
+        if not CDP_SERVICE_AVAILABLE or create_cdp_service is None:
+            self._log(f"[{email}] CDP 服务不可用")
+            return None
+
+        try:
+            cdp_service = await create_cdp_service(page)
+
+            try:
+                # 获取可访问性树中的所有元素
+                ax_elements = await cdp_service.get_interactive_elements_via_ax()
+                self._log(f"[{email}] CDP 发现 {len(ax_elements)} 个可交互元素")
+
+                # 非会员标识（CDP 中查找）
+                non_pro_keywords = [
+                    "upgrade", "升级", "升級",
+                    "get started", "开始使用",
+                    "get google one", "获取 google one",
+                    "choose a plan", "选择方案",
+                    "get basic", "get premium",
+                ]
+
+                # Pro 会员标识（CDP 中查找）
+                pro_keywords = [
+                    "manage membership", "管理会员", "管理成员资格",
+                    "cancel membership", "取消会员",
+                    "your membership", "您的成员资格",
+                    "member since", "成为会员",
+                    "next payment", "下次付款",
+                    "renews on", "续订",
+                ]
+
+                # ========== 第一步：先遍历所有元素检查非会员标识 ==========
+                # 重要：必须先完成非会员检测，因为非会员页面也可能显示 "Premium" 等推广内容
+                for elem in ax_elements:
+                    elem_name = (elem.get("name") or "").lower()
+
+                    for keyword in non_pro_keywords:
+                        if keyword in elem_name:
+                            self._log(f"[{email}] CDP 检测到非会员标识: {keyword} (元素: {elem.get('name', '')[:50]})")
+                            return "no"
+
+                # ========== 第二步：再遍历所有元素检查 Pro 会员标识 ==========
+                for elem in ax_elements:
+                    elem_name = (elem.get("name") or "").lower()
+
+                    for keyword in pro_keywords:
+                        if keyword in elem_name:
+                            self._log(f"[{email}] CDP 检测到 Pro 标识: {keyword} (元素: {elem.get('name', '')[:50]})")
+                            return "pro"
+
+                return None  # 无法确定
+
+            finally:
+                await cdp_service.close()
+
+        except Exception as e:
+            self._log(f"[{email}] CDP 检测异常: {e}")
+            return None
+
+    async def _check_family_status(self, page, email: str) -> str:
+        """
+        检测家庭组状态（CDP 优先，Playwright 兜底）
+
+        Args:
+            page: Playwright Page 对象
+            email: 账号邮箱（用于日志）
+
+        Returns:
+            "yes" = 普通 Pro 会员（管理员/独立订阅）
+            "family_yes" = 家庭组 Pro 会员（被邀请）
+        """
+        try:
+            self._log(f"[{email}] 检测家庭组状态...")
+
+            # 导航到家庭组页面
+            await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
+            await page.wait_for_timeout(2000)
+
+            # ========== CDP 优先检测 ==========
+            if CDP_SERVICE_AVAILABLE and create_cdp_service:
+                try:
+                    cdp_service = await create_cdp_service(page)
+
+                    try:
+                        ax_elements = await cdp_service.get_interactive_elements_via_ax()
+
+                        # 家庭组成员标识（只有成员才有退出按钮）
+                        member_keywords = [
+                            "leave family", "退出家庭", "离开家庭",
+                            "you're a member", "您已加入",
+                        ]
+
+                        # 管理员标识
+                        manager_keywords = [
+                            "manage family", "管理家庭",
+                            "invite family", "邀请家庭",
+                            "add family member", "添加家庭成员",
+                            "delete family", "删除家庭",
+                            "family manager", "家庭管理员",
+                        ]
+
+                        # ========== 第一步：先遍历所有元素检查成员标识 ==========
+                        # 优先检测成员标识，因为成员身份比管理员更明确
+                        for elem in ax_elements:
+                            elem_name = (elem.get("name") or "").lower()
+                            for keyword in member_keywords:
+                                if keyword in elem_name:
+                                    self._log(f"[{email}] CDP 检测到家庭组成员标识: {keyword}")
+                                    return "family_yes"
+
+                        # ========== 第二步：再遍历所有元素检查管理员标识 ==========
+                        for elem in ax_elements:
+                            elem_name = (elem.get("name") or "").lower()
+                            for keyword in manager_keywords:
+                                if keyword in elem_name:
+                                    self._log(f"[{email}] CDP 检测到管理员标识: {keyword}")
+                                    # 检测家庭成员数量
+                                    member_count = await self._get_family_member_count(page, email)
+                                    if member_count > 0:
+                                        DBManager.update_family_member_count(email, member_count)
+                                    return "yes"
+
+                    finally:
+                        await cdp_service.close()
+
+                except Exception as e:
+                    self._log(f"[{email}] CDP 家庭组检测异常: {e}，回退到 Playwright...")
+
+            # ========== Playwright 兜底 ==========
+            family_page_text = await page.inner_text("body")
+
+            # 家庭组成员标识
+            member_indicators = [
+                "退出家庭群组", "Leave family group", "离开家庭群组",
+                "Leave family", "您已加入家庭群组", "You're a member of",
+                "家庭群组成员", "Family group member", "Family member",
+            ]
+
+            for indicator in member_indicators:
+                if indicator.lower() in family_page_text.lower():
+                    self._log(f"[{email}] 检测到家庭组成员标识: {indicator}")
+                    return "family_yes"
+
+            # 管理员/独立订阅标识
+            manager_indicators = [
+                "管理家庭群组", "Manage family group", "Manage family",
+                "邀请家庭成员", "Invite family members", "Add family member",
+                "添加家庭成员", "创建家庭群组", "Create family group",
+                "Create a family", "删除家庭群组", "Delete family group",
+                "您是家庭管理员", "You are the family manager", "Family manager",
+            ]
+
+            for indicator in manager_indicators:
+                if indicator.lower() in family_page_text.lower():
+                    self._log(f"[{email}] 检测到普通 Pro 标识: {indicator}")
+                    # 检测家庭成员数量
+                    member_count = await self._get_family_member_count(page, email)
+                    if member_count > 0:
+                        DBManager.update_family_member_count(email, member_count)
+                    return "yes"
+
+            # 默认为普通 Pro
+            self._log(f"[{email}] 未检测到明确的家庭组状态，默认为普通 Pro")
+            member_count = await self._get_family_member_count(page, email)
+            if member_count > 0:
+                DBManager.update_family_member_count(email, member_count)
+            return "yes"
+
+        except Exception as e:
+            self._log(f"[{email}] 家庭组状态检测失败: {e}，默认为普通 Pro")
+            return "yes"
+
     async def _check_google_one_pro_status(self, page, email: str) -> str | None:
         """
-        检测 Google One Pro 会员状态
+        检测 Google One Pro 会员状态（CDP 优先，Playwright 文本分析兜底）
 
         Args:
             page: Playwright Page 对象
@@ -834,6 +1027,24 @@ class BatchAccountProcessor:
             # 导航到 Google One 页面
             await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_timeout(2000)
+
+            # ========== 阶段1: CDP 优先检测 ==========
+            if CDP_SERVICE_AVAILABLE and create_cdp_service:
+                self._log(f"[{email}] 阶段1: 使用 CDP 检测 Pro 状态...")
+                cdp_result = await self._check_pro_status_via_cdp(page, email)
+                if cdp_result is not None:
+                    self._log(f"[{email}] CDP 检测成功: {cdp_result}")
+                    # CDP 检测到 Pro/非Pro，继续检测家庭组状态
+                    if cdp_result == "pro":
+                        # 检测是普通 Pro 还是家庭组 Pro
+                        return await self._check_family_status(page, email)
+                    elif cdp_result == "no":
+                        return "no"
+                else:
+                    self._log(f"[{email}] CDP 检测无结果，回退到 Playwright 文本分析...")
+
+            # ========== 阶段2: Playwright 文本分析兜底 ==========
+            self._log(f"[{email}] 阶段2: 使用 Playwright 文本分析...")
 
             # 检查页面内容
             page_text = await page.inner_text("body")
@@ -922,81 +1133,9 @@ class BatchAccountProcessor:
                 self._log(f"[{email}] 未检测到明确的会员/非会员标识")
                 return None
 
-            # 是 Pro 会员，进一步检测是普通 Pro 还是家庭组 Pro
+            # 是 Pro 会员，调用统一的家庭组状态检测方法
             self._log(f"[{email}] 检测到 Pro 会员，正在检测家庭组状态...")
-
-            try:
-                # 导航到家庭组页面（新地址，原 one.google.com/family 已 404）
-                await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
-                await page.wait_for_timeout(2000)
-
-                family_page_text = await page.inner_text("body")
-
-                # 输出页面文本用于调试（仅前500字符）
-                self._log(f"[{email}] 家庭组页面内容: {family_page_text[:500]}...")
-
-                # ========== 修复：颠倒检测顺序，先检测成员标识 ==========
-                # 家庭组成员标识 - 成员能看到的页面元素
-                # 根据 Google 帮助文档，成员可以"退出家庭群组"，而管理员不能
-                member_indicators = [
-                    "退出家庭群组",        # 最可靠 - 只有成员才有这个按钮
-                    "Leave family group",
-                    "离开家庭群组",
-                    "Leave family",
-                    "您已加入家庭群组",
-                    "You're a member of",
-                    "家庭群组成员",
-                    "Family group member",
-                    "Family member",       # 新增：英文页面可能的标识
-                ]
-
-                # 先检查是否是家庭成员（优先级最高，避免被管理员标识误判）
-                for indicator in member_indicators:
-                    if indicator.lower() in family_page_text.lower():
-                        self._log(f"[{email}] 检测到家庭组成员标识: {indicator}")
-                        return "family_yes"
-
-                # 普通 Pro (管理员/独立订阅) 标识
-                # 根据 Google 帮助文档：管理员可以"添加成员"、"删除家庭群组"、"邀请家庭成员"
-                manager_indicators = [
-                    "管理家庭群组",        # 管理员独有的操作按钮
-                    "Manage family group",
-                    "Manage family",
-                    "邀请家庭成员",        # 管理员独有
-                    "Invite family members",
-                    "Add family member",
-                    "添加家庭成员",
-                    "创建家庭群组",        # 独立订阅者创建家庭
-                    "Create family group",
-                    "Create a family",
-                    "删除家庭群组",        # 只有管理员可以删除
-                    "Delete family group",
-                    "您是家庭管理员",      # 精确匹配
-                    "You are the family manager",
-                    "Family manager",      # 管理员角色标识
-                ]
-
-                # 再检查是否是管理员
-                for indicator in manager_indicators:
-                    if indicator.lower() in family_page_text.lower():
-                        self._log(f"[{email}] 检测到普通 Pro 标识: {indicator}")
-                        # 检测家庭成员数量
-                        member_count = await self._get_family_member_count(page, email)
-                        if member_count > 0:
-                            DBManager.update_family_member_count(email, member_count)
-                        return "yes"
-
-                # 如果都没检测到，默认为普通 Pro（可能家庭页面结构变化或独立订阅）
-                self._log(f"[{email}] 未检测到明确的家庭组状态，默认为普通 Pro")
-                # 仍尝试检测家庭成员数量
-                member_count = await self._get_family_member_count(page, email)
-                if member_count > 0:
-                    DBManager.update_family_member_count(email, member_count)
-                return "yes"
-
-            except Exception as e:
-                self._log(f"[{email}] ⚠️ 检测家庭组状态失败: {e}，默认为普通 Pro")
-                return "yes"
+            return await self._check_family_status(page, email)
 
         except Exception as e:
             self._log(f"[{email}] ⚠️ 检测 Pro 状态失败: {e}")
