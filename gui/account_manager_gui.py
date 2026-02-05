@@ -270,9 +270,9 @@ class AccountManagerDialog(QDialog):
             "已登录",
             "登录失败",
             "Pro会员",
-            "Pro(普通)",
             "Pro(家庭组)",
             "非Pro",
+            "Pro检测失败",
             "未关联",
             "已关联",
             "OAuth失败",
@@ -567,15 +567,15 @@ class AccountManagerDialog(QDialog):
                 pro_item = self.table.item(row, 3)
                 # Pro会员包括普通Pro和家庭组Pro
                 show = pro_item and pro_item.text() in ("✓", "👨‍👩‍👧")
-            elif filter_text == "Pro(普通)":
-                pro_item = self.table.item(row, 3)
-                show = pro_item and pro_item.text() == "✓"
             elif filter_text == "Pro(家庭组)":
                 pro_item = self.table.item(row, 3)
                 show = pro_item and pro_item.text() == "👨‍👩‍👧"
             elif filter_text == "非Pro":
                 pro_item = self.table.item(row, 3)
                 show = pro_item and pro_item.text() == "✗"
+            elif filter_text == "Pro检测失败":
+                pro_item = self.table.item(row, 3)
+                show = pro_item and pro_item.text() == "?"
             elif filter_text == "未关联":
                 sub2api_item = self.table.item(row, 6)
                 show = sub2api_item and sub2api_item.text() == "未关联"
@@ -758,7 +758,10 @@ class AccountManagerDialog(QDialog):
         items = []
         for acc in available_pro_accounts:
             pro_email = acc.get("email", "")
-            count = acc.get("family_member_count", 0) or 1
+            # family_member_count: 0=未检测, 1-6=实际成员数(包括管理员)
+            # Pro账户至少有管理员自己，所以最小值应该是1
+            raw_count = acc.get("family_member_count", 0) or 0
+            count = max(raw_count, 1)  # Pro账户至少有1人(管理员自己)
             available = 6 - count
             items.append(f"{pro_email} ({count}/6) - 可邀请 {available} 人")
 
@@ -1396,7 +1399,7 @@ class AccountManagerDialog(QDialog):
             pro_regular_count = summary.get("pro_regular_count", 0)
             pro_family_count = summary.get("pro_family_count", 0)
             non_pro_count = summary.get("non_pro_count", 0)
-            self.log(f"✅ Pro 检测完成: Pro(普通) {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
+            self.log(f"✅ Pro 检测完成: Pro {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
 
         # 刷新数据
         self._load_data()
@@ -1673,8 +1676,10 @@ class AccountManagerDialog(QDialog):
         pro_index = 0
 
         # 复制一份用于追踪当前容量
+        # family_member_count: 0=未检测, 1-6=实际成员数
+        # Pro账户至少有管理员自己，所以初始最小值为1
         pro_slots = {
-            acc['email']: 6 - (acc.get('family_member_count') or 1)
+            acc['email']: 6 - max((acc.get('family_member_count') or 0), 1)
             for acc in pro_accounts
         }
 
@@ -1781,7 +1786,9 @@ class AccountManagerDialog(QDialog):
         msg += "可用 Pro 账户:\n"
         for pro in pro_accounts[:5]:  # 最多显示5个
             pro_email = pro.get("email", "")
-            count = pro.get("family_member_count") or 1
+            # family_member_count: 0=未检测, 1-6=实际成员数
+            raw_count = pro.get("family_member_count") or 0
+            count = max(raw_count, 1)  # Pro账户至少有1人(管理员)
             available = 6 - count
             usage = pro_usage_preview.get(pro_email, 0)
             msg += f"  • {pro_email} ({count}/6)"

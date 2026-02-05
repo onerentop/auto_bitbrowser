@@ -32,6 +32,8 @@ RETRYABLE_ERRORS = [
     'econnrefused',
     'econnreset',
     'etimedout',
+    'self signed certificate',  # 自签名证书错误
+    'certificate',  # 其他证书相关错误
 ]
 
 
@@ -106,7 +108,15 @@ def openBrowser(profile_id, max_retries: int = MAX_RETRIES):
                     time.sleep(delay)
                     continue
 
-                print(f"窗口打开失败: {error_msg}")
+                # 针对证书错误提供更多提示
+                if 'certificate' in error_msg.lower():
+                    print(f"窗口打开失败: {error_msg}")
+                    print("  💡 提示: 这可能是窗口的代理配置问题，请检查:")
+                    print("     1. 窗口的代理是否正常工作")
+                    print("     2. 尝试在 ixBrowser 中将窗口代理设置为「直连」")
+                    print("     3. 重启 ixBrowser 后再试")
+                else:
+                    print(f"窗口打开失败: {error_msg}")
                 return {
                     'success': False,
                     'msg': error_msg,

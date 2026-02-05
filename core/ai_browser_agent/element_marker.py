@@ -192,6 +192,19 @@ class ElementMarker:
                     continue
 
                 frame_url = frame.url
+
+                # 跳过黑名单 iframe（这些 iframe 的元素会干扰 AI 决策）
+                blocked_iframes = [
+                    'ogs.google.com',       # Google 账号选择器弹窗
+                    'widget/app',           # Google 账号选择器
+                    'widget/account',       # Google 账号信息弹窗
+                    'widget/callout',       # Google 提示弹窗
+                ]
+                if any(blocked in frame_url for blocked in blocked_iframes):
+                    print(f"[ElementMarker] 跳过黑名单 iframe: {frame_url[:60]}...")
+                    frame_index += 1
+                    continue
+
                 # 只处理可信来源的 iframe
                 trusted_domains = [
                     'google.com', 'gstatic.com', 'googleapis.com',

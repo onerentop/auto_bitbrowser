@@ -506,6 +506,10 @@ class VisionAnalyzer:
         if not json_str or not json_str.strip():
             return '{"action": "error", "error_message": "响应为空"}'
 
+        # 0. 先处理中文引号（在字符串值内替换为转义的普通引号）
+        # 这需要智能处理，只替换字符串值内的中文引号
+        json_str = self._escape_chinese_quotes(json_str)
+
         # 1. 清理控制字符（保留常见的转义字符）
         json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', json_str)
 
@@ -565,6 +569,59 @@ class VisionAnalyzer:
                 result.append(char)
             elif char == "'" and not in_double_quote:
                 result.append('"')
+            else:
+                result.append(char)
+
+        return ''.join(result)
+
+    def _escape_chinese_quotes(self, json_str: str) -> str:
+        """
+        转义 JSON 字符串值内的中文引号
+
+        将中文双引号（""）和单引号（''）替换为普通引号或转义形式，
+        避免 JSON 解析错误。
+
+        Args:
+            json_str: JSON 字符串
+
+        Returns:
+            处理后的 JSON 字符串
+        """
+        result = []
+        in_string = False
+        escape_next = False
+
+        # 中文引号映射（替换为普通单引号，避免破坏 JSON 结构）
+        chinese_quotes = {
+            '"': "'",  # 中文左双引号 -> 普通单引号
+            '"': "'",  # 中文右双引号 -> 普通单引号
+            ''': "'",  # 中文左单引号 -> 普通单引号
+            ''': "'",  # 中文右单引号 -> 普通单引号
+            '「': "'",  # 日文引号
+            '」': "'",  # 日文引号
+            '『': "'",  # 日文双引号
+            '』': "'",  # 日文双引号
+        }
+
+        for char in json_str:
+            if escape_next:
+                result.append(char)
+                escape_next = False
+                continue
+
+            if char == "\\":
+                result.append(char)
+                escape_next = True
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                result.append(char)
+                continue
+
+            # 在字符串内部时，替换中文引号
+            if in_string and char in chinese_quotes:
+                result.append(chinese_quotes[char])
             else:
                 result.append(char)
 

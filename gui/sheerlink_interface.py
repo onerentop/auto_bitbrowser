@@ -5,10 +5,11 @@ AI 自动获取 SheerID 验证链接
 import asyncio
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from qfluentwidgets import FluentIcon as FIF
+from qfluentwidgets import FluentIcon as FIF, CheckBox
 
 from gui.ai_task_interface import AITaskInterface
 from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
+from core.config_manager import ConfigManager
 
 
 class GetSheerlinkWorker(QThread):
@@ -35,6 +36,20 @@ class GetSheerlinkWorker(QThread):
             self.finishedSignal.emit()
 
     async def _run_task(self):
+        # 获取 AI 配置
+        provider = ConfigManager.get_ai_default_provider()
+        provider_config = ConfigManager.get_ai_provider_config(provider)
+        api_key = provider_config.get('api_key', '')
+        base_url = provider_config.get('base_url', '')
+        model = provider_config.get('model', '')
+
+        # 获取关闭浏览器配置
+        close_after = self.config.get('close_after', False)
+
+        self.logSignal.emit(f"使用 AI 提供商: {provider}, 模型: {model}")
+        if close_after:
+            self.logSignal.emit("⚠️ 已启用: 完成后关闭浏览器")
+
         for acc in self.accounts:
             if self._shouldStop:
                 break
@@ -45,15 +60,21 @@ class GetSheerlinkWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在获取 SheerLink...")
 
             try:
-                result = await auto_get_sheerlink_ai(
-                    profile_id=profile_id,
-                    account_info=acc.get('account_info', {})
+                # auto_get_sheerlink_ai 返回元组: (success, message, status, link)
+                success, message, status, link = await auto_get_sheerlink_ai(
+                    browser_id=str(profile_id),
+                    account_info=acc.get('account_info', {}),
+                    close_after=close_after,
+                    api_key=api_key,
+                    base_url=base_url if base_url else None,
+                    model=model if model else None,
+                    provider=provider,
                 )
-                if result.get('success'):
-                    link = result.get('link', '')
-                    self.progressSignal.emit(email, "成功", f"已获取链接: {link[:50]}...")
+                if success:
+                    link_display = link[:50] + "..." if link and len(link) > 50 else (link or "无链接")
+                    self.progressSignal.emit(email, "成功", f"[{status}] {link_display}")
                 else:
-                    self.progressSignal.emit(email, "失败", result.get('message', '获取失败'))
+                    self.progressSignal.emit(email, "失败", f"[{status}] {message}")
             except Exception as e:
                 self.progressSignal.emit(email, "错误", str(e))
 
@@ -71,8 +92,19 @@ class GetSheerlinkInterface(AITaskInterface):
         return FIF.LINK
 
     def _getStatusFilter(self) -> list:
-        # 筛选 pending 或 link_ready 状态的账号
-        return ['pending', 'link_ready']
+        # 不限制状态，显示所有账号
+        return []
+
+    def _addExtraConfig(self, card, layout):
+        """添加完成后关闭浏览器复选框"""
+        self.closeAfterCheck = CheckBox("完成后关闭浏览器", card)
+        self.closeAfterCheck.setChecked(False)
+        layout.addWidget(self.closeAfterCheck)
+
+    def _getTaskConfig(self) -> dict:
+        config = super()._getTaskConfig()
+        config['close_after'] = self.closeAfterCheck.isChecked()
+        return config
 
     def _createTaskWorker(self, accounts: list, config: dict):
         return GetSheerlinkWorker(accounts, config)

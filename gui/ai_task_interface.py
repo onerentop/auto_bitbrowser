@@ -11,7 +11,7 @@ from PyQt6.QtGui import QColor
 
 from qfluentwidgets import (
     CardWidget, PushButton, PrimaryPushButton, SpinBox, CheckBox,
-    TreeWidget, SubtitleLabel, BodyLabel, CaptionLabel,
+    TreeWidget, SubtitleLabel, BodyLabel, CaptionLabel, ComboBox,
     FluentIcon as FIF,
 )
 
@@ -147,8 +147,27 @@ class AITaskInterface(BaseDialogInterface):
         self.concurrentSpin = SpinBox(configCard)
         self.concurrentSpin.setRange(1, 10)
         self.concurrentSpin.setValue(1)
-        self.concurrentSpin.setFixedWidth(100)
+        self.concurrentSpin.setFixedWidth(120)  # 增加宽度确保数字完整显示
         concurrentLayout.addWidget(self.concurrentSpin)
+
+        concurrentLayout.addSpacing(20)
+
+        # 状态筛选
+        concurrentLayout.addWidget(BodyLabel("状态筛选:", configCard))
+        self.statusFilterCombo = ComboBox(configCard)
+        self.statusFilterCombo.addItems([
+            "全部",
+            "pending - 待处理",
+            "link_ready - 链接就绪",
+            "verified - 已验证",
+            "subscribed - 已订阅",
+            "ineligible - 不符合",
+            "error - 错误",
+        ])
+        self.statusFilterCombo.setMinimumWidth(150)
+        self.statusFilterCombo.currentTextChanged.connect(self._onStatusFilterChanged)
+        concurrentLayout.addWidget(self.statusFilterCombo)
+
         concurrentLayout.addStretch()
         configLayout.addLayout(concurrentLayout)
 
@@ -252,7 +271,10 @@ class AITaskInterface(BaseDialogInterface):
 
     def _populateTree(self):
         """填充树形控件"""
-        status_filter = self._getStatusFilter()
+        # 优先使用用户选择的筛选条件，否则使用子类定义的默认筛选
+        status_filter = self._getUIStatusFilter()
+
+        self.tree.clear()  # 清空树形控件
 
         grouped = {}
         for b in self._browsers:
@@ -286,7 +308,8 @@ class AITaskInterface(BaseDialogInterface):
                 profile_id = browser.get('profile_id', '')
 
                 acc_info = self._accounts.get(email, {})
-                status = acc_info.get('status', 'unknown')
+                # 默认使用 'pending' 状态（未匹配数据库的账号视为待处理）
+                status = acc_info.get('status', 'pending')
 
                 # 根据状态筛选
                 if status_filter and status not in status_filter:
@@ -327,6 +350,27 @@ class AITaskInterface(BaseDialogInterface):
                             'account_info': data.get('account_info', {})
                         })
         return selected
+
+    def _getUIStatusFilter(self) -> list:
+        """获取用户在 UI 上选择的状态筛选条件"""
+        if not hasattr(self, 'statusFilterCombo'):
+            return self._getStatusFilter()
+
+        selected_text = self.statusFilterCombo.currentText()
+        if selected_text == "全部":
+            return []  # 不筛选
+
+        # 提取状态值（格式: "status - 描述"）
+        if " - " in selected_text:
+            status = selected_text.split(" - ")[0].strip()
+            return [status]
+
+        return []
+
+    def _onStatusFilterChanged(self, text: str):
+        """状态筛选变化时重新填充树形控件"""
+        if self._browsers:  # 只有数据已加载时才刷新
+            self._populateTree()
 
     def _onStartClicked(self):
         """开始任务"""

@@ -505,7 +505,7 @@ class AccountManagerInterface(BaseInterface):
         self.filterCombo = ComboBox(self)
         self.filterCombo.addItems([
             "全部", "未登录", "已登录", "登录失败",
-            "Pro会员", "Pro(普通)", "Pro(家庭组)", "非Pro",
+            "Pro会员", "Pro(家庭组)", "非Pro", "Pro检测失败",
             "未关联", "已关联", "OAuth失败",
             "需要解锁", "解锁失败", "已解锁",
         ])
@@ -817,15 +817,15 @@ class AccountManagerInterface(BaseInterface):
             elif filter_text == "Pro会员":
                 pro_item = self.table.item(row, 3)
                 show = pro_item and pro_item.text() in ("Pro", "家庭")
-            elif filter_text == "Pro(普通)":
-                pro_item = self.table.item(row, 3)
-                show = pro_item and pro_item.text() == "Pro"
             elif filter_text == "Pro(家庭组)":
                 pro_item = self.table.item(row, 3)
                 show = pro_item and pro_item.text() == "家庭"
             elif filter_text == "非Pro":
                 pro_item = self.table.item(row, 3)
                 show = pro_item and pro_item.text() == "非Pro"
+            elif filter_text == "Pro检测失败":
+                pro_item = self.table.item(row, 3)
+                show = pro_item and pro_item.text() == "检测失败"
             elif filter_text == "未关联":
                 sub2api_item = self.table.item(row, 6)
                 show = sub2api_item and sub2api_item.text() == "未关联"
@@ -1493,7 +1493,7 @@ class AccountManagerInterface(BaseInterface):
             pro_regular_count = summary.get("pro_regular_count", 0)
             pro_family_count = summary.get("pro_family_count", 0)
             non_pro_count = summary.get("non_pro_count", 0)
-            self.log(f"Pro 检测完成: Pro(普通) {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
+            self.log(f"Pro 检测完成: Pro {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
 
         self._loadData()
 
@@ -1830,18 +1830,41 @@ class AccountManagerInterface(BaseInterface):
         items = []
         for acc in available_pro_accounts:
             pro_email = acc.get("email", "")
-            count = acc.get("family_member_count", 0) or 1
+            # family_member_count: 0=未检测, 1-6=实际成员数(包括管理员)
+            # Pro账户至少有管理员自己，所以最小值应该是1
+            raw_count = acc.get("family_member_count", 0) or 0
+            count = max(raw_count, 1)  # Pro账户至少有1人(管理员自己)
             available = 6 - count
             items.append(f"{pro_email} ({count}/6) - 可邀请 {available} 人")
 
-        w = MessageBox(
-            "选择 Pro 账户",
-            f"选择要邀请 {email} 加入的 Pro 家庭组:\n\n" + "\n".join(items[:5]) +
-            (f"\n...等 {len(items)} 个" if len(items) > 5 else ""),
-            self
+        # 使用自定义对话框替代简单的 MessageBox，让用户可以选择具体的 Pro 账户
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout as QVBoxLayout2, QLabel, QDialogButtonBox
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择 Pro 账户")
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout2(dialog)
+
+        # 提示标签
+        layout.addWidget(BodyLabel(f"选择要邀请 {email} 加入的 Pro 家庭组:"))
+
+        # 下拉选择框
+        combo = ComboBox()
+        combo.addItems(items)
+        layout.addWidget(combo)
+
+        # 按钮
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        if w.exec() and items:
-            selected_email = items[0].split(" (")[0]
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted and items:
+            selected_item = combo.currentText()
+            selected_email = selected_item.split(" (")[0]
             selected_account = None
             for acc in available_pro_accounts:
                 if acc.get("email") == selected_email:
@@ -1918,8 +1941,10 @@ class AccountManagerInterface(BaseInterface):
         assignments = []
         pro_index = 0
 
+        # family_member_count: 0=未检测, 1-6=实际成员数
+        # Pro账户至少有管理员自己，所以初始最小值为1
         pro_slots = {
-            acc['email']: 6 - (acc.get('family_member_count') or 1)
+            acc['email']: 6 - max((acc.get('family_member_count') or 0), 1)
             for acc in pro_accounts
         }
 
@@ -2077,7 +2102,10 @@ class AccountManagerInterface(BaseInterface):
             asyncio.set_event_loop(loop)
 
             try:
-                from automation.auto_join_family import auto_join_family
+                from automation.auto_join_family import auto_join_family, _is_family_full_error
+
+                # 记录已满的 Pro 账户，避免重复尝试
+                full_pro_accounts = set()
 
                 for i, (invitee, pro) in enumerate(self._batch_join_assignments):
                     if self._batch_join_stop_flag:
@@ -2088,6 +2116,17 @@ class AccountManagerInterface(BaseInterface):
                     pro_email = pro.get("email", "")
                     invitee_browser_id = invitee.get("browser_profile_id", "")
                     pro_browser_id = pro.get("browser_profile_id", "")
+
+                    # 检查该 Pro 账户是否已标记为已满
+                    if pro_email in full_pro_accounts:
+                        safe_log(f"[{i+1}/{len(self._batch_join_assignments)}] ⏭️ 跳过 {invitee_email}，{pro_email} 家庭组已满")
+                        self._batch_join_results["failed_count"] += 1
+                        self._batch_join_results["failed_list"].append({
+                            "email": invitee_email,
+                            "error": f"Pro账户 {pro_email} 家庭组已满"
+                        })
+                        update_progress(i + 1)
+                        continue
 
                     safe_log(f"[{i+1}/{len(self._batch_join_assignments)}] {invitee_email} -> {pro_email}")
 
@@ -2116,6 +2155,11 @@ class AccountManagerInterface(BaseInterface):
                             })
                             safe_log(f"{invitee_email} 加入失败: {result.message}")
 
+                            # 检测是否为家庭组已满错误，标记该 Pro 账户
+                            if _is_family_full_error(result.message or ""):
+                                full_pro_accounts.add(pro_email)
+                                safe_log(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
+
                     except Exception as e:
                         self._batch_join_results["failed_count"] += 1
                         self._batch_join_results["failed_list"].append({
@@ -2123,6 +2167,11 @@ class AccountManagerInterface(BaseInterface):
                             "error": str(e)
                         })
                         safe_log(f"{invitee_email} 异常: {e}")
+
+                        # 异常消息也检测是否为已满
+                        if _is_family_full_error(str(e)):
+                            full_pro_accounts.add(pro_email)
+                            safe_log(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
 
                     update_progress(i + 1)
 

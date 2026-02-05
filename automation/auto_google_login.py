@@ -284,9 +284,15 @@ async def auto_google_login(
 
                 # 检测 Google One Pro 会员状态
                 is_pro = await _check_google_one_pro_status(page, log)
-                if is_pro is not None:
-                    DBManager.update_pro_status(email, "yes" if is_pro else "no")
-                    log(f"📊 Pro 会员状态: {'是' if is_pro else '否'}")
+                if is_pro is True:
+                    DBManager.update_pro_status(email, "yes")
+                    log("📊 Pro 会员状态: 是")
+                elif is_pro is False:
+                    DBManager.update_pro_status(email, "no")
+                    log("📊 Pro 会员状态: 否")
+                else:
+                    # 检测失败时不更新数据库（保留旧值），但输出日志
+                    log("⚠️ Pro 会员状态检测失败，将在「检测 Pro」功能中重试")
 
                 return LoginResult(
                     success=True,
@@ -339,6 +345,9 @@ async def _check_google_one_pro_status(
 
     通过访问 Google One 页面检测当前账号是否是 Pro 会员
 
+    重要修复：检测顺序改为先检测非会员标识，再检测 Pro 标识
+    原因：非会员页面也会显示 "Premium plan" 等作为套餐推广/选项
+
     Args:
         page: Playwright Page 对象
         log: 日志回调函数
@@ -361,47 +370,88 @@ async def _check_google_one_pro_status(
         await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
         await page.wait_for_timeout(2000)
 
-        # 检查页面内容，寻找 Pro 会员标识
+        # 检查页面内容，寻找会员标识
         page_text = await page.inner_text("body")
+        page_text_lower = page_text.lower()
 
-        # Pro 会员标识关键词
-        pro_indicators = [
-            "Google One AI Premium",
-            "AI Premium",
-            "2 TB",
-            "Premium plan",
-            "Premium 方案",
-            "高级会员",
-            "您当前的方案",  # 有方案说明是会员
-        ]
+        # ========== 重要修复：改变检测顺序，先检测非会员标识 ==========
+        # 原因：非会员页面也会显示 "Premium plan" 等作为套餐推广/选项
+        # 因此需要先排除非会员情况，再检测 Pro 会员标识
 
-        # 非会员标识
+        # 非会员标识 - 明确表示用户尚未订阅的关键词
+        # 注意：这些标识在已订阅用户页面上通常不会出现
         non_pro_indicators = [
-            "升级",
-            "Upgrade",
-            "Get Google One",
-            "加入 Google One",
-            "Choose a plan",
-            "选择方案",
+            # ===== 最重要：Upgrade 按钮（非会员页面左侧导航栏必有）=====
+            "Upgrade",            # 英文 - 升级按钮（只有非会员才有）
+            "升级",               # 中文简体
+            "升級",               # 中文繁体
+            "アップグレード",      # 日语
+            "업그레이드",          # 韩语
+            "Nâng cấp",           # 越南语
+            "Tingkatkan",         # 印尼语/马来语
+            "อัปเกรด",            # 泰语
+            # ===== 其他非会员标识 =====
+            "Get started",        # 页面显示"开始使用"按钮（家庭组创建页面）
             "开始使用",
+            "Sign up now",        # 注册按钮
+            "立即注册",
+            "Get Google One",     # 获取 Google One
+            "获取 Google One",
+            "加入 Google One",
+            "Get Basic",          # 获取基础套餐按钮
+            "获取 Basic",
+            "Get Premium",        # 获取高级套餐按钮
+            "获取 Premium",
+            "Get Google AI Pro",  # 获取 AI Pro 按钮
+            "Choose a plan",      # 选择方案页面
+            "选择方案",
+            "Pick a plan",
+            "Choose your plan",
+            "You can create a Family Group",  # 家庭组创建提示（非会员）
+            "可以创建家庭群组",
+            "Get more out of Google",  # 非会员页面底部推广语
+            "With a Google One membership",  # 非会员页面推广语
         ]
 
-        # 检查是否是 Pro 会员
-        is_pro = False
+        # 第一步：先检查是否有明确的非会员标识
+        for indicator in non_pro_indicators:
+            if indicator.lower() in page_text_lower:
+                _log(f"检测到非 Pro 标识: {indicator}")
+                return False
+
+        # Pro 会员标识 - 明确表示用户已订阅的关键词
+        # 注意：只使用已订阅用户页面上才会出现的标识
+        pro_indicators = [
+            "Manage membership",  # 管理会员（只有订阅者才有）
+            "管理会员",
+            "管理成员资格",
+            "Cancel membership",  # 取消会员（只有订阅者才有）
+            "取消会员",
+            "取消成员资格",
+            "Change membership plan",  # 更改会员计划
+            "更改成员资格方案",
+            "Your membership",    # 您的会员资格
+            "您的成员资格",
+            "您的会员",
+            "Member since",       # 会员起始日期
+            "成为会员的时间",
+            "Next payment",       # 下次付款
+            "下次付款",
+            "Renews on",          # 续订时间
+            "续订日期",
+            "您当前的方案",       # 表示已订阅某个方案
+            "Your current plan",  # 英文版
+        ]
+
+        # 第二步：检查是否有 Pro 会员标识
         for indicator in pro_indicators:
-            if indicator.lower() in page_text.lower():
+            if indicator.lower() in page_text_lower:
                 _log(f"检测到 Pro 标识: {indicator}")
-                is_pro = True
-                break
+                return True
 
-        # 如果没检测到 Pro 标识，检查是否明确是非会员
-        if not is_pro:
-            for indicator in non_pro_indicators:
-                if indicator.lower() in page_text.lower():
-                    _log(f"检测到非 Pro 标识: {indicator}")
-                    return False
-
-        return is_pro
+        # 没有检测到明确标识，返回 None 表示无法确定
+        _log("未检测到明确的会员/非会员标识")
+        return None
 
     except Exception as e:
         _log(f"⚠️ 检测 Pro 状态失败: {e}")

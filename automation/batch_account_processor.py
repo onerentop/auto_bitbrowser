@@ -706,7 +706,7 @@ class BatchAccountProcessor:
         non_pro_count = sum(1 for r in result.results if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "no")
 
         self._log(
-            f"批量检测 Pro 完成: Pro(普通) {pro_count}, Pro(家庭组) {family_pro_count}, 非Pro {non_pro_count}, "
+            f"批量检测 Pro 完成: Pro {pro_count}, Pro(家庭组) {family_pro_count}, 非Pro {non_pro_count}, "
             f"失败 {result.failed_count}, "
             f"跳过 {result.skipped_count}, "
             f"耗时 {result.duration_seconds:.1f}s"
@@ -786,7 +786,7 @@ class BatchAccountProcessor:
 
                         # 根据状态生成显示文本
                         status_text_map = {
-                            "yes": "Pro(普通)",
+                            "yes": "Pro",
                             "family_yes": "Pro(家庭组)",
                             "no": "非Pro",
                         }
