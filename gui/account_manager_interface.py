@@ -451,6 +451,12 @@ class AccountManagerInterface(BaseInterface):
         self.btnBatchJoinFamily.clicked.connect(self.onBatchJoinFamily)
         toolbar1Layout.addWidget(self.btnBatchJoinFamily)
 
+        # 开启共享
+        self.btnEnableFamilySharing = PushButton(FIF.SHARE, "开启共享", self)
+        self.btnEnableFamilySharing.setToolTip("为普通 Pro 账户开启家庭组共享功能")
+        self.btnEnableFamilySharing.clicked.connect(self.onEnableFamilySharing)
+        toolbar1Layout.addWidget(self.btnEnableFamilySharing)
+
         toolbar1Layout.addStretch()
         self.mainLayout.addWidget(toolbar1Card)
 
@@ -1046,6 +1052,18 @@ class AccountManagerInterface(BaseInterface):
             self._showWarning("警告", "批量绑定任务正在执行中")
             return
 
+        if self.worker_thread and self.worker_thread.isRunning():
+            self._showWarning("警告", "已有任务在执行中")
+            return
+
+        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
+            self._showWarning("警告", "批量加入家庭组任务正在执行中")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
+            return
+
         # 获取未绑定窗口的选中账号
         unbound_accounts = []
         for row in range(self.table.rowCount()):
@@ -1223,6 +1241,18 @@ class AccountManagerInterface(BaseInterface):
             self._showWarning("警告", "检测任务正在执行中")
             return
 
+        if self.worker_thread and self.worker_thread.isRunning():
+            self._showWarning("警告", "已有任务在执行中")
+            return
+
+        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
+            self._showWarning("警告", "批量加入家庭组任务正在执行中")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
+            return
+
         # 获取选中的账号
         selected_accounts, _ = self._getSelectedAccounts()
 
@@ -1385,6 +1415,10 @@ class AccountManagerInterface(BaseInterface):
             self.log("正在停止批量加入家庭组...")
             self._batch_join_stop_flag = True
 
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self.log("正在停止开启共享任务...")
+            self._enable_sharing_stop_flag = True
+
     # ==================== 任务执行 ====================
 
     def _startTask(self, task_type: str, accounts: List[dict], browser_ids: List[str]):
@@ -1395,6 +1429,10 @@ class AccountManagerInterface(BaseInterface):
 
         if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
             self._showWarning("警告", "批量加入家庭组任务正在执行中")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
             return
 
         self.log(f"开始 {task_type} 任务，共 {len(accounts)} 个账号...")
@@ -1434,6 +1472,10 @@ class AccountManagerInterface(BaseInterface):
 
         if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
             self._showWarning("警告", "批量加入家庭组任务正在执行中")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
             return
 
         self.log(f"开始解锁任务，共 {len(accounts)} 个账号...")
@@ -1517,6 +1559,7 @@ class AccountManagerInterface(BaseInterface):
         self.btnBatchBind.setEnabled(enabled)
         self.btnDetectPro.setEnabled(enabled)
         self.btnBatchJoinFamily.setEnabled(enabled)
+        self.btnEnableFamilySharing.setEnabled(enabled)
         self.btnDetect403.setEnabled(enabled)
         self.btnBatchUnlock.setEnabled(enabled)
         self.btnRefresh.setEnabled(enabled)
@@ -1753,6 +1796,18 @@ class AccountManagerInterface(BaseInterface):
         """批量删除选中的账号（异步执行）"""
         if self.batch_delete_worker and self.batch_delete_worker.isRunning():
             self._showWarning("警告", "批量删除任务正在执行中")
+            return
+
+        if self.worker_thread and self.worker_thread.isRunning():
+            self._showWarning("警告", "已有任务在执行中，请等待完成后再删除")
+            return
+
+        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
+            self._showWarning("警告", "批量加入家庭组任务正在执行中，请等待完成后再删除")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中，请等待完成后再删除")
             return
 
         accounts, browser_ids = self._getSelectedAccounts()
@@ -2060,6 +2115,10 @@ class AccountManagerInterface(BaseInterface):
             self._showWarning("警告", "批量加入家庭组任务正在执行中")
             return
 
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
+            return
+
         self.log(f"开始批量加入家庭组，共 {len(assignments)} 个账户...")
 
         self._setButtonsEnabled(False)
@@ -2215,4 +2274,221 @@ class AccountManagerInterface(BaseInterface):
 
     def refresh(self):
         """刷新数据（供外部调用）"""
+        self._loadData()
+
+    # ==================== 开启家庭共享功能 ====================
+
+    def onEnableFamilySharing(self):
+        """开启家庭共享按钮点击事件"""
+        accounts, browser_ids = self._getSelectedAccounts()
+
+        if not accounts:
+            self._showInfo("提示", "请先勾选要开启共享的 Pro 账号")
+            return
+
+        # 筛选符合条件的账号
+        valid_accounts = []
+        valid_browser_ids = []
+        skipped_not_pro = []
+        skipped_not_logged = []
+        skipped_no_browser = []
+        skipped_already_enabled = []
+
+        for account, browser_id in zip(accounts, browser_ids):
+            email = account.get("email", "")
+            is_pro = account.get("is_pro", "unknown")
+            login_status = account.get("login_status", "")
+            sharing_enabled = account.get("family_sharing_enabled", "unknown")
+
+            # 只处理普通 Pro 账户
+            if is_pro != "yes":
+                skipped_not_pro.append(email)
+                continue
+
+            if login_status != "logged_in":
+                skipped_not_logged.append(email)
+                continue
+
+            if not browser_id:
+                skipped_no_browser.append(email)
+                continue
+
+            # 已开启的跳过
+            if sharing_enabled == "yes":
+                skipped_already_enabled.append(email)
+                continue
+
+            valid_accounts.append(account)
+            valid_browser_ids.append(browser_id)
+
+        if not valid_accounts:
+            msg = "没有可开启共享的普通 Pro 账户\n\n"
+            if skipped_not_pro:
+                msg += f"⚠️ {len(skipped_not_pro)} 个不是普通 Pro 账户\n"
+            if skipped_not_logged:
+                msg += f"⚠️ {len(skipped_not_logged)} 个未登录\n"
+            if skipped_no_browser:
+                msg += f"⚠️ {len(skipped_no_browser)} 个未绑定窗口\n"
+            if skipped_already_enabled:
+                msg += f"✅ {len(skipped_already_enabled)} 个已开启共享"
+            self._showWarning("警告", msg)
+            return
+
+        # 确认操作
+        msg = f"将为 {len(valid_accounts)} 个普通 Pro 账户开启家庭共享"
+        if skipped_not_pro:
+            msg += f"\n\n⚠️ 跳过 {len(skipped_not_pro)} 个非普通 Pro 账户"
+        if skipped_not_logged:
+            msg += f"\n⚠️ 跳过 {len(skipped_not_logged)} 个未登录账户"
+        if skipped_no_browser:
+            msg += f"\n⚠️ 跳过 {len(skipped_no_browser)} 个未绑定窗口账户"
+        if skipped_already_enabled:
+            msg += f"\n✅ 跳过 {len(skipped_already_enabled)} 个已开启共享账户"
+
+        w = MessageBox("确认开启共享", msg + "\n\n是否继续？", self)
+        if not w.exec():
+            return
+
+        self._startEnableFamilySharingTask(valid_accounts, valid_browser_ids)
+
+    def _startEnableFamilySharingTask(self, accounts: list, browser_ids: list):
+        """启动开启家庭共享任务"""
+        if self.worker_thread and self.worker_thread.isRunning():
+            self._showWarning("警告", "已有任务在执行中")
+            return
+
+        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
+            self._showWarning("警告", "批量加入家庭组任务正在执行中")
+            return
+
+        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
+            self._showWarning("警告", "开启共享任务正在执行中")
+            return
+
+        self.log(f"开始批量开启家庭共享，共 {len(accounts)} 个账户...")
+
+        self._setButtonsEnabled(False)
+
+        self.progressBar.setVisible(True)
+        self.progressBar.setRange(0, len(accounts))
+        self.progressBar.setValue(0)
+
+        self._enable_sharing_accounts = accounts
+        self._enable_sharing_browser_ids = browser_ids
+        self._enable_sharing_results = {
+            "total": len(accounts),
+            "success_count": 0,
+            "already_enabled_count": 0,
+            "failed_count": 0,
+            "failed_list": [],
+        }
+        self._enable_sharing_stop_flag = False
+
+        from threading import Thread
+        from PyQt6.QtCore import QMetaObject, Q_ARG, Qt as QtCore_Qt
+
+        def safe_log(msg: str):
+            QMetaObject.invokeMethod(
+                self.logText,
+                "append",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+            )
+
+        def update_progress(value: int):
+            QMetaObject.invokeMethod(
+                self.progressBar,
+                "setValue",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, value)
+            )
+
+        def run_enable_sharing():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            try:
+                from automation.auto_enable_family_sharing import auto_enable_family_sharing
+
+                for i, (account, browser_id) in enumerate(
+                    zip(self._enable_sharing_accounts, self._enable_sharing_browser_ids)
+                ):
+                    if self._enable_sharing_stop_flag:
+                        safe_log("用户停止任务")
+                        break
+
+                    email = account.get("email", "")
+                    safe_log(f"[{i+1}/{len(self._enable_sharing_accounts)}] 开启共享: {email}")
+
+                    try:
+                        result = loop.run_until_complete(
+                            auto_enable_family_sharing(
+                                account=account,
+                                browser_id=browser_id,
+                                callback=safe_log,
+                                close_browser_on_success=False,
+                            )
+                        )
+
+                        if result.success:
+                            if result.was_already_enabled:
+                                self._enable_sharing_results["already_enabled_count"] += 1
+                                safe_log(f"✅ {email} 已开启共享（跳过）")
+                            else:
+                                self._enable_sharing_results["success_count"] += 1
+                                safe_log(f"✅ {email} 成功开启家庭共享")
+                        else:
+                            self._enable_sharing_results["failed_count"] += 1
+                            self._enable_sharing_results["failed_list"].append({
+                                "email": email,
+                                "error": result.message or "未知错误"
+                            })
+                            safe_log(f"❌ {email} 开启失败: {result.message}")
+
+                    except Exception as e:
+                        self._enable_sharing_results["failed_count"] += 1
+                        self._enable_sharing_results["failed_list"].append({
+                            "email": email,
+                            "error": str(e)
+                        })
+                        safe_log(f"❌ {email} 异常: {e}")
+
+                    update_progress(i + 1)
+
+            finally:
+                loop.close()
+                QTimer.singleShot(0, self._onEnableFamilySharingFinished)
+
+        self._enable_sharing_thread = Thread(target=run_enable_sharing, daemon=True)
+        self._enable_sharing_thread.start()
+
+    def _onEnableFamilySharingFinished(self):
+        """开启家庭共享完成回调"""
+        self._setButtonsEnabled(True)
+        self.progressBar.setVisible(False)
+
+        results = self._enable_sharing_results
+
+        self.log(
+            f"开启家庭共享完成: 成功 {results['success_count']}, "
+            f"已开启 {results['already_enabled_count']}, "
+            f"失败 {results['failed_count']}"
+        )
+
+        msg = f"开启家庭共享完成\n\n"
+        msg += f"成功: {results['success_count']}\n"
+        msg += f"已开启（跳过）: {results['already_enabled_count']}\n"
+        msg += f"失败: {results['failed_count']}\n"
+
+        if results['failed_list']:
+            msg += "\n失败账户:\n"
+            for item in results['failed_list'][:5]:
+                error_text = item['error']
+                if len(error_text) > 30:
+                    error_text = error_text[:30] + "..."
+                msg += f"  • {item['email']}: {error_text}\n"
+            if len(results['failed_list']) > 5:
+                msg += f"  ... 等 {len(results['failed_list'])} 个\n"
+
+        self._showInfo("完成", msg)
         self._loadData()

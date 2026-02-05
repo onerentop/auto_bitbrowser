@@ -128,6 +128,13 @@ class DBManager:
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+            # 动态添加 family_sharing_enabled 列（家庭共享是否已开启）
+            # 状态值: unknown / yes / no
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_sharing_enabled TEXT DEFAULT 'unknown'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
             # 创建卡片表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -2159,6 +2166,76 @@ class DBManager:
         except Exception as e:
             print(f"[DB ERROR] update_family_member_count 失败: {e}")
             return False
+
+    @staticmethod
+    def update_family_sharing_enabled(email: str, status: str) -> bool:
+        """
+        更新账号的家庭共享开启状态
+
+        Args:
+            email: 账号邮箱
+            status: 家庭共享状态 ('unknown' / 'yes' / 'no')
+
+        Returns:
+            bool: 是否成功
+        """
+        if status not in ('unknown', 'yes', 'no'):
+            print(f"[DB ERROR] 无效的 family_sharing_enabled 状态: {status}")
+            return False
+
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE accounts SET family_sharing_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                    (status, email)
+                )
+
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新家庭共享状态: {email} -> {status}")
+                return affected > 0
+        except Exception as e:
+            print(f"[DB ERROR] update_family_sharing_enabled 失败: {e}")
+            return False
+
+    @staticmethod
+    def get_pro_accounts_for_sharing() -> list:
+        """
+        获取可以开启家庭共享的普通 Pro 账户
+
+        条件：
+        - is_pro = 'yes' (普通 Pro，非家庭组 Pro)
+        - login_status = 'logged_in' (已登录)
+        - browser_profile_id 已绑定 (有浏览器窗口)
+        - family_sharing_enabled != 'yes' (尚未开启或未知)
+
+        Returns:
+            list: 可开启共享的 Pro 账户列表
+        """
+        try:
+            with lock:
+                conn = DBManager.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM accounts
+                    WHERE is_pro = 'yes'
+                    AND login_status = 'logged_in'
+                    AND browser_profile_id IS NOT NULL
+                    AND browser_profile_id != ''
+                    AND COALESCE(family_sharing_enabled, 'unknown') != 'yes'
+                    ORDER BY updated_at DESC
+                """)
+                rows = cursor.fetchall()
+                conn.close()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"[DB ERROR] get_pro_accounts_for_sharing 失败: {e}")
+            return []
 
     @staticmethod
     def get_available_pro_accounts() -> list:
