@@ -718,6 +718,20 @@ class AccountManagerInterface(BaseInterface):
         self.statusLabel.setText(f"总计 {total} 个 | 已登录 {logged_in} | 已关联 {linked}")
         self.log(f"加载完成，共 {total} 个账号")
 
+        # 重新应用当前筛选条件（保持筛选状态）
+        current_filter = self.filterCombo.currentText()
+        if current_filter and current_filter != "全部":
+            self._applyFilter(current_filter)
+
+        # 重置全选复选框状态（因为表格行是新创建的，默认未选中）
+        # 使用 blockSignals 避免触发 _onSelectAllChanged 信号
+        self.chkSelectAll.blockSignals(True)
+        self.chkSelectAll.setChecked(False)
+        self.chkSelectAll.blockSignals(False)
+
+        # 更新选中计数
+        self._updateSelectedCount()
+
     # ==================== 状态文本和颜色方法 ====================
 
     def _getLoginStatusText(self, status: str) -> str:
@@ -2379,6 +2393,7 @@ class AccountManagerInterface(BaseInterface):
             "total": len(accounts),
             "success_count": 0,
             "already_enabled_count": 0,
+            "family_created_count": 0,  # 新增：创建了家庭组的数量
             "failed_count": 0,
             "failed_list": [],
         }
@@ -2436,7 +2451,12 @@ class AccountManagerInterface(BaseInterface):
                                 safe_log(f"✅ {email} 已开启共享（跳过）")
                             else:
                                 self._enable_sharing_results["success_count"] += 1
-                                safe_log(f"✅ {email} 成功开启家庭共享")
+                                # 检查是否创建了家庭组
+                                if result.family_created:
+                                    self._enable_sharing_results["family_created_count"] += 1
+                                    safe_log(f"✅ {email} 成功创建家庭组并开启共享")
+                                else:
+                                    safe_log(f"✅ {email} 成功开启家庭共享")
                         else:
                             self._enable_sharing_results["failed_count"] += 1
                             self._enable_sharing_results["failed_list"].append({
@@ -2469,14 +2489,22 @@ class AccountManagerInterface(BaseInterface):
 
         results = self._enable_sharing_results
 
+        # 日志记录（包含创建家庭组数量）
+        family_created_info = ""
+        if results.get('family_created_count', 0) > 0:
+            family_created_info = f", 创建家庭组 {results['family_created_count']}"
+
         self.log(
-            f"开启家庭共享完成: 成功 {results['success_count']}, "
+            f"开启家庭共享完成: 成功 {results['success_count']}{family_created_info}, "
             f"已开启 {results['already_enabled_count']}, "
             f"失败 {results['failed_count']}"
         )
 
         msg = f"开启家庭共享完成\n\n"
         msg += f"成功: {results['success_count']}\n"
+        # 显示创建家庭组数量（如果有）
+        if results.get('family_created_count', 0) > 0:
+            msg += f"  ↳ 其中新建家庭组: {results['family_created_count']}\n"
         msg += f"已开启（跳过）: {results['already_enabled_count']}\n"
         msg += f"失败: {results['failed_count']}\n"
 
