@@ -384,7 +384,7 @@ async def auto_join_family(
     if not model:
         model = ConfigManager.get_ai_provider_model(provider)
     if not max_steps:
-        max_steps = 20  # 家庭组流程可能需要更多步骤
+        max_steps = ConfigManager.get_ai_max_steps()  # 使用配置的最大步骤数
 
     base_url = ConfigManager.get_ai_provider_base_url(provider)
 
@@ -890,12 +890,14 @@ async def _send_family_invite(
 """
 
             # 执行阶段1：点击邀请按钮
+            # 阶段1分配约 40% 的步骤数
+            phase1_max_steps = max(8, int(max_steps * 0.4))
             task_result = await agent.execute_task(
                 page=page,
                 goal=phase1_prompt,
                 start_url="https://myaccount.google.com/family",
                 account=agent_account,
-                max_steps=8,  # 限制步骤数，只需点击一个按钮
+                max_steps=phase1_max_steps,
                 navigate_first=False,
             )
 
@@ -932,12 +934,14 @@ async def _send_family_invite(
                         inviter_email=inviter_email,
                         invitee_email=invitee_email,
                     )
+                    # 阶段2使用剩余步骤数
+                    phase2_remaining_steps = max(5, max_steps - task_result.total_steps)
                     task_result2 = await agent.execute_task(
                         page=page,
                         goal=full_prompt,
                         start_url=current_url,
                         account=agent_account,
-                        max_steps=max_steps - 8,
+                        max_steps=phase2_remaining_steps,
                         navigate_first=False,
                     )
                     if task_result2.success:
@@ -1102,12 +1106,14 @@ async def _send_family_invite(
                 inviter_email=inviter_email,
                 invitee_email=invitee_email,
             )
+            # 保底阶段使用剩余步骤数
+            fallback_remaining_steps = max(5, max_steps - task_result.total_steps)
             task_result2 = await agent.execute_task(
                 page=page,
                 goal=full_prompt,
                 start_url=page.url,
                 account=agent_account,
-                max_steps=max_steps - 8,
+                max_steps=fallback_remaining_steps,
                 navigate_first=False,
             )
 
@@ -1244,12 +1250,14 @@ async def _accept_family_invite(
             agent1.on_step(lambda step, action: log(f"[{invitee_email}][阶段1] 步骤{step}: {action}"))
 
             # 执行阶段1
+            # 阶段1分配约 50% 的步骤数（刷新+搜索+打开+点击）
+            phase1_max_steps = max(10, int(max_steps * 0.5))
             phase1_result = await agent1.execute_task(
                 page=page,
                 goal=phase1_prompt,
                 start_url="https://mail.google.com",
                 account=agent_account,
-                max_steps=12,  # 阶段1: 刷新+搜索+打开+点击，需要足够步骤
+                max_steps=phase1_max_steps,
                 navigate_first=False,
             )
 
@@ -1522,8 +1530,8 @@ async def _accept_family_invite(
             )
             agent2.on_step(lambda step, action: log(f"[{invitee_email}][阶段2] 步骤{step}: {action}"))
 
-            # 计算阶段2可用步骤数（确保至少有5步，阶段1用了12步）
-            phase2_max_steps = max(5, max_steps - 12)
+            # 计算阶段2可用步骤数（使用剩余步骤，确保至少有5步）
+            phase2_max_steps = max(5, max_steps - phase1_result.total_steps)
 
             # 执行阶段2
             phase2_result = await agent2.execute_task(
