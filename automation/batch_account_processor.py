@@ -5,6 +5,8 @@
 """
 
 import asyncio
+import os
+import traceback
 from typing import Callable, List, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -21,6 +23,14 @@ try:
 except ImportError:
     CDP_SERVICE_AVAILABLE = False
     create_cdp_service = None
+
+# 尝试导入 Stagehand SDK
+try:
+    from stagehand import AsyncStagehand
+    STAGEHAND_AVAILABLE = True
+except ImportError:
+    STAGEHAND_AVAILABLE = False
+    AsyncStagehand = None
 from services.proxy_smart_allocator import ProxySmartAllocator
 from automation.auto_google_login import auto_google_login, LoginResult
 from automation.auto_antigravity_oauth import auto_antigravity_oauth, OAuthResult
@@ -611,7 +621,7 @@ class BatchAccountProcessor:
                                 # 更新数据库中的 validation_url
                                 DBManager.update_unlock_status(email, "needs_unlock", validation_url)
                             else:
-                                self._log(f"[{email}] ⚠️ 未获取到新的验证链接，使用数据库中的链接")
+                                self._log(f"[{email}] [!] 未获取到新的验证链接，使用数据库中的链接")
                         elif test_result.success:
                             # 账号已不再是 403 状态
                             self._log(f"[{email}] ✅ 账号已不再需要解锁（403 已解除）")
@@ -620,9 +630,9 @@ class BatchAccountProcessor:
                             return
                         else:
                             # 其他失败情况
-                            self._log(f"[{email}] ⚠️ 检测返回异常: {test_result.error}，使用数据库中的链接")
+                            self._log(f"[{email}] [!] 检测返回异常: {test_result.error}，使用数据库中的链接")
                     else:
-                        self._log(f"[{email}] ⚠️ 未找到 Sub2API 账号，使用数据库中的验证链接")
+                        self._log(f"[{email}] [!] 未找到 Sub2API 账号，使用数据库中的验证链接")
 
                 # 检查是否有验证链接
                 if not validation_url:
@@ -785,7 +795,17 @@ class BatchAccountProcessor:
                         page = await context.new_page()
 
                     # 检测 Pro 状态
-                    pro_status = await self._check_google_one_pro_status(page, email)
+                    # 优先使用 Stagehand AI 检测，失败时回退到传统方法
+                    pro_status = None
+
+                    if STAGEHAND_AVAILABLE:
+                        self._log(f"[{email}] 尝试使用 Stagehand AI 检测...")
+                        pro_status = await self._check_pro_status_via_stagehand(page, email, ws_endpoint)
+
+                    if pro_status is None:
+                        # Stagehand 不可用或失败，使用传统检测方法
+                        self._log(f"[{email}] 使用传统检测方法...")
+                        pro_status = await self._check_google_one_pro_status(page, email)
 
                     if pro_status is not None:
                         # 更新数据库
@@ -1138,7 +1158,292 @@ class BatchAccountProcessor:
             return await self._check_family_status(page, email)
 
         except Exception as e:
-            self._log(f"[{email}] ⚠️ 检测 Pro 状态失败: {e}")
+            self._log(f"[{email}] [!] 检测 Pro 状态失败: {e}")
+            return None
+
+    async def _check_pro_status_via_stagehand(
+        self,
+        page,
+        email: str,
+        ws_endpoint: str,
+    ) -> str | None:
+        """
+        使用 Stagehand AI 检测 Pro 状态
+
+        通过 Stagehand SDK 连接到现有的 ixBrowser 窗口，
+        使用 AI 智能提取 Google One 订阅信息。
+
+        Args:
+            page: Playwright Page 对象（已连接到 ixBrowser）
+            email: 账号邮箱（用于日志）
+            ws_endpoint: ixBrowser 的 WebSocket 端点
+
+        Returns:
+            "yes" = 普通 Pro 会员（自己订阅）
+            "family_yes" = 家庭组 Pro 会员（被邀请）
+            "no" = 非 Pro 会员
+            None = 检测失败
+        """
+        if not STAGEHAND_AVAILABLE:
+            self._log(f"[{email}] Stagehand SDK 不可用，回退到传统方法")
+            return None
+
+        try:
+            self._log(f"[{email}] [AI] 使用 Stagehand AI 检测 Pro 状态...")
+
+            # 优先使用 Anthropic/Claude 配置
+            # 如果 Anthropic 未配置，回退到 Gemini
+            model_api_key = ConfigManager.get_ai_provider_api_key("anthropic")
+            model_base_url = None
+            stagehand_model = None
+
+            if model_api_key:
+                # 使用 Anthropic/Claude
+                model_name = ConfigManager.get_ai_provider_model("anthropic")
+                if not model_name:
+                    model_name = "claude-sonnet-4-20250514"
+                stagehand_model = f"anthropic/{model_name}"
+                # 获取 base_url（支持第三方 API 代理）
+                base_url = ConfigManager.get_ai_provider_base_url("anthropic")
+                if base_url:
+                    # 确保 base_url 以 /v1 结尾（OpenAI 兼容格式）
+                    if not base_url.endswith("/v1"):
+                        model_base_url = base_url.rstrip("/") + "/v1"
+                    else:
+                        model_base_url = base_url
+                self._log(f"[{email}] 使用 Anthropic 模型: {stagehand_model}")
+                if model_base_url:
+                    self._log(f"[{email}] 使用第三方 API: {model_base_url}")
+            else:
+                # 回退到 Gemini
+                model_api_key = ConfigManager.get_ai_provider_api_key("gemini")
+                if not model_api_key:
+                    model_api_key = os.environ.get("MODEL_API_KEY")
+
+                if model_api_key:
+                    model_name = ConfigManager.get_ai_provider_model("gemini")
+                    if not model_name:
+                        model_name = "gemini-2.0-flash"
+                    stagehand_model = f"google/{model_name}"
+                    # 获取 base_url
+                    base_url = ConfigManager.get_ai_provider_base_url("gemini")
+                    if base_url:
+                        model_base_url = base_url
+                    self._log(f"[{email}] 使用 Gemini 模型: {stagehand_model}")
+
+            if not model_api_key or not stagehand_model:
+                self._log(f"[{email}] [!] 未配置 AI API Key（Anthropic 或 Gemini），无法使用 Stagehand")
+                return None
+
+            # 构建 model_config（用于 extract 调用）
+            model_config = {
+                "model_name": stagehand_model,
+                "api_key": model_api_key,
+            }
+            if model_base_url:
+                model_config["base_url"] = model_base_url
+
+            # 创建 Stagehand 客户端（使用本地模式）
+            async with AsyncStagehand(
+                server="local",
+                model_api_key=model_api_key,
+                local_ready_timeout_s=30.0,
+            ) as client:
+                # 启动 session，连接到现有浏览器
+                self._log(f"[{email}] 启动 Stagehand session (连接到现有浏览器)...")
+                session = await client.sessions.start(
+                    model_name=stagehand_model,
+                    browser={
+                        "type": "local",
+                        "cdp_url": ws_endpoint,
+                    },
+                )
+
+                try:
+                    # 同步 Stagehand 到当前 URL
+                    await session.navigate(url="https://one.google.com/")
+
+                    # 使用 AI 提取 Pro 状态
+                    self._log(f"[{email}] 使用 AI 提取订阅信息...")
+                    extract_response = await session.extract(
+                        instruction="""
+                        仔细分析当前 Google One 页面，判断用户的会员订阅状态。
+
+                        **重要判断规则（按优先级顺序）：**
+
+                        1. 首先检查是否有"Upgrade"或"升级"按钮：
+                           - 如果页面左侧导航栏或页面上有"Upgrade"、"升级"按钮 → 说明是**非会员**
+                           - 非会员页面通常显示套餐选择、价格信息
+
+                        2. 如果没有"Upgrade"按钮，检查是否是会员：
+                           - 查找"Your membership"、"您的会员资格"、"Member benefits"、"会员福利"
+                           - 查找存储空间信息如"100 GB"、"2 TB"、"AI Premium"
+                           - 查找"Manage membership"、"管理会员"
+
+                        3. 如果是会员，判断是独立订阅还是家庭组成员：
+
+                           **家庭组成员特征（is_family_member=true）：**
+                           - 看到"Shared with you"、"与您共享"
+                           - 看到"Family plan"、"家庭方案"但没有付款/账单信息
+                           - 看到"Leave family"、"退出家庭"选项
+                           - 没有看到"Next payment"、"下次付款"信息
+                           - 页面显示是通过其他人的订阅获得的福利
+
+                           **独立订阅者特征（is_family_member=false）：**
+                           - 看到"Next payment"、"下次付款"信息
+                           - 看到"Cancel membership"、"取消会员"
+                           - 看到"Payment method"、"付款方式"
+                           - 看到"Manage family"、"管理家庭"（说明是家庭管理员）
+
+                        请返回：
+                        - is_subscribed: 是否有 Google One 会员（true/false）
+                        - is_family_member: 是否是家庭组成员（被邀请加入的，不是管理员）（true/false）
+                        - plan_name: 套餐名称（如"2 TB", "AI Premium", "100 GB"等）
+                        - confidence: 判断置信度（0-1）
+                        """,
+                        schema={
+                            "type": "object",
+                            "properties": {
+                                "is_subscribed": {
+                                    "type": "boolean",
+                                    "description": "用户是否有 Google One 会员资格（不论是自己订阅还是家庭共享）。如果页面有 Upgrade 按钮则为 false，如果显示会员福利或存储空间则为 true"
+                                },
+                                "is_family_member": {
+                                    "type": "boolean",
+                                    "description": "如果是会员，是否是通过家庭组共享获得的（被别人邀请加入）。如果没有付款信息或看到 shared with you 则为 true"
+                                },
+                                "plan_name": {
+                                    "type": "string",
+                                    "description": "会员套餐名称，如 2 TB, AI Premium, 100 GB 等"
+                                },
+                                "confidence": {
+                                    "type": "number",
+                                    "description": "判断置信度 0-1"
+                                },
+                            },
+                            "required": ["is_subscribed", "is_family_member", "confidence"],
+                        },
+                        options={
+                            "model": model_config,
+                        },
+                        page=page,
+                    )
+
+                    # 解析结果
+                    result_data = extract_response.data.result
+                    self._log(f"[{email}] Stagehand 提取结果: {result_data}")
+
+                    if result_data is None:
+                        self._log(f"[{email}] [!] Stagehand 提取结果为空")
+                        return None
+
+                    is_subscribed = result_data.get("is_subscribed", False)
+                    is_family_member = result_data.get("is_family_member", False)
+                    plan_name = result_data.get("plan_name", "")
+                    confidence = result_data.get("confidence", 0)
+
+                    self._log(f"[{email}] AI 分析: 已订阅={is_subscribed}, 家庭成员={is_family_member}, 方案={plan_name}, 置信度={confidence}")
+
+                    # 置信度检查
+                    if confidence < 0.5:
+                        self._log(f"[{email}] [!] AI 置信度较低 ({confidence})，建议人工确认")
+
+                    # 返回结果
+                    if not is_subscribed:
+                        self._log(f"[{email}] [OK] Stagehand 检测: 非 Pro 会员")
+                        return "no"
+
+                    # 是 Pro 会员，需要二次确认家庭组状态
+                    # 导航到会员设置页面进行精确判断
+                    self._log(f"[{email}] 检测到 Pro 会员，正在检查是否为独立订阅...")
+                    await session.navigate(url="https://one.google.com/settings")
+
+                    # 在设置页面检查是否有独立订阅者特有的选项
+                    settings_response = await session.extract(
+                        instruction="""
+                        分析当前 Google One 设置页面，判断用户是独立订阅者还是家庭组成员。
+
+                        **关键判断规则：**
+
+                        如果看到以下任一内容，说明是**独立订阅者**（自己付费）：
+                        - "Share Google One with family" 开关
+                        - "Change payment method" / "更改付款方式"
+                        - "Cancel membership" / "取消会员"
+                        - "Change membership plan" / "更改会员方案"
+                        - "Manage family settings" / "管理家庭设置"
+
+                        如果页面**没有**付款相关选项，或者显示：
+                        - "Your membership is shared by..." / "您的会员由...共享"
+                        - "Leave family" / "退出家庭"
+                        - 只有基本的会员信息，没有付款/取消选项
+                        说明是**家庭组成员**（通过别人的订阅获得）
+
+                        请返回：
+                        - has_payment_options: 页面是否有付款相关选项（Change payment method, Cancel membership等）
+                        - has_share_family_toggle: 页面是否有 "Share Google One with family" 开关
+                        - is_independent_subscriber: 是否是独立订阅者（自己付费的）
+                        - confidence: 判断置信度
+                        """,
+                        schema={
+                            "type": "object",
+                            "properties": {
+                                "has_payment_options": {
+                                    "type": "boolean",
+                                    "description": "页面是否有付款相关选项"
+                                },
+                                "has_share_family_toggle": {
+                                    "type": "boolean",
+                                    "description": "页面是否有 Share Google One with family 开关"
+                                },
+                                "is_independent_subscriber": {
+                                    "type": "boolean",
+                                    "description": "是否是独立订阅者（自己付费）"
+                                },
+                                "confidence": {
+                                    "type": "number",
+                                    "description": "判断置信度 0-1"
+                                },
+                            },
+                            "required": ["has_payment_options", "has_share_family_toggle", "is_independent_subscriber", "confidence"],
+                        },
+                        options={
+                            "model": model_config,
+                        },
+                    )
+
+                    settings_data = settings_response.data.result
+                    self._log(f"[{email}] 设置页面检测结果: {settings_data}")
+
+                    if settings_data:
+                        has_payment = settings_data.get("has_payment_options", False)
+                        has_share_toggle = settings_data.get("has_share_family_toggle", False)
+                        is_independent = settings_data.get("is_independent_subscriber", False)
+                        settings_confidence = settings_data.get("confidence", 0)
+
+                        self._log(f"[{email}] 设置分析: 付款选项={has_payment}, 家庭共享开关={has_share_toggle}, 独立订阅={is_independent}, 置信度={settings_confidence}")
+
+                        # 如果有付款选项或家庭共享开关，说明是独立订阅者
+                        if has_payment or has_share_toggle or is_independent:
+                            self._log(f"[{email}] [OK] Stagehand 检测: 普通 Pro 会员 ({plan_name})")
+                            return "yes"
+                        else:
+                            self._log(f"[{email}] [OK] Stagehand 检测: 家庭组 Pro 会员 ({plan_name})")
+                            return "family_yes"
+
+                    # 默认返回独立订阅
+                    self._log(f"[{email}] [OK] Stagehand 检测: 普通 Pro 会员 ({plan_name})")
+                    return "yes"
+
+                finally:
+                    # 确保 session 结束
+                    try:
+                        await session.end()
+                    except Exception:
+                        pass
+
+        except Exception as e:
+            self._log(f"[{email}] [!] Stagehand 检测失败: {e}")
+            self._log(f"[{email}] 错误详情: {traceback.format_exc()}")
             return None
 
     async def _get_family_member_count(self, page, email: str) -> int:
@@ -1214,7 +1519,7 @@ class BatchAccountProcessor:
             return 1
 
         except Exception as e:
-            self._log(f"[{email}] ⚠️ 获取家庭成员数量失败: {e}")
+            self._log(f"[{email}] [!] 获取家庭成员数量失败: {e}")
             return 0
 
 
