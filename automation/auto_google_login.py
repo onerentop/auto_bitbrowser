@@ -1,38 +1,36 @@
 """
 Google 账号一键登录
 
-使用 AI Browser Agent 自动完成 Google 登录流程：
+使用 Stagehand AI 自动完成 Google 登录流程：
 1. 打开浏览器窗口
 2. 导航到 accounts.google.com
-3. AI Agent 自动填写账号密码
+3. Stagehand Agent 自动填写账号密码
 4. 处理 2FA 验证（如有）
 5. 验证登录成功
 """
 
 import asyncio
 from typing import Callable, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page
 
 from core.config_manager import ConfigManager
-# 尝试导入 AI Browser Agent 模块
-try:
-    from core.ai_browser_agent import (
-        AIBrowserAgent,
-        TaskResult,
-        TaskContext,
-        AgentState,
-    )
-    AI_BROWSER_AGENT_AVAILABLE = True
-except ImportError:
-    AI_BROWSER_AGENT_AVAILABLE = False
-    AIBrowserAgent = None
-    TaskResult = None
-    TaskContext = None
-    AgentState = None
 from services.database import DBManager
-from services.ix_api import openBrowser, closeBrowser
+from services.ix_api import openBrowser
+
+# 导入共享的 Pro 状态检测器和 AI 配置函数
+from automation.pro_status_detector import (
+    check_pro_status_via_stagehand,
+    get_stagehand_config,
+    STAGEHAND_AVAILABLE,
+)
+
+# 尝试导入 Stagehand SDK
+try:
+    from stagehand import AsyncStagehand
+except ImportError:
+    AsyncStagehand = None
 
 
 @dataclass
@@ -45,12 +43,11 @@ class LoginResult:
     login_status: str  # logged_in / login_failed / not_logged
     error_type: Optional[str] = None
     total_steps: int = 0
-    agent_state: Optional[AgentState] = None
 
 
-# Google 登录提示词模板
-GOOGLE_LOGIN_PROMPT = """
-你是一个专业的浏览器自动化助手，需要完成 Google 账号登录任务。
+# Google 登录指令模板
+GOOGLE_LOGIN_INSTRUCTION = """
+登录 Google 账号，完成以下步骤：
 
 ## 账号信息
 - 邮箱: {email}
@@ -58,36 +55,32 @@ GOOGLE_LOGIN_PROMPT = """
 {totp_info}
 {recovery_info}
 
-## 任务目标
-登录 Google 账号并确保登录成功。
-
 ## 操作步骤
 
-### 1. 导航到登录页面
-- 如果当前页面不是 Google 登录页面，导航到 https://accounts.google.com
+1. **导航到登录页面**
+   - 如果当前不在 Google 登录页面，访问 https://accounts.google.com
 
-### 2. 输入邮箱
-- 在邮箱输入框中输入邮箱地址
-- 点击"下一步"或按 Enter
+2. **输入邮箱**
+   - 在邮箱输入框中输入: {email}
+   - 点击"下一步"按钮
 
-### 3. 输入密码
-- 等待密码输入框出现
-- 输入密码
-- 点击"下一步"或按 Enter
+3. **输入密码**
+   - 等待密码输入框出现
+   - 输入密码: {password}
+   - 点击"下一步"按钮
 
-### 4. 处理 2FA 验证（如果需要）
+4. **处理 2FA 验证（如果出现）**
 {totp_instructions}
 
-### 5. 验证登录成功
-- 等待页面跳转
-- 检查是否到达 myaccount.google.com 或看到用户头像
-- 如果看到任何错误提示（如"密码错误"、"账号不存在"），报告失败
+5. **验证登录成功**
+   - 等待页面跳转完成
+   - 确认到达 myaccount.google.com 或看到用户头像
+   - 如果看到错误提示（如"密码错误"、"账号不存在"），报告失败
 
 ## 注意事项
 - 每一步操作后等待页面响应
-- 如果出现验证码，尝试完成或报告需要人工干预
-- 如果遇到"选择账号"页面，选择对应的账号
-- 如果已经登录（看到用户头像或 myaccount 页面），直接报告成功
+- 如果遇到"选择账号"页面，选择 {email}
+- 如果已经登录（看到用户头像或 myaccount 页面），直接完成任务
 
 ## 成功标准
 - 页面 URL 包含 myaccount.google.com
@@ -107,13 +100,15 @@ async def auto_google_login(
     """
     执行 Google 账号一键登录
 
+    使用 Stagehand AI agent.execute() 执行登录任务。
+
     Args:
         browser_id: ixBrowser 窗口 ID
         account: 账号信息 {email, password, secret_key, recovery_email}
         callback: 进度回调函数
-        api_key: AI API Key（可选，默认从配置读取）
-        model: AI 模型名称（可选）
-        provider: AI 提供商（可选）
+        api_key: 已废弃，AI 配置从 ConfigManager 读取
+        model: 已废弃，AI 配置从 ConfigManager 读取
+        provider: 已废弃，AI 配置从 ConfigManager 读取
         max_steps: 最大步骤数（可选）
 
     Returns:
@@ -132,23 +127,20 @@ async def auto_google_login(
 
     log("开始登录流程...")
 
-    # 检查 AI Browser Agent 是否可用
-    if not AI_BROWSER_AGENT_AVAILABLE:
-        log("❌ AI Browser Agent 不可用")
+    # 检查 Stagehand 是否可用
+    if not STAGEHAND_AVAILABLE:
+        log("[X] Stagehand SDK 不可用")
         return LoginResult(
             success=False,
-            message="AI Browser Agent 不可用",
+            message="Stagehand SDK 不可用",
             email=email,
             browser_id=browser_id,
             login_status="login_failed",
-            error_type="agent_unavailable",
+            error_type="stagehand_unavailable",
         )
 
     # 更新数据库状态为登录中
     DBManager.update_login_status(email, "logging_in")
-
-    browser = None
-    page = None
 
     try:
         # 打开浏览器
@@ -157,7 +149,7 @@ async def auto_google_login(
 
         if not result.get("success"):
             error_msg = result.get("msg", "打开浏览器失败")
-            log(f"❌ {error_msg}")
+            log(f"[X] {error_msg}")
             DBManager.update_login_status(email, "login_failed", last_error=error_msg)
             return LoginResult(
                 success=False,
@@ -171,7 +163,7 @@ async def auto_google_login(
         ws_endpoint = result.get("data", {}).get("ws", "")
         if not ws_endpoint:
             error_msg = "无法获取浏览器 WebSocket 端点"
-            log(f"❌ {error_msg}")
+            log(f"[X] {error_msg}")
             DBManager.update_login_status(email, "login_failed", last_error=error_msg)
             return LoginResult(
                 success=False,
@@ -182,145 +174,193 @@ async def auto_google_login(
                 error_type="no_ws_endpoint",
             )
 
-        log(f"浏览器已打开，连接 CDP...")
+        log("浏览器已打开，连接 Stagehand...")
 
-        # 连接浏览器
+        # 使用公共函数获取 AI 配置
+        model_api_key, model_base_url, stagehand_model = get_stagehand_config(log)
+
+        if not model_api_key or not stagehand_model:
+            error_msg = "AI 配置不完整，请在设置中配置 AI 提供商和 API Key"
+            log(f"[X] {error_msg}")
+            DBManager.update_login_status(email, "login_failed", last_error=error_msg)
+            return LoginResult(
+                success=False,
+                message=error_msg,
+                email=email,
+                browser_id=browser_id,
+                login_status="login_failed",
+                error_type="no_api_key",
+            )
+
+        # 构建登录指令
+        totp_info = ""
+        totp_instructions = ""
+        if secret_key:
+            totp_info = f"- TOTP 密钥: {secret_key}"
+            totp_instructions = f"""
+   - 如果需要输入验证码，使用 TOTP 密钥 {secret_key} 生成 6 位验证码
+   - 在验证码输入框中输入验证码
+   - 验证码每 30 秒更新，请快速输入"""
+        else:
+            totp_instructions = "   - 如果需要 2FA 验证但没有密钥，报告需要人工干预"
+
+        recovery_info = ""
+        if recovery_email:
+            recovery_info = f"- 辅助邮箱: {recovery_email}"
+
+        instruction = GOOGLE_LOGIN_INSTRUCTION.format(
+            email=email,
+            password=password,
+            totp_info=totp_info,
+            recovery_info=recovery_info,
+            totp_instructions=totp_instructions,
+        )
+
+        # 获取最大步骤数
+        if not max_steps:
+            max_steps = ConfigManager.get_ai_max_steps() or 25
+
+        # 构建 model_config
+        model_config = {
+            "model_name": stagehand_model,
+            "api_key": model_api_key,
+        }
+        if model_base_url:
+            model_config["base_url"] = model_base_url
+
+        # 使用 Stagehand 执行登录
+        log("启动 Stagehand session...")
+
+        async with AsyncStagehand(
+            server="local",
+            model_api_key=model_api_key,
+            local_ready_timeout_s=60.0,
+        ) as stagehand:
+            # 启动 session，连接到现有浏览器
+            log("连接到 ixBrowser 窗口...")
+            session = await stagehand.sessions.start(
+                model_name=stagehand_model,
+                browser={
+                    "type": "local",
+                    "cdp_url": ws_endpoint,
+                },
+            )
+
+            try:
+                # 先导航到 Google 登录页
+                log("导航到 Google 登录页...")
+                await session.navigate(
+                    url="https://accounts.google.com",
+                    options={"wait_until": "domcontentloaded"},
+                )
+
+                # 执行登录任务
+                log("执行 Stagehand Agent 登录任务...")
+
+                execute_result = await session.execute(
+                    agent_config={
+                        "model": model_config,
+                    },
+                    execute_options={
+                        "instruction": instruction,
+                        "max_steps": max_steps,
+                    },
+                )
+
+                log(f"Agent 执行完成")
+
+            finally:
+                # 结束 session
+                try:
+                    await session.end()
+                except Exception:
+                    pass
+
+        # 获取当前 URL 验证登录状态（在 Stagehand session 结束后）
+        # 需要重新连接以获取最新页面状态
         async with async_playwright() as playwright:
             browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
             contexts = browser.contexts
-            if not contexts:
-                error_msg = "没有找到浏览器上下文"
-                log(f"❌ {error_msg}")
-                DBManager.update_login_status(email, "login_failed", last_error=error_msg)
-                return LoginResult(
-                    success=False,
-                    message=error_msg,
-                    email=email,
-                    browser_id=browser_id,
-                    login_status="login_failed",
-                    error_type="no_context",
-                )
+            if contexts:
+                pages = contexts[0].pages
+                if pages:
+                    current_page = pages[0]
+                    current_url = current_page.url
 
-            context = contexts[0]
-            pages = context.pages
-            if pages:
-                page = pages[0]
-            else:
-                page = await context.new_page()
+                    # 验证登录成功
+                    login_success = (
+                        "myaccount.google.com" in current_url or
+                        "mail.google.com" in current_url or
+                        "drive.google.com" in current_url or
+                        "one.google.com" in current_url
+                    )
 
-            log("浏览器连接成功，准备 AI Agent...")
+                    if login_success:
+                        log("[OK] 登录成功")
+                        DBManager.update_login_status(email, "logged_in")
 
-            # 构建提示词
-            totp_info = ""
-            totp_instructions = ""
-            if secret_key:
-                totp_info = f"- 2FA 密钥: {secret_key}"
-                totp_instructions = """
-- 如果需要输入验证码，使用提供的 2FA 密钥生成 TOTP 验证码
-- 在验证码输入框中输入 6 位数字验证码
-- 验证码每 30 秒更新一次，请快速输入
-"""
-            else:
-                totp_instructions = "- 如果需要 2FA 验证但没有密钥，报告需要人工干预"
+                        # 检测 Google One Pro 会员状态（使用 Stagehand AI）
+                        pro_status = await check_pro_status_via_stagehand(
+                            page=current_page,
+                            email=email,
+                            ws_endpoint=ws_endpoint,
+                            log=log,
+                        )
 
-            recovery_info = ""
-            if recovery_email:
-                recovery_info = f"- 辅助邮箱: {recovery_email}"
+                        # 更新数据库
+                        if pro_status in ("yes", "family_yes"):
+                            DBManager.update_pro_status(email, pro_status)
+                            status_text = "是" if pro_status == "yes" else "是(家庭组)"
+                            log(f"Pro 会员状态: {status_text}")
+                        elif pro_status == "no":
+                            DBManager.update_pro_status(email, "no")
+                            log("Pro 会员状态: 否")
+                        else:
+                            log("[!] Pro 会员状态检测失败，将在「检测 Pro」功能中重试")
 
-            prompt = GOOGLE_LOGIN_PROMPT.format(
-                email=email,
-                password=password,
-                totp_info=totp_info,
-                recovery_info=recovery_info,
-                totp_instructions=totp_instructions,
-            )
+                        return LoginResult(
+                            success=True,
+                            message="登录成功",
+                            email=email,
+                            browser_id=browser_id,
+                            login_status="logged_in",
+                            total_steps=max_steps,
+                        )
+                    else:
+                        # 检查是否还在登录页面（可能登录失败）
+                        if "accounts.google.com" in current_url:
+                            error_msg = "登录失败，仍在登录页面"
+                        else:
+                            error_msg = f"登录状态不确定，当前URL: {current_url}"
 
-            # 获取 AI 配置
-            if not provider:
-                provider = ConfigManager.get_ai_default_provider()
-            if not api_key:
-                api_key = ConfigManager.get_ai_provider_api_key(provider)
-            if not model:
-                model = ConfigManager.get_ai_provider_model(provider)
-            if not max_steps:
-                max_steps = ConfigManager.get_ai_max_steps()
+                        log(f"[X] {error_msg}")
+                        DBManager.update_login_status(email, "login_failed", last_error=error_msg)
+                        return LoginResult(
+                            success=False,
+                            message=error_msg,
+                            email=email,
+                            browser_id=browser_id,
+                            login_status="login_failed",
+                            error_type="login_failed",
+                            total_steps=max_steps,
+                        )
 
-            base_url = ConfigManager.get_ai_provider_base_url(provider)
-
-            # 创建 AI Browser Agent
-            agent = AIBrowserAgent(
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                provider=provider,
-            )
-
-            # 设置回调
-            agent.on_step(lambda step, action: log(f"[Agent] 步骤{step}: {action}"))
-
-            log("开始执行登录任务...")
-
-            # 执行任务
-            task_result = await agent.execute_task(
-                page=page,
-                goal=prompt,
-                start_url="https://accounts.google.com",
-                max_steps=max_steps,
-            )
-
-            log(f"任务完成，步骤数: {task_result.total_steps}")
-
-            # 验证登录成功
-            current_url = page.url
-            login_success = (
-                "myaccount.google.com" in current_url or
-                "mail.google.com" in current_url or
-                task_result.success
-            )
-
-            if login_success:
-                log("✅ 登录成功")
-                DBManager.update_login_status(email, "logged_in")
-
-                # 检测 Google One Pro 会员状态
-                is_pro = await _check_google_one_pro_status(page, log)
-                if is_pro is True:
-                    DBManager.update_pro_status(email, "yes")
-                    log("📊 Pro 会员状态: 是")
-                elif is_pro is False:
-                    DBManager.update_pro_status(email, "no")
-                    log("📊 Pro 会员状态: 否")
-                else:
-                    # 检测失败时不更新数据库（保留旧值），但输出日志
-                    log("⚠️ Pro 会员状态检测失败，将在「检测 Pro」功能中重试")
-
-                return LoginResult(
-                    success=True,
-                    message="登录成功",
-                    email=email,
-                    browser_id=browser_id,
-                    login_status="logged_in",
-                    total_steps=task_result.total_steps,
-                    agent_state=task_result.state,
-                )
-            else:
-                error_msg = task_result.message or "登录失败"
-                log(f"❌ 登录失败: {error_msg}")
-                DBManager.update_login_status(email, "login_failed", last_error=error_msg)
-                return LoginResult(
-                    success=False,
-                    message=error_msg,
-                    email=email,
-                    browser_id=browser_id,
-                    login_status="login_failed",
-                    error_type="login_failed",
-                    total_steps=task_result.total_steps,
-                    agent_state=task_result.state,
-                )
+        # 如果无法验证，返回不确定结果
+        error_msg = "无法验证登录状态"
+        log(f"[X] {error_msg}")
+        DBManager.update_login_status(email, "login_failed", last_error=error_msg)
+        return LoginResult(
+            success=False,
+            message=error_msg,
+            email=email,
+            browser_id=browser_id,
+            login_status="login_failed",
+            error_type="verification_failed",
+        )
 
     except Exception as e:
         error_msg = str(e)
-        log(f"❌ 异常: {error_msg}")
+        log(f"[X] 异常: {error_msg}")
         DBManager.update_login_status(email, "login_failed", last_error=error_msg)
         return LoginResult(
             success=False,
@@ -330,132 +370,6 @@ async def auto_google_login(
             login_status="login_failed",
             error_type="exception",
         )
-
-    finally:
-        # 不关闭浏览器，保持登录状态供后续 OAuth 使用
-        pass
-
-
-async def _check_google_one_pro_status(
-    page: Page,
-    log: Callable[[str], None] = None,
-) -> bool | None:
-    """
-    检测 Google One Pro 会员状态
-
-    通过访问 Google One 页面检测当前账号是否是 Pro 会员
-
-    重要修复：检测顺序改为先检测非会员标识，再检测 Pro 标识
-    原因：非会员页面也会显示 "Premium plan" 等作为套餐推广/选项
-
-    Args:
-        page: Playwright Page 对象
-        log: 日志回调函数
-
-    Returns:
-        True = Pro 会员
-        False = 非 Pro 会员
-        None = 检测失败
-    """
-    def _log(msg: str):
-        if log:
-            log(msg)
-        else:
-            print(f"[ProCheck] {msg}")
-
-    try:
-        _log("正在检测 Google One 会员状态...")
-
-        # 导航到 Google One 页面
-        await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
-        await page.wait_for_timeout(2000)
-
-        # 检查页面内容，寻找会员标识
-        page_text = await page.inner_text("body")
-        page_text_lower = page_text.lower()
-
-        # ========== 重要修复：改变检测顺序，先检测非会员标识 ==========
-        # 原因：非会员页面也会显示 "Premium plan" 等作为套餐推广/选项
-        # 因此需要先排除非会员情况，再检测 Pro 会员标识
-
-        # 非会员标识 - 明确表示用户尚未订阅的关键词
-        # 注意：这些标识在已订阅用户页面上通常不会出现
-        non_pro_indicators = [
-            # ===== 最重要：Upgrade 按钮（非会员页面左侧导航栏必有）=====
-            "Upgrade",            # 英文 - 升级按钮（只有非会员才有）
-            "升级",               # 中文简体
-            "升級",               # 中文繁体
-            "アップグレード",      # 日语
-            "업그레이드",          # 韩语
-            "Nâng cấp",           # 越南语
-            "Tingkatkan",         # 印尼语/马来语
-            "อัปเกรด",            # 泰语
-            # ===== 其他非会员标识 =====
-            "Get started",        # 页面显示"开始使用"按钮（家庭组创建页面）
-            "开始使用",
-            "Sign up now",        # 注册按钮
-            "立即注册",
-            "Get Google One",     # 获取 Google One
-            "获取 Google One",
-            "加入 Google One",
-            "Get Basic",          # 获取基础套餐按钮
-            "获取 Basic",
-            "Get Premium",        # 获取高级套餐按钮
-            "获取 Premium",
-            "Get Google AI Pro",  # 获取 AI Pro 按钮
-            "Choose a plan",      # 选择方案页面
-            "选择方案",
-            "Pick a plan",
-            "Choose your plan",
-            "You can create a Family Group",  # 家庭组创建提示（非会员）
-            "可以创建家庭群组",
-            "Get more out of Google",  # 非会员页面底部推广语
-            "With a Google One membership",  # 非会员页面推广语
-        ]
-
-        # 第一步：先检查是否有明确的非会员标识
-        for indicator in non_pro_indicators:
-            if indicator.lower() in page_text_lower:
-                _log(f"检测到非 Pro 标识: {indicator}")
-                return False
-
-        # Pro 会员标识 - 明确表示用户已订阅的关键词
-        # 注意：只使用已订阅用户页面上才会出现的标识
-        pro_indicators = [
-            "Manage membership",  # 管理会员（只有订阅者才有）
-            "管理会员",
-            "管理成员资格",
-            "Cancel membership",  # 取消会员（只有订阅者才有）
-            "取消会员",
-            "取消成员资格",
-            "Change membership plan",  # 更改会员计划
-            "更改成员资格方案",
-            "Your membership",    # 您的会员资格
-            "您的成员资格",
-            "您的会员",
-            "Member since",       # 会员起始日期
-            "成为会员的时间",
-            "Next payment",       # 下次付款
-            "下次付款",
-            "Renews on",          # 续订时间
-            "续订日期",
-            "您当前的方案",       # 表示已订阅某个方案
-            "Your current plan",  # 英文版
-        ]
-
-        # 第二步：检查是否有 Pro 会员标识
-        for indicator in pro_indicators:
-            if indicator.lower() in page_text_lower:
-                _log(f"检测到 Pro 标识: {indicator}")
-                return True
-
-        # 没有检测到明确标识，返回 None 表示无法确定
-        _log("未检测到明确的会员/非会员标识")
-        return None
-
-    except Exception as e:
-        _log(f"⚠️ 检测 Pro 状态失败: {e}")
-        return None
 
 
 async def check_login_status(page: Page) -> bool:
@@ -480,7 +394,6 @@ async def check_login_status(page: Page) -> bool:
             return True
 
         # 检查页面元素
-        # 尝试查找用户头像或账号菜单
         avatar = await page.query_selector('[data-identifier]')
         if avatar:
             return True
@@ -497,7 +410,7 @@ if __name__ == "__main__":
     import sys
 
     async def main():
-        print("Google Login 测试")
+        print("Google Login 测试 (Stagehand)")
         print("=" * 50)
 
         # 测试账号（需要替换为真实账号）

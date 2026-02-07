@@ -10,26 +10,27 @@ Antigravity OAuth 自动化
 """
 
 import asyncio
-import re
+import time
 from typing import Callable, Optional
 from dataclasses import dataclass
 from urllib.parse import urlparse, parse_qs
 
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page
+import pyotp
 
-from core.config_manager import ConfigManager
-# 尝试导入 AI Browser Agent 模块
+# 尝试导入 Stagehand SDK
 try:
-    from core.ai_browser_agent import AIBrowserAgent
-    AI_BROWSER_AGENT_AVAILABLE = True
+    from stagehand import AsyncStagehand
+    STAGEHAND_AVAILABLE = True
 except ImportError:
-    AI_BROWSER_AGENT_AVAILABLE = False
-    AIBrowserAgent = None
+    STAGEHAND_AVAILABLE = False
+    AsyncStagehand = None
 from services.database import DBManager
 from services.ix_api import openBrowser
 from services.sub2api_client import Sub2APIClient
 from services.proxy_smart_allocator import ProxySmartAllocator
-from automation.auto_google_login import auto_google_login, LoginResult
+from automation.auto_google_login import auto_google_login
+from automation.pro_status_detector import check_login_status_via_stagehand, get_stagehand_config
 
 
 @dataclass
@@ -42,55 +43,6 @@ class OAuthResult:
     sub2api_status: str = "not_linked"
     error_type: Optional[str] = None
     total_steps: int = 0
-
-
-# OAuth 授权提示词模板
-OAUTH_AUTHORIZE_PROMPT = """
-你是一个专业的浏览器自动化助手，需要完成 Google OAuth 授权任务。
-
-## 当前状态
-- 账号: {email}
-{totp_info}
-- 目标: 完成 Antigravity 平台的 OAuth 授权
-
-## 任务目标
-在当前页面完成 Google OAuth 授权流程，直到页面跳转到 localhost 回调 URL。
-
-## 操作步骤
-
-### 1. 检查当前页面
-- 如果看到"选择账号"页面，选择 {email} 对应的账号
-- 如果看到"登录"页面，说明需要先登录（报告此情况）
-
-### 2. 处理 2FA 验证（如果需要）
-{totp_instructions}
-
-### 3. 授权页面
-- 如果看到授权确认页面（"允许 XXX 访问您的 Google 账号"）
-- 点击"允许"或"继续"按钮完成授权
-- 可能需要勾选权限复选框
-
-### 4. 等待跳转到回调 URL
-- 授权完成后，页面会自动跳转到 localhost:8085/callback?...
-- 回调 URL 包含 code= 和 state= 参数
-
-## 注意事项
-- 不要点击"取消"或"拒绝"
-- 如果看到安全警告，选择继续
-- 每一步操作后等待页面响应
-
-## 成功标准（非常重要！）
-当页面 URL 变为 localhost:8085/callback?...&code=... 格式时，任务就已经成功！
-
-**特别注意**: 跳转到 localhost 后，页面可能显示:
-- "This site can't be reached"
-- "localhost refused to connect"
-- "ERR_CONNECTION_REFUSED"
-
-这些都是**正常现象**，表示 OAuth 授权已成功完成！
-只要 URL 中包含 `code=` 参数，就报告 DONE（任务成功）。
-不要报告 ERROR，这不是错误！
-"""
 
 
 async def auto_antigravity_oauth(
@@ -136,14 +88,14 @@ async def auto_antigravity_oauth(
 
     log("开始 OAuth 流程...")
 
-    # 检查 AI Browser Agent 是否可用
-    if not AI_BROWSER_AGENT_AVAILABLE:
-        log("❌ AI Browser Agent 不可用")
+    # 检查 Stagehand SDK 是否可用
+    if not STAGEHAND_AVAILABLE:
+        log("❌ Stagehand SDK 不可用")
         return OAuthResult(
             success=False,
-            message="AI Browser Agent 不可用",
+            message="Stagehand SDK 不可用",
             email=email,
-            error_type="agent_unavailable",
+            error_type="stagehand_unavailable",
         )
 
     # 前置检查 1: 检查本地数据库状态
@@ -181,30 +133,8 @@ async def auto_antigravity_oauth(
                 sub2api_status="linked",
             )
 
-        # 前置检查 3: 检查登录状态
-        if not skip_login_check:
-            login_status = db_account.get("login_status") if db_account else None
-            if login_status != "logged_in":
-                log("账号未登录，先执行登录...")
-                login_result = await auto_google_login(
-                    browser_id=browser_id,
-                    account=account,
-                    callback=callback,
-                    api_key=api_key,
-                    model=model,
-                    provider=provider,
-                )
-
-                if not login_result.success:
-                    log(f"❌ 登录失败: {login_result.message}")
-                    DBManager.update_sub2api_status(email, "oauth_failed")
-                    return OAuthResult(
-                        success=False,
-                        message=f"登录失败: {login_result.message}",
-                        email=email,
-                        sub2api_status="oauth_failed",
-                        error_type="login_failed",
-                    )
+        # 前置检查 3: 登录状态检查将在打开浏览器后使用 Stagehand AI 进行
+        # （移至步骤 2 之后）
 
         # 更新状态为 OAuth 进行中
         DBManager.update_sub2api_status(email, "linking")
@@ -246,9 +176,6 @@ async def auto_antigravity_oauth(
         DBManager.update_sub2api_status(email, "linking", session_id=session_id)
 
         # 步骤 2: 打开浏览器并执行授权
-        browser = None
-        page = None
-
         result = openBrowser(browser_id)
         if not result.get("success"):
             error_msg = result.get("msg", "打开浏览器失败")
@@ -281,54 +208,71 @@ async def auto_antigravity_oauth(
             pages = context.pages
             page = pages[0] if pages else await context.new_page()
 
+            # 前置检查 3: 使用 Stagehand AI 检测登录状态
+            if not skip_login_check:
+                log("使用 Stagehand AI 检测登录状态...")
+                is_logged_in = await check_login_status_via_stagehand(
+                    page=page,
+                    email=email,
+                    ws_endpoint=ws_endpoint,
+                    log=log,
+                )
+
+                # 如果检测失败（返回 None），视为未登录，执行登录流程
+                if not is_logged_in:
+                    log("账号未登录，先执行登录...")
+                    login_result = await auto_google_login(
+                        browser_id=browser_id,
+                        account=account,
+                        callback=callback,
+                        api_key=api_key,
+                        model=model,
+                        provider=provider,
+                    )
+
+                    if not login_result.success:
+                        log(f"❌ 登录失败: {login_result.message}")
+                        DBManager.update_sub2api_status(email, "oauth_failed")
+                        return OAuthResult(
+                            success=False,
+                            message=f"登录失败: {login_result.message}",
+                            email=email,
+                            sub2api_status="oauth_failed",
+                            error_type="login_failed",
+                        )
+
             # 导航到授权 URL
             log("导航到授权页面...")
             await page.goto(auth_url, wait_until="networkidle", timeout=60000)
 
-            # 获取 AI 配置
-            if not provider:
-                provider = ConfigManager.get_ai_default_provider()
-            if not api_key:
-                api_key = ConfigManager.get_ai_provider_api_key(provider)
-            if not model:
-                model = ConfigManager.get_ai_provider_model(provider)
+            # 使用公共函数获取 AI 配置
+            model_api_key, model_base_url, stagehand_model = get_stagehand_config(log)
+
+            if not model_api_key or not stagehand_model:
+                log("❌ AI 配置不完整")
+                DBManager.update_sub2api_status(email, "oauth_failed")
+                return OAuthResult(
+                    success=False,
+                    message="AI 配置不完整，请在设置中配置 AI 提供商和 API Key",
+                    email=email,
+                    sub2api_status="oauth_failed",
+                    error_type="no_api_key",
+                )
+
+            # 构建 model_config（用于 extract/act 调用，支持第三方 API）
+            model_config = {
+                "model_name": stagehand_model,
+                "api_key": model_api_key,
+            }
+            if model_base_url:
+                model_config["base_url"] = model_base_url
+
             if not max_steps:
                 max_steps = 15  # OAuth 流程通常步骤较少
 
-            base_url = ConfigManager.get_ai_provider_base_url(provider)
-
-            # 构建 2FA 信息
-            totp_info = ""
-            totp_instructions = ""
-            if secret_key:
-                totp_info = f"- 当前 2FA 验证码: {{totp_code}} (使用密钥 {secret_key[:4]}... 生成)"
-                totp_instructions = """- 如果看到需要输入验证码/Authenticator 的页面
-- 在验证码输入框中输入 6 位数字验证码
-- 验证码每 30 秒更新一次，请快速输入
-- 点击"下一步"或按 Enter 确认"""
-            else:
-                totp_instructions = "- 如果需要 2FA 验证但没有密钥，报告需要人工干预 (need_verification)"
-
-            # 构建提示词
-            prompt = OAUTH_AUTHORIZE_PROMPT.format(
-                email=email,
-                totp_info=totp_info,
-                totp_instructions=totp_instructions,
-            )
-
-            # 创建 AI Agent
-            agent = AIBrowserAgent(
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-                provider=provider,
-            )
-
-            # 设置回调
-            agent.on_step(lambda step, action: log(f"[Agent] 步骤{step}: {action}"))
-
             # 设置 URL 监控，实时捕获 OAuth code
             # Chrome 在页面加载失败时会将 URL 改为 chrome-error://，所以需要在跳转时就捕获
+            # 重要：OAuth 回调可能在新标签页打开，需要监听所有页面
             captured_code = None
             captured_url = None
 
@@ -367,46 +311,487 @@ async def auto_antigravity_oauth(
                 except Exception as e:
                     log(f"处理导航事件失败: {e}")
 
-            # 监听请求事件（最早触发）
-            page.on("request", on_request)
-            # 监听导航事件（备用）
-            page.on("framenavigated", on_frame_navigated)
+            def setup_page_listeners(target_page):
+                """为页面设置事件监听器"""
+                target_page.on("request", on_request)
+                target_page.on("framenavigated", on_frame_navigated)
 
-            log("开始执行授权任务...")
+            def on_new_page(new_page):
+                """当新标签页创建时，为其添加监听器"""
+                log(f"[Context] 检测到新标签页创建")
+                setup_page_listeners(new_page)
 
-            # 构建 account 参数（AI Agent 使用 'secret' 字段名，需要转换）
-            agent_account = {
-                "email": email,
-                "password": account.get("password", ""),
-                "secret": secret_key,  # AI Agent 使用 'secret' 而不是 'secret_key'
-                "recovery_email": account.get("recovery_email", ""),
-            }
+            async def observe_and_click(session, instruction: str, fallback_act: bool = True) -> bool:
+                """
+                最佳实践：observe 获取元素 -> Playwright 直接点击
+                这样只需要一次 LLM 调用，点击操作不需要 LLM
 
-            # 执行授权任务
-            task_result = await agent.execute_task(
-                page=page,
-                goal=prompt,
-                start_url=auth_url,
-                account=agent_account,  # 传递账号信息，让 AI Agent 能生成 TOTP 验证码
-                max_steps=max_steps,
-                navigate_first=False,  # 已经导航到 auth_url 了
-            )
+                Args:
+                    session: Stagehand session
+                    instruction: observe 指令
+                    fallback_act: 如果 Playwright 点击失败，是否回退到 act
+
+                Returns:
+                    bool: 是否成功点击
+                """
+                try:
+                    observe_response = await session.observe(
+                        instruction=instruction,
+                        options={"model": model_config},
+                    )
+                    if not observe_response.data.result:
+                        log(f"[Stagehand] observe 未找到元素: {instruction[:50]}...")
+                        return False
+
+                    element = observe_response.data.result[0]
+                    selector = element.selector if hasattr(element, 'selector') else None
+                    description = element.description if hasattr(element, 'description') else str(element)
+                    log(f"[Stagehand] 找到元素: {description}")
+
+                    # 优先使用 Playwright 直接点击（无需 LLM）
+                    if selector:
+                        try:
+                            locator = page.locator(f"xpath={selector}").first
+                            await locator.wait_for(state="visible", timeout=5000)
+                            await locator.click()
+                            log(f"[Stagehand] Playwright 点击成功")
+                            return True
+                        except Exception as pw_error:
+                            log(f"[Stagehand] Playwright 点击失败: {pw_error}")
+
+                    # 回退：使用 act（需要 LLM）
+                    if fallback_act:
+                        try:
+                            act_response = await session.act(
+                                input=element.to_dict(exclude_none=True) if hasattr(element, 'to_dict') else element,
+                            )
+                            result_msg = getattr(act_response.data.result, 'message', 'OK') if act_response.data.result else 'OK'
+                            log(f"[Stagehand] act 点击结果: {result_msg}")
+                            return True
+                        except Exception as act_error:
+                            log(f"[Stagehand] act 点击失败: {act_error}")
+
+                    return False
+                except Exception as e:
+                    log(f"[Stagehand] observe_and_click 失败: {e}")
+                    return False
+
+            # 监听 context 级别的新页面创建事件
+            context.on("page", on_new_page)
+
+            # 为所有已存在的标签页设置监听器
+            for existing_page in context.pages:
+                setup_page_listeners(existing_page)
+
+            log("开始使用 Stagehand AI 执行授权任务...")
+
+            # 使用 Stagehand AI 执行 OAuth 授权
+            total_steps = 0
+            async with AsyncStagehand(
+                server="local",
+                model_api_key=model_api_key,
+                local_ready_timeout_s=30.0,
+            ) as stagehand_client:
+                log("启动 Stagehand session (连接到现有浏览器)...")
+                stagehand_session = await stagehand_client.sessions.start(
+                    model_name=stagehand_model,
+                    browser={
+                        "type": "local",
+                        "cdp_url": ws_endpoint,
+                    },
+                )
+
+                try:
+                    # 同步 Stagehand 到当前 URL
+                    await stagehand_session.navigate(url=auth_url)
+
+                    # 执行 OAuth 授权流程
+                    for step in range(1, max_steps + 1):
+                        # 检查是否已捕获到授权码
+                        if captured_code:
+                            log(f"已捕获授权码，结束授权流程")
+                            total_steps = step - 1
+                            break
+
+                        # 检查当前 URL 是否已跳转到回调
+                        try:
+                            current_url = page.url
+                            if "code=" in current_url and ("localhost" in current_url or "callback" in current_url):
+                                log(f"检测到回调 URL，授权完成")
+                                total_steps = step - 1
+                                break
+                        except Exception:
+                            pass
+
+                        log(f"[Stagehand] 步骤 {step}/{max_steps}")
+
+                        # 使用 AI 分析当前页面状态
+                        extract_response = await stagehand_session.extract(
+                            instruction=f"""
+                            分析当前 Google OAuth 授权页面的状态。
+
+                            目标账号: {email}
+
+                            请判断当前页面处于哪个阶段，并返回相应的操作建议：
+
+                            1. **选择账号页面**：
+                               - 如果看到账号列表，需要选择 {email} 对应的账号
+                               - 返回 action: "select_account"
+
+                            2. **2FA/验证码页面**：
+                               - 如果看到需要输入 6 位验证码
+                               - 返回 action: "enter_totp", needs_totp: true
+
+                            3. **应用确认页面**（重要！）：
+                               - 如果看到 "Make sure that you downloaded this app from Google"
+                               - 或者看到 "Sign in with Google" 标题和 "Sign in" 按钮
+                               - 或者看到 "确保您已从 Google 下载此应用"
+                               - 这是确认应用来源的页面，需要点击 "Sign in" 或 "登录" 按钮
+                               - 返回 action: "confirm_app"
+
+                            4. **授权确认页面**：
+                               - 如果看到 "允许"、"继续"、"Allow"、"Continue" 按钮
+                               - 可能需要勾选权限复选框
+                               - 返回 action: "authorize"
+
+                            5. **回调页面/完成**：
+                               - 如果 URL 包含 localhost 或 callback，且有 code= 参数
+                               - 页面可能显示 "无法访问此网站" - 这是正常的！
+                               - 返回 action: "done"
+
+                            6. **错误页面**：
+                               - 如果看到明确的错误信息
+                               - 返回 action: "error", error_message: "错误内容"
+
+                            返回 JSON 格式。
+                            """,
+                            schema={
+                                "type": "object",
+                                "properties": {
+                                    "action": {
+                                        "type": "string",
+                                        "description": "需要执行的操作: select_account, enter_totp, confirm_app, authorize, done, error"
+                                    },
+                                    "needs_totp": {
+                                        "type": "boolean",
+                                        "description": "是否需要输入 TOTP 验证码"
+                                    },
+                                    "error_message": {
+                                        "type": "string",
+                                        "description": "错误信息（如果有）"
+                                    },
+                                },
+                                "required": ["action"],
+                            },
+                            options={
+                                "model": model_config,
+                            },
+                        )
+
+                        result_data = extract_response.data.result
+                        log(f"[Stagehand] 页面分析: {result_data}")
+
+                        if result_data is None:
+                            log("[Stagehand] 分析结果为空，尝试通用操作...")
+                            # 使用优化的 observe + Playwright 模式
+                            clicked = await observe_and_click(
+                                stagehand_session,
+                                "找到页面上的 '允许'、'继续'、'Allow' 或 'Continue' 按钮"
+                            )
+                            if not clicked:
+                                log("[Stagehand] 未找到可点击的按钮")
+                            await page.wait_for_timeout(2000)
+                            total_steps = step
+                            continue
+
+                        action = result_data.get("action", "")
+
+                        if action == "done":
+                            log("[Stagehand] OAuth 授权完成")
+                            total_steps = step
+                            break
+
+                        elif action == "error":
+                            error_msg = result_data.get("error_message", "未知错误")
+                            log(f"[Stagehand] 检测到错误: {error_msg}")
+                            # 不立即退出，可能是误判
+                            total_steps = step
+                            continue
+
+                        elif action == "select_account":
+                            log(f"[Stagehand] 选择账号: {email}")
+                            # 使用优化的 observe + Playwright 模式
+                            clicked = await observe_and_click(
+                                stagehand_session,
+                                f"找到包含 '{email}' 的账号选项或按钮"
+                            )
+                            if not clicked:
+                                # 备选：尝试查找任意账号选项
+                                clicked = await observe_and_click(
+                                    stagehand_session,
+                                    "找到账号选择页面上的账号列表项或账号按钮"
+                                )
+                            if not clicked:
+                                log("[Stagehand] 未找到任何账号元素")
+                            await page.wait_for_timeout(2000)
+                            total_steps = step
+
+                        elif action == "enter_totp":
+                            if secret_key:
+                                # 生成 TOTP 验证码
+                                totp = pyotp.TOTP(secret_key)
+                                totp_code = totp.now()
+                                log(f"[Stagehand] 输入 TOTP 验证码: {totp_code}")
+
+                                # 等待页面稳定（TOTP 页面可能刚跳转过来）
+                                await page.wait_for_timeout(1500)
+
+                                totp_input_success = False
+                                try:
+                                    # 最佳实践：先 observe 找到元素，再用 Playwright 直接操作
+                                    # 这样只需要一次 LLM 调用，后续操作不需要 LLM
+                                    log("[Stagehand] 使用 observe + Playwright 模式...")
+                                    observe_response = await stagehand_session.observe(
+                                        instruction="找到验证码输入框或 OTP 输入框",
+                                        options={"model": model_config},
+                                    )
+
+                                    if observe_response.data.result:
+                                        element = observe_response.data.result[0]
+                                        selector = element.selector if hasattr(element, 'selector') else None
+                                        log(f"[Stagehand] 找到输入框: {element.description if hasattr(element, 'description') else element}")
+
+                                        if selector:
+                                            # 使用 Playwright 的 XPath 定位器直接填充（无需 LLM）
+                                            try:
+                                                locator = page.locator(f"xpath={selector}").first
+                                                await locator.wait_for(state="visible", timeout=5000)
+                                                await locator.click()
+                                                await locator.fill(totp_code)
+                                                log(f"[Stagehand] Playwright XPath 填充成功")
+                                                totp_input_success = True
+                                            except Exception as xpath_error:
+                                                log(f"[Stagehand] XPath 填充失败: {xpath_error}")
+
+                                    # 备选方案1：使用 CSS 选择器
+                                    if not totp_input_success:
+                                        log("[Stagehand] 尝试 CSS 选择器...")
+                                        totp_selectors = [
+                                            'input[type="tel"]',
+                                            'input[name="totpPin"]',
+                                            'input[name="pin"]',
+                                            'input[autocomplete="one-time-code"]',
+                                            'input[type="text"][inputmode="numeric"]',
+                                            'input[aria-label*="code"]',
+                                            'input[aria-label*="验证"]',
+                                        ]
+
+                                        for selector in totp_selectors:
+                                            try:
+                                                locator = page.locator(selector).first
+                                                if await locator.count() > 0:
+                                                    await locator.wait_for(state="visible", timeout=3000)
+                                                    await locator.click()
+                                                    await locator.fill(totp_code)
+                                                    log(f"[Stagehand] CSS 选择器 '{selector}' 输入成功")
+                                                    totp_input_success = True
+                                                    break
+                                            except Exception:
+                                                continue
+
+                                    # 备选方案2：键盘直接输入
+                                    if not totp_input_success:
+                                        log("[Stagehand] 使用键盘直接输入...")
+                                        await page.keyboard.type(totp_code, delay=80)
+                                        log("[Stagehand] 键盘输入完成")
+                                        totp_input_success = True
+
+                                    # 提交验证码：observe 找按钮，Playwright 点击
+                                    if totp_input_success:
+                                        await page.wait_for_timeout(500)
+                                        next_observe = await stagehand_session.observe(
+                                            instruction="找到 'Next'、'下一步'、'Verify' 或 '验证' 按钮",
+                                            options={"model": model_config},
+                                        )
+                                        if next_observe.data.result:
+                                            next_element = next_observe.data.result[0]
+                                            next_selector = next_element.selector if hasattr(next_element, 'selector') else None
+                                            if next_selector:
+                                                try:
+                                                    next_locator = page.locator(f"xpath={next_selector}").first
+                                                    await next_locator.click()
+                                                    log("[Stagehand] 点击下一步按钮成功")
+                                                except Exception:
+                                                    # 回退：使用 act
+                                                    await stagehand_session.act(
+                                                        input=next_element.to_dict(exclude_none=True) if hasattr(next_element, 'to_dict') else next_element,
+                                                    )
+                                                    log("[Stagehand] 通过 act 点击下一步")
+                                        else:
+                                            await page.keyboard.press("Enter")
+                                            log("[Stagehand] 按 Enter 键提交")
+
+                                except Exception as e:
+                                    log(f"[Stagehand] TOTP 输入失败: {e}")
+                                    # 最后的备选：键盘输入
+                                    try:
+                                        await page.keyboard.type(totp_code, delay=80)
+                                        await page.keyboard.press("Enter")
+                                        log("[Stagehand] TOTP 通过备选键盘输入")
+                                    except Exception:
+                                        pass
+
+                                await page.wait_for_timeout(2000)
+                                total_steps = step
+                            else:
+                                log("[Stagehand] ❌ 需要 TOTP 但未配置密钥")
+                                DBManager.update_sub2api_status(email, "oauth_failed")
+                                return OAuthResult(
+                                    success=False,
+                                    message="需要 2FA 验证但未配置密钥",
+                                    email=email,
+                                    sub2api_status="oauth_failed",
+                                    error_type="totp_required",
+                                    total_steps=step,
+                                )
+
+                        elif action == "confirm_app":
+                            # 处理应用确认页面（"Make sure that you downloaded this app from Google"）
+                            log("[Stagehand] 检测到应用确认页面，点击 Sign in 按钮...")
+                            # 使用优化的 observe + Playwright 模式
+                            clicked = await observe_and_click(
+                                stagehand_session,
+                                "找到 'Sign in' 或 '登录' 按钮（不是 Cancel 按钮）"
+                            )
+                            if not clicked:
+                                # 备选：尝试查找任何确认按钮
+                                clicked = await observe_and_click(
+                                    stagehand_session,
+                                    "找到页面右侧的确认按钮（不是 Cancel）"
+                                )
+                            if not clicked:
+                                log("[Stagehand] 未找到任何确认按钮")
+                            await page.wait_for_timeout(2000)
+                            total_steps = step
+
+                        elif action == "authorize":
+                            log("[Stagehand] 点击授权按钮...")
+                            # 先尝试查找并勾选所有复选框
+                            try:
+                                checkbox_observe = await stagehand_session.observe(
+                                    instruction="找到页面上所有未勾选的权限复选框",
+                                    options={"model": model_config},
+                                )
+                                if checkbox_observe.data.result:
+                                    for checkbox in checkbox_observe.data.result:
+                                        try:
+                                            # 优先使用 Playwright 点击
+                                            selector = checkbox.selector if hasattr(checkbox, 'selector') else None
+                                            if selector:
+                                                try:
+                                                    locator = page.locator(f"xpath={selector}").first
+                                                    await locator.click()
+                                                    log(f"[Stagehand] Playwright 勾选复选框成功")
+                                                    continue
+                                                except Exception:
+                                                    pass
+                                            # 回退到 act
+                                            await stagehand_session.act(
+                                                input=checkbox.to_dict(exclude_none=True) if hasattr(checkbox, 'to_dict') else checkbox,
+                                            )
+                                            log(f"[Stagehand] 勾选复选框: {checkbox.description if hasattr(checkbox, 'description') else 'checkbox'}")
+                                        except Exception:
+                                            pass  # 忽略单个复选框勾选失败
+                            except Exception:
+                                pass  # 可能没有复选框
+
+                            # 使用优化的 observe + Playwright 模式点击授权按钮
+                            clicked = await observe_and_click(
+                                stagehand_session,
+                                "找到 '允许'、'继续'、'Allow' 或 'Continue' 按钮"
+                            )
+                            if not clicked:
+                                # 备选：尝试查找页面上的主要操作按钮
+                                clicked = await observe_and_click(
+                                    stagehand_session,
+                                    "找到页面底部或右侧的主要操作按钮"
+                                )
+                            if not clicked:
+                                log("[Stagehand] 未找到任何可操作按钮")
+                            await page.wait_for_timeout(3000)
+                            total_steps = step
+
+                        else:
+                            log(f"[Stagehand] 未知操作: {action}，尝试通用操作...")
+                            # 使用优化的 observe + Playwright 模式
+                            clicked = await observe_and_click(
+                                stagehand_session,
+                                "找到页面上最明显的确认或继续按钮"
+                            )
+                            if not clicked:
+                                log("[Stagehand] 未找到可操作的按钮")
+                            await page.wait_for_timeout(2000)
+                            total_steps = step
+
+                    else:
+                        # 达到最大步骤数
+                        log(f"[Stagehand] 达到最大步骤数 {max_steps}")
+                        total_steps = max_steps
+
+                finally:
+                    try:
+                        await stagehand_session.end()
+                    except Exception:
+                        pass
 
             # 移除监听器
             try:
-                page.remove_listener("request", on_request)
-                page.remove_listener("framenavigated", on_frame_navigated)
+                # 移除 context 级别的监听器
+                context.remove_listener("page", on_new_page)
+                # 移除所有页面的监听器
+                for p in context.pages:
+                    try:
+                        p.remove_listener("request", on_request)
+                        p.remove_listener("framenavigated", on_frame_navigated)
+                    except Exception:
+                        pass
             except Exception:
                 pass  # 忽略移除失败
 
-            log(f"授权任务完成，步骤数: {task_result.total_steps}")
+            log(f"授权任务完成，步骤数: {total_steps}")
 
             # 步骤 3: 获取 OAuth code
             # 优先使用实时捕获的 code
             code = captured_code
 
             if not code:
-                # 如果没有捕获到，尝试从当前 URL 提取
+                # 如果没有捕获到，检查所有浏览器标签页
+                # Google OAuth 可能在新标签页中打开回调 URL
+                # 倒序遍历：最新创建的标签页通常在列表末尾，优先检查
+                log("检查所有浏览器标签页（从最新到最旧）...")
+                all_pages = context.pages
+                log(f"共 {len(all_pages)} 个标签页")
+
+                for idx in range(len(all_pages) - 1, -1, -1):
+                    check_page = all_pages[idx]
+                    try:
+                        check_url = check_page.url
+                        log(f"标签页 {idx + 1}: {check_url[:80]}...")
+
+                        # 检查是否包含 OAuth 回调参数
+                        if "code=" in check_url and ("localhost" in check_url or "callback" in check_url):
+                            parsed = urlparse(check_url)
+                            params = parse_qs(parsed.query)
+                            if "code" in params:
+                                code = params["code"][0]
+                                log(f"🎯 在标签页 {idx + 1} 找到授权码: {code[:20]}...")
+                                break
+                    except Exception as e:
+                        log(f"检查标签页 {idx + 1} 失败: {e}")
+                        continue
+
+            if not code:
+                # 最后尝试：从当前页面提取（兼容旧逻辑）
                 current_url = page.url
                 log(f"当前页面 URL: {current_url}")
                 code = await _extract_oauth_code(page, timeout=5, log_func=log)
@@ -420,7 +805,7 @@ async def auto_antigravity_oauth(
                     email=email,
                     sub2api_status="oauth_failed",
                     error_type="no_oauth_code",
-                    total_steps=task_result.total_steps,
+                    total_steps=total_steps,
                 )
 
             if captured_code:
@@ -446,7 +831,7 @@ async def auto_antigravity_oauth(
                     email=email,
                     sub2api_status="oauth_failed",
                     error_type="oauth_complete_failed",
-                    total_steps=task_result.total_steps,
+                    total_steps=total_steps,
                 )
 
             # 获取账号 ID（尝试多种字段名）
@@ -490,7 +875,7 @@ async def auto_antigravity_oauth(
                 email=email,
                 sub2api_account_id=sub2api_account_id,
                 sub2api_status="linked",
-                total_steps=task_result.total_steps,
+                total_steps=total_steps,
             )
 
     except Exception as e:
@@ -529,9 +914,9 @@ async def _extract_oauth_code(page: Page, timeout: int = 30, log_func: Callable[
         else:
             print(f"[_extract_oauth_code] {msg}")
 
-    start_time = asyncio.get_event_loop().time()
+    start_time = time.time()
 
-    while asyncio.get_event_loop().time() - start_time < timeout:
+    while time.time() - start_time < timeout:
         try:
             current_url = page.url
             log(f"检查 URL: {current_url[:100]}...")
