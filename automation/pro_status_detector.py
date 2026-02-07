@@ -5,7 +5,7 @@ Google One Pro 会员状态检测器
 """
 
 import traceback
-from typing import Callable, Optional
+from typing import Callable
 
 from playwright.async_api import Page
 
@@ -97,7 +97,7 @@ async def check_pro_status_via_stagehand(
             print(f"[ProDetector] {msg}")
 
     if not STAGEHAND_AVAILABLE:
-        _log(f"Stagehand SDK 不可用")
+        _log("Stagehand SDK 不可用")
         return None
 
     try:
@@ -107,7 +107,7 @@ async def check_pro_status_via_stagehand(
         model_api_key, model_base_url, stagehand_model = get_stagehand_config(_log)
 
         if not model_api_key or not stagehand_model:
-            _log(f"[!] 未配置 AI API Key，无法使用 Stagehand")
+            _log("[!] 未配置 AI API Key，无法使用 Stagehand")
             return None
 
         # 构建 model_config（用于 extract 调用）
@@ -125,7 +125,7 @@ async def check_pro_status_via_stagehand(
             local_ready_timeout_s=30.0,
         ) as client:
             # 启动 session，连接到现有浏览器
-            _log(f"启动 Stagehand session (连接到现有浏览器)...")
+            _log("启动 Stagehand session (连接到现有浏览器)...")
             session = await client.sessions.start(
                 model_name=stagehand_model,
                 browser={
@@ -139,7 +139,7 @@ async def check_pro_status_via_stagehand(
                 await session.navigate(url="https://one.google.com/")
 
                 # 使用 AI 提取 Pro 状态
-                _log(f"使用 AI 提取订阅信息...")
+                _log("使用 AI 提取订阅信息...")
                 extract_response = await session.extract(
                     instruction="""
                     仔细分析当前 Google One 页面，判断用户的会员订阅状态。
@@ -201,7 +201,6 @@ async def check_pro_status_via_stagehand(
                     options={
                         "model": model_config,
                     },
-                    page=page,
                 )
 
                 # 解析结果
@@ -209,7 +208,7 @@ async def check_pro_status_via_stagehand(
                 _log(f"Stagehand 提取结果: {result_data}")
 
                 if result_data is None:
-                    _log(f"[!] Stagehand 提取结果为空")
+                    _log("[!] Stagehand 提取结果为空")
                     return None
 
                 is_subscribed = result_data.get("is_subscribed", False)
@@ -225,12 +224,12 @@ async def check_pro_status_via_stagehand(
 
                 # 返回结果
                 if not is_subscribed:
-                    _log(f"[OK] Stagehand 检测: 非 Pro 会员")
+                    _log("[OK] Stagehand 检测: 非 Pro 会员")
                     return "no"
 
                 # 是 Pro 会员，需要二次确认家庭组状态
                 # 导航到会员设置页面进行精确判断
-                _log(f"检测到 Pro 会员，正在检查是否为独立订阅...")
+                _log("检测到 Pro 会员，正在检查是否为独立订阅...")
                 await session.navigate(url="https://one.google.com/settings")
 
                 # 在设置页面检查是否有独立订阅者特有的选项
@@ -318,7 +317,7 @@ async def check_pro_status_via_stagehand(
                         return "yes"
 
                     # 无法确定时，默认为家庭组（保守判断）
-                    _log(f"[!] 无法确定订阅类型，默认为家庭组 Pro")
+                    _log("[!] 无法确定订阅类型，默认为家庭组 Pro")
                     return "family_yes"
 
                 # 设置页面提取失败时，信任第一次判断

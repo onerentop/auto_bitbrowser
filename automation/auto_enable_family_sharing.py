@@ -7,7 +7,7 @@
 3. 开启 "Share Google One with family" 开关
 4. 更新数据库状态
 
-采用 CDP 优先策略：Playwright -> CDP -> AI Agent
+采用 Stagehand AI 检测（observe + act 模式）
 """
 
 import asyncio
@@ -16,11 +16,21 @@ from dataclasses import dataclass
 
 from playwright.async_api import async_playwright, Page
 
-from core.config_manager import ConfigManager
 from services.database import DBManager
 from services.ix_api import openBrowser, closeBrowser
 
-# 尝试导入 AI Browser Agent 模块
+# 导入共享的 Stagehand AI 配置函数
+from automation.pro_status_detector import get_stagehand_config
+
+# 尝试导入 Stagehand SDK
+try:
+    from stagehand import AsyncStagehand
+    STAGEHAND_AVAILABLE = True
+except ImportError:
+    STAGEHAND_AVAILABLE = False
+    AsyncStagehand = None
+
+# 尝试导入 AI Browser Agent 模块（作为备选）
 try:
     from core.ai_browser_agent import AIBrowserAgent
     AI_BROWSER_AGENT_AVAILABLE = True
@@ -168,23 +178,25 @@ async def auto_enable_family_sharing(
     account: dict,
     browser_id: str,
     callback: Callable[[str], None] = None,
-    api_key: str = None,
-    model: str = None,
-    provider: str = None,
-    max_steps: int = None,
+    api_key: str = None,  # 已废弃，AI 配置从 get_stagehand_config() 获取
+    model: str = None,    # 已废弃
+    provider: str = None, # 已废弃
+    max_steps: int = None,  # 已废弃
     close_browser_on_success: bool = False,
 ) -> EnableFamilySharingResult:
     """
     为账户开启家庭组共享功能
 
+    使用 Stagehand AI observe + act 模式，减少 LLM 调用次数。
+
     Args:
         account: 账号信息 {email, password, secret_key, browser_profile_id}
         browser_id: 浏览器窗口 ID
         callback: 进度回调函数
-        api_key: AI API Key（可选）
-        model: AI 模型名称（可选）
-        provider: AI 提供商（可选）
-        max_steps: 最大步骤数（可选）
+        api_key: 已废弃，AI 配置从 get_stagehand_config() 读取
+        model: 已废弃
+        provider: 已废弃
+        max_steps: 已废弃
         close_browser_on_success: 成功后是否关闭浏览器窗口
 
     Returns:
@@ -199,18 +211,6 @@ async def auto_enable_family_sharing(
             callback(msg)
 
     log(f"开始为 {email} 开启家庭共享...")
-
-    # 获取 AI 配置
-    if not provider:
-        provider = ConfigManager.get_ai_default_provider()
-    if not api_key:
-        api_key = ConfigManager.get_ai_provider_api_key(provider)
-    if not model:
-        model = ConfigManager.get_ai_provider_model(provider)
-    if not max_steps:
-        max_steps = 15  # 开启共享流程相对简单
-
-    base_url = ConfigManager.get_ai_provider_base_url(provider)
 
     try:
         # 打开浏览器
@@ -232,175 +232,91 @@ async def auto_enable_family_sharing(
                 error_type="browser_error",
             )
 
-        async with async_playwright() as playwright:
-            browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-            contexts = browser.contexts
-            if not contexts:
-                return EnableFamilySharingResult(
-                    success=False,
-                    message="没有浏览器上下文",
-                    email=email,
-                    error_type="browser_error",
-                )
+        # ========== 使用 Stagehand AI 开启共享 ==========
+        if not STAGEHAND_AVAILABLE:
+            log(f"[{email}] Stagehand SDK 不可用")
+            return EnableFamilySharingResult(
+                success=False,
+                message="Stagehand SDK 不可用，请安装 stagehand 包",
+                email=email,
+                error_type="stagehand_unavailable",
+            )
 
-            context = contexts[0]
-            pages = context.pages
-            page = pages[0] if pages else await context.new_page()
+        log(f"[{email}] 使用 Stagehand AI 开启家庭共享...")
+        family_created = False
 
-            # 导航到 Google One 设置页面
-            log(f"[{email}] 导航到 Google One 设置页面...")
-            try:
-                await page.goto("https://one.google.com/settings", wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(2000)
-            except Exception as e:
-                log(f"[{email}] 导航超时: {e}")
+        # 第一步：尝试开启共享
+        stagehand_result = await _enable_sharing_via_stagehand(
+            ws_endpoint=ws_endpoint,
+            email=email,
+            log=log,
+        )
 
-            # ========== 新增：检测家庭组状态 ==========
-            family_status = await _detect_family_group_status(page, email, log)
-            family_created = False
+        # 第二步：如果需要先创建家庭组
+        if stagehand_result.get("needs_create_family"):
+            log(f"[{email}] 需要先创建家庭组...")
+            create_result = await _create_family_via_stagehand(
+                ws_endpoint=ws_endpoint,
+                email=email,
+                log=log,
+            )
 
-            if family_status == "no_family":
-                log(f"[{email}] 账户尚未创建家庭组，开始创建...")
-                create_result = await _create_family_group(
-                    page=page,
+            if create_result.get("success"):
+                family_created = True
+                log(f"[{email}] 家庭组创建成功，继续开启共享...")
+                # 更新数据库家庭成员数量（创建者算1人）
+                DBManager.update_family_member_count(email, 1)
+
+                # 再次尝试开启共享
+                stagehand_result = await _enable_sharing_via_stagehand(
+                    ws_endpoint=ws_endpoint,
                     email=email,
                     log=log,
-                    account=account,
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model,
-                    provider=provider,
-                    max_steps=10,
                 )
-
-                if create_result.get("success"):
-                    family_created = True
-                    log(f"[{email}] 家庭组创建成功，继续开启共享...")
-                    # 更新数据库家庭成员数量（创建者算1人）
-                    DBManager.update_family_member_count(email, 1)
-                    # 刷新页面以确保状态更新
-                    try:
-                        await page.reload(wait_until="domcontentloaded", timeout=15000)
-                        await page.wait_for_timeout(2000)
-                    except Exception as e:
-                        log(f"[{email}] 页面刷新超时: {e}，继续执行...")
-                else:
-                    error_msg = create_result.get("message", "创建家庭组失败")
-                    log(f"[{email}] 创建家庭组失败: {error_msg}")
-                    return EnableFamilySharingResult(
-                        success=False,
-                        message=f"创建家庭组失败: {error_msg}",
-                        email=email,
-                        error_type="create_family_failed",
-                    )
-            elif family_status == "has_family":
-                log(f"[{email}] 账户已有家庭组，直接开启共享...")
             else:
-                log(f"[{email}] 无法确定家庭组状态，尝试开启共享...")
-
-            # ========== 阶段1: 使用纯 Playwright 尝试 ==========
-            log(f"[{email}] 阶段1: 使用 Playwright 直接操作...")
-            playwright_result = await _try_playwright_enable(page, email, log)
-
-            if playwright_result.get("success"):
-                was_already = playwright_result.get("was_already_enabled", False)
-                DBManager.update_family_sharing_enabled(email, "yes")
-
-                if close_browser_on_success:
-                    try:
-                        closeBrowser(browser_id)
-                    except Exception:
-                        pass
-
-                return EnableFamilySharingResult(
-                    success=True,
-                    message="已开启" if was_already else ("成功创建家庭组并开启共享" if family_created else "成功开启家庭共享"),
-                    email=email,
-                    was_already_enabled=was_already,
-                    family_created=family_created,
-                )
-
-            # ========== 阶段2: 使用 CDP 精确点击 ==========
-            log(f"[{email}] 阶段2: 使用 CDP 精确操作...")
-            cdp_result = await _try_cdp_enable(page, email, log)
-
-            if cdp_result.get("success"):
-                was_already = cdp_result.get("was_already_enabled", False)
-                DBManager.update_family_sharing_enabled(email, "yes")
-
-                if close_browser_on_success:
-                    try:
-                        closeBrowser(browser_id)
-                    except Exception:
-                        pass
-
-                return EnableFamilySharingResult(
-                    success=True,
-                    message="已开启 (CDP)" if was_already else ("成功创建家庭组并开启共享 (CDP)" if family_created else "成功开启家庭共享 (CDP)"),
-                    email=email,
-                    was_already_enabled=was_already,
-                    family_created=family_created,
-                )
-
-            # ========== 阶段3: 使用 AI Agent 保底 ==========
-            if AI_BROWSER_AGENT_AVAILABLE:
-                log(f"[{email}] 阶段3: 使用 AI Agent 保底...")
-
-                agent = AIBrowserAgent(
-                    api_key=api_key,
-                    base_url=base_url,
-                    model=model,
-                    provider=provider,
-                )
-                agent.on_step(lambda step, action: log(f"[{email}][Agent] 步骤{step}: {action}"))
-
-                agent_account = {
-                    "email": email,
-                    "password": account.get("password", ""),
-                    "secret": account.get("secret_key", ""),
-                    "recovery_email": account.get("recovery_email", ""),
-                }
-
-                prompt = ENABLE_SHARING_PROMPT.format(email=email)
-
-                task_result = await agent.execute_task(
-                    page=page,
-                    goal=prompt,
-                    start_url="https://one.google.com/settings",
-                    account=agent_account,
-                    max_steps=max_steps,
-                    navigate_first=False,
-                )
-
-                if task_result.success:
-                    DBManager.update_family_sharing_enabled(email, "yes")
-
-                    if close_browser_on_success:
-                        try:
-                            closeBrowser(browser_id)
-                        except Exception:
-                            pass
-
-                    return EnableFamilySharingResult(
-                        success=True,
-                        message="成功创建家庭组并开启共享 (AI Agent)" if family_created else "成功开启家庭共享 (AI Agent)",
-                        email=email,
-                        family_created=family_created,
-                    )
-                else:
-                    return EnableFamilySharingResult(
-                        success=False,
-                        message=task_result.message or "AI Agent 操作失败",
-                        email=email,
-                        error_type="agent_failed",
-                    )
-            else:
+                error_msg = create_result.get("message", "创建家庭组失败")
+                log(f"[{email}] 创建家庭组失败: {error_msg}")
                 return EnableFamilySharingResult(
                     success=False,
-                    message="Playwright 和 CDP 操作均失败，AI Agent 不可用",
+                    message=f"创建家庭组失败: {error_msg}",
                     email=email,
-                    error_type="all_methods_failed",
+                    error_type="create_family_failed",
                 )
+
+        # 处理结果
+        if stagehand_result.get("success"):
+            was_already = stagehand_result.get("was_already_enabled", False)
+            DBManager.update_family_sharing_enabled(email, "yes")
+
+            if close_browser_on_success:
+                try:
+                    closeBrowser(browser_id)
+                except Exception:
+                    pass
+
+            if was_already:
+                return EnableFamilySharingResult(
+                    success=True,
+                    message="已开启",
+                    email=email,
+                    was_already_enabled=True,
+                    family_created=family_created,
+                )
+            else:
+                return EnableFamilySharingResult(
+                    success=True,
+                    message="成功创建家庭组并开启共享" if family_created else "成功开启家庭共享",
+                    email=email,
+                    was_already_enabled=False,
+                    family_created=family_created,
+                )
+        else:
+            return EnableFamilySharingResult(
+                success=False,
+                message=stagehand_result.get("message", "开启共享失败"),
+                email=email,
+                error_type="stagehand_failed",
+            )
 
     except Exception as e:
         error_msg = str(e)
@@ -411,6 +327,693 @@ async def auto_enable_family_sharing(
             email=email,
             error_type="exception",
         )
+
+
+# ==================== Stagehand AI 实现 ====================
+
+async def _enable_sharing_via_stagehand(
+    ws_endpoint: str,
+    email: str,
+    log: Callable[[str], None],
+) -> dict:
+    """
+    使用 Stagehand AI 开启家庭共享（observe + act 模式）
+
+    优先使用 observe 查找元素，然后用 act 执行操作，
+    减少 LLM 调用次数。
+
+    Args:
+        ws_endpoint: 浏览器 WebSocket 端点
+        email: 账号邮箱
+        log: 日志函数
+
+    Returns:
+        dict: {
+            "success": bool,
+            "message": str,
+            "was_already_enabled": bool,
+            "needs_create_family": bool,
+            "family_created": bool,
+        }
+    """
+    if not STAGEHAND_AVAILABLE:
+        log(f"[{email}] Stagehand SDK 不可用")
+        return {
+            "success": False,
+            "message": "Stagehand SDK 不可用",
+            "was_already_enabled": False,
+            "needs_create_family": False,
+            "family_created": False,
+        }
+
+    # 获取 AI 配置
+    model_api_key, model_base_url, stagehand_model = get_stagehand_config(
+        lambda msg: log(f"[{email}] {msg}")
+    )
+
+    if not model_api_key or not stagehand_model:
+        log(f"[{email}] AI 配置不完整")
+        return {
+            "success": False,
+            "message": "AI 配置不完整",
+            "was_already_enabled": False,
+            "needs_create_family": False,
+            "family_created": False,
+        }
+
+    try:
+        log(f"[{email}] 启动 Stagehand session...")
+
+        async with AsyncStagehand(
+            server="local",
+            model_api_key=model_api_key,
+            local_ready_timeout_s=30.0,
+        ) as client:
+            session = await client.sessions.start(
+                model_name=stagehand_model,
+                browser={
+                    "type": "local",
+                    "cdp_url": ws_endpoint,
+                },
+            )
+
+            try:
+                # 1. 导航到设置页面
+                log(f"[{email}] 导航到 Google One 设置页...")
+                await session.navigate(url="https://one.google.com/settings")
+                await asyncio.sleep(2.0)  # 等待页面完全加载
+
+                # 构建 model_config
+                model_config = {
+                    "model_name": stagehand_model,
+                    "api_key": model_api_key,
+                }
+                if model_base_url:
+                    model_config["base_url"] = model_base_url
+
+                # 2. observe 查找关键元素（1 次 LLM 调用）
+                log(f"[{email}] 使用 AI 检测家庭共享状态...")
+                observe_response = await session.observe(
+                    instruction="""
+                    在当前 Google One 设置页面，找到以下任意元素：
+
+                    1. "Share Google One with family" 开关/切换按钮
+                       - 如果开关是开启状态（ON/蓝色/右侧），请在描述中注明 "enabled" 或 "on"
+                       - 如果开关是关闭状态（OFF/灰色/左侧），请在描述中注明 "disabled" 或 "off"
+                    2. "与家人共享 Google One" 开关（中文版），同样注明开关状态
+                    3. "Create a family group" 或 "创建家庭群组" 按钮（表示需要先创建家庭组）
+                    4. "Start a family group" 或 "开始使用家庭" 按钮
+                    5. "Manage family settings" 或 "管理家庭设置" 可展开区域
+                    6. "Sharing with X family members" 或 "正在与 X 位家庭成员共享"（表示已开启共享）
+
+                    返回找到的所有相关元素，并明确描述开关的当前状态。
+                    """,
+                    options={"model": model_config},
+                )
+
+                results = observe_response.data.result
+                if not results:
+                    log(f"[{email}] observe 未找到任何元素")
+                    return {
+                        "success": False,
+                        "message": "未找到家庭共享相关元素",
+                        "was_already_enabled": False,
+                        "needs_create_family": True,  # 保守策略：尝试创建家庭组
+                        "family_created": False,
+                    }
+
+                log(f"[{email}] observe 找到 {len(results)} 个元素")
+
+                # 3. 分析 observe 结果
+                toggle_element = None
+                create_family_element = None
+                manage_family_element = None
+                is_already_enabled = False
+
+                for element in results:
+                    desc = (element.description or "").lower()
+                    log(f"[{email}]   - {element.description}")
+
+                    # 检测已开启状态
+                    # 1. 描述中明确包含开启状态词
+                    # 2. 或者描述中包含 "sharing with" 表示正在共享
+                    if ("share" in desc or "共享" in desc) and (
+                        "enabled" in desc or "已开启" in desc or "checked" in desc or
+                        "toggle on" in desc or "switch on" in desc or "turned on" in desc or
+                        " on " in desc or " on," in desc or "(on)" in desc or
+                        "sharing with" in desc or "正在共享" in desc or "共享中" in desc or
+                        "is on" in desc or "状态：开" in desc or "state: on" in desc
+                    ):
+                        is_already_enabled = True
+
+                    # 检测 toggle 开关
+                    # 必须包含 "share" 相关词，且必须是开关类型
+                    # 排除 "manage" 相关词，避免把 "Manage family settings" 误判为 toggle
+                    is_share_toggle = (
+                        ("share" in desc or "共享" in desc) and
+                        ("toggle" in desc or "switch" in desc or "开关" in desc) and
+                        ("manage" not in desc and "管理" not in desc)
+                    )
+                    if is_share_toggle:
+                        toggle_element = element
+                        # 如果 toggle 描述中包含 on/enabled，说明已开启
+                        if any(kw in desc for kw in ["enabled", " on ", " on,", "(on)", "is on", "已开启"]):
+                            is_already_enabled = True
+
+                    # 检测创建家庭组按钮（排除 manage 相关词）
+                    if (("create" in desc or "创建" in desc or "start" in desc or "开始" in desc) and
+                        ("family" in desc or "家庭" in desc) and
+                        ("manage" not in desc and "管理" not in desc)):
+                        create_family_element = element
+
+                    # 检测管理家庭设置（包含 manage 和 family）
+                    if ("manage" in desc or "管理" in desc) and ("family" in desc or "家庭" in desc):
+                        manage_family_element = element
+
+                # 4. 根据状态执行操作
+                if is_already_enabled:
+                    log(f"[{email}] ✅ 家庭共享已开启")
+                    return {
+                        "success": True,
+                        "message": "家庭共享已开启",
+                        "was_already_enabled": True,
+                        "needs_create_family": False,
+                        "family_created": False,
+                    }
+
+                # 优先检测：如果存在创建家庭组按钮，说明还没有家庭组
+                # 无论是否有 toggle 或 manage family，都应该先创建家庭组
+                if create_family_element:
+                    log(f"[{email}] 检测到需要创建家庭组...")
+                    return {
+                        "success": False,
+                        "message": "需要先创建家庭组",
+                        "was_already_enabled": False,
+                        "needs_create_family": True,
+                        "family_created": False,
+                    }
+
+                # 如果有 manage family，先点击展开
+                if manage_family_element and not toggle_element:
+                    log(f"[{email}] 点击展开家庭设置...")
+                    action = manage_family_element.to_dict(exclude_none=True)
+                    await session.act(input=action)
+
+                    # 等待页面响应
+                    await asyncio.sleep(2.0)  # 增加等待时间
+
+                    # 重新 observe 查找 toggle 或 create family 按钮
+                    log(f"[{email}] 重新查找共享开关...")
+                    observe_response2 = await session.observe(
+                        instruction="""
+                        在当前页面找到以下任意元素：
+                        1. "Share Google One with family" 或 "与家人共享 Google One" 开关/切换按钮
+                           - 如果开关是开启状态，请注明 "enabled" 或 "on"
+                        2. "Create a family group" 或 "创建家庭群组" 按钮（如果没有家庭组）
+                        3. "Get started" 或 "开始使用" 按钮（创建家庭组入口）
+                        4. "Sharing with X family members" 或 "正在共享"（表示已开启）
+                        5. "Start a family group" 或 "开始使用家庭" 按钮
+                        """,
+                        options={"model": model_config},
+                    )
+                    results2 = observe_response2.data.result
+                    if results2:
+                        log(f"[{email}] 展开后找到 {len(results2)} 个元素")
+                        # 先遍历所有元素，收集信息
+                        found_create_family = False
+                        found_toggle = None
+                        found_already_enabled = False
+                        for elem2 in results2:
+                            desc2 = (elem2.description or "").lower()
+                            log(f"[{email}]   - {elem2.description}")
+                            # 检测已开启状态
+                            if ("share" in desc2 or "共享" in desc2) and (
+                                "enabled" in desc2 or "已开启" in desc2 or " on " in desc2 or
+                                "sharing with" in desc2 or "正在共享" in desc2 or "共享中" in desc2 or
+                                "is on" in desc2 or "(on)" in desc2
+                            ):
+                                found_already_enabled = True
+                            # 展开后发现需要创建家庭组
+                            # 注意：排除 "Manage family settings" 按钮（描述中包含 manage）
+                            if ("create" in desc2 or "创建" in desc2 or "start" in desc2 or
+                                "get started" in desc2 or "开始" in desc2) and (
+                                "family" in desc2 or "家庭" in desc2
+                            ) and ("manage" not in desc2 and "管理" not in desc2):
+                                found_create_family = True
+                            # 找到 toggle（排除 manage 相关词）
+                            is_toggle = (
+                                ("share" in desc2 or "共享" in desc2) and
+                                ("toggle" in desc2 or "switch" in desc2 or "开关" in desc2) and
+                                ("manage" not in desc2 and "管理" not in desc2)
+                            )
+                            if is_toggle:
+                                found_toggle = elem2
+                                # 如果 toggle 描述中包含 on/enabled，说明已开启
+                                if any(kw in desc2 for kw in ["enabled", " on ", "(on)", "is on", "已开启"]):
+                                    found_already_enabled = True
+
+                        # 优先处理：如果已开启，直接返回
+                        if found_already_enabled:
+                            log(f"[{email}] ✅ 展开后检测到共享已开启")
+                            return {
+                                "success": True,
+                                "message": "家庭共享已开启",
+                                "was_already_enabled": True,
+                                "needs_create_family": False,
+                                "family_created": False,
+                            }
+
+                        # 如果有 create_family，先创建
+                        if found_create_family:
+                            log(f"[{email}] 展开后发现需要创建家庭组...")
+                            return {
+                                "success": False,
+                                "message": "需要先创建家庭组",
+                                "was_already_enabled": False,
+                                "needs_create_family": True,
+                                "family_created": False,
+                            }
+
+                        # 否则使用找到的 toggle
+                        if found_toggle:
+                            toggle_element = found_toggle
+                            log(f"[{email}] 找到共享开关: {toggle_element.description}")
+                        else:
+                            # 展开后找到了元素，但既不是 toggle 也不是 create_family
+                            # 说明可能需要去 people-and-sharing 页面创建家庭组
+                            log(f"[{email}] 展开后未找到共享开关或创建按钮，尝试创建家庭组...")
+                            return {
+                                "success": False,
+                                "message": "展开后未找到共享选项，需要创建家庭组",
+                                "was_already_enabled": False,
+                                "needs_create_family": True,
+                                "family_created": False,
+                            }
+                    else:
+                        # 展开后没找到任何元素，可能需要创建家庭组
+                        log(f"[{email}] 展开后未找到相关元素，尝试创建家庭组...")
+                        return {
+                            "success": False,
+                            "message": "展开后未找到共享选项，可能需要创建家庭组",
+                            "was_already_enabled": False,
+                            "needs_create_family": True,
+                            "family_created": False,
+                        }
+
+                # 点击 toggle 开启共享
+                if toggle_element:
+                    log(f"[{email}] 点击开关开启共享...")
+                    action = toggle_element.to_dict(exclude_none=True)
+                    await session.act(input=action)
+
+                    # 等待页面响应
+                    await asyncio.sleep(1.5)
+
+                    # 处理可能的确认弹窗
+                    log(f"[{email}] 检查确认弹窗...")
+                    confirm_response = await session.observe(
+                        instruction="""
+                        找到确认按钮，如 "Continue", "Got it", "确认", "继续", "OK"。
+                        """,
+                        options={"model": model_config},
+                    )
+                    if confirm_response.data.result:
+                        confirm_btn = confirm_response.data.result[0]
+                        log(f"[{email}] 点击确认按钮: {confirm_btn.description}")
+                        confirm_action = confirm_btn.to_dict(exclude_none=True)
+                        await session.act(input=confirm_action)
+                        await asyncio.sleep(1.0)
+
+                    # 验证开关是否真的开启了
+                    log(f"[{email}] 验证共享状态...")
+                    verify_response = await session.observe(
+                        instruction="""
+                        检查 "Share Google One with family" 或 "与家人共享 Google One" 开关的当前状态。
+                        查找：
+                        1. 开关是否显示为 ON/已开启/enabled/checked 状态
+                        2. 或者页面显示 "Sharing with family" / "正在与家人共享"
+                        """,
+                        options={"model": model_config},
+                    )
+                    verify_results = verify_response.data.result
+                    verified_success = False
+                    if verify_results:
+                        for vr in verify_results:
+                            vr_desc = (vr.description or "").lower()
+                            # 使用更精确的匹配，避免 "on" 误匹配到 "button", "one" 等
+                            if any(kw in vr_desc for kw in [
+                                "enabled", "已开启", "checked", "sharing", "共享中",
+                                "toggle on", "switch on", "turned on", "is on",
+                                " on ", " on,", " on.", "(on)"
+                            ]):
+                                verified_success = True
+                                break
+
+                    if verified_success:
+                        log(f"[{email}] ✅ 成功开启家庭共享（已验证）")
+                        return {
+                            "success": True,
+                            "message": "成功开启家庭共享",
+                            "was_already_enabled": False,
+                            "needs_create_family": False,
+                            "family_created": False,
+                        }
+                    else:
+                        # 可能点击的不是正确的元素，或者开关点击后需要创建家庭组
+                        log(f"[{email}] 开关状态验证失败，可能需要创建家庭组")
+                        # 再次检查是否需要创建家庭组
+                        check_create_response = await session.observe(
+                            instruction="""
+                            查找页面上是否有 "Create a family group" 或 "创建家庭群组" 按钮。
+                            """,
+                            options={"model": model_config},
+                        )
+                        if check_create_response.data.result:
+                            return {
+                                "success": False,
+                                "message": "需要先创建家庭组",
+                                "was_already_enabled": False,
+                                "needs_create_family": True,
+                                "family_created": False,
+                            }
+
+                        # 返回不确定状态，但标记为可能需要创建家庭组
+                        return {
+                            "success": False,
+                            "message": "开关状态验证失败",
+                            "was_already_enabled": False,
+                            "needs_create_family": True,  # 保守策略：尝试创建家庭组
+                            "family_created": False,
+                        }
+
+                log(f"[{email}] 未找到可操作的元素")
+                return {
+                    "success": False,
+                    "message": "未找到共享开关",
+                    "was_already_enabled": False,
+                    "needs_create_family": True,  # 保守策略：可能是因为没有家庭组
+                    "family_created": False,
+                }
+
+            finally:
+                try:
+                    await session.end()
+                except Exception:
+                    pass
+
+    except Exception as e:
+        log(f"[{email}] Stagehand 异常: {e}")
+        return {
+            "success": False,
+            "message": f"Stagehand 异常: {e}",
+            "was_already_enabled": False,
+            "needs_create_family": True,  # 保守策略：异常时也尝试创建家庭组
+            "family_created": False,
+        }
+
+
+async def _create_family_via_stagehand(
+    ws_endpoint: str,
+    email: str,
+    log: Callable[[str], None],
+) -> dict:
+    """
+    使用 Stagehand AI 创建家庭组（observe + act 模式）
+
+    直接导航到 myaccount.google.com/people-and-sharing 页面，
+    在 "Your family on Google" 区域点击 "Get started" 按钮创建家庭组。
+
+    Args:
+        ws_endpoint: 浏览器 WebSocket 端点
+        email: 账号邮箱
+        log: 日志函数
+
+    Returns:
+        dict: {"success": bool, "message": str}
+    """
+    if not STAGEHAND_AVAILABLE:
+        return {"success": False, "message": "Stagehand SDK 不可用"}
+
+    model_api_key, model_base_url, stagehand_model = get_stagehand_config(
+        lambda msg: log(f"[{email}] {msg}")
+    )
+
+    if not model_api_key or not stagehand_model:
+        return {"success": False, "message": "AI 配置不完整"}
+
+    try:
+        log(f"[{email}] 启动 Stagehand 创建家庭组...")
+
+        async with AsyncStagehand(
+            server="local",
+            model_api_key=model_api_key,
+            local_ready_timeout_s=30.0,
+        ) as client:
+            session = await client.sessions.start(
+                model_name=stagehand_model,
+                browser={
+                    "type": "local",
+                    "cdp_url": ws_endpoint,
+                },
+            )
+
+            try:
+                model_config = {
+                    "model_name": stagehand_model,
+                    "api_key": model_api_key,
+                }
+                if model_base_url:
+                    model_config["base_url"] = model_base_url
+
+                # ========== 直接导航到 People & sharing 页面 ==========
+                # 这是创建家庭组的正确入口，不要在 one.google.com/settings 尝试
+                log(f"[{email}] 导航到 People & sharing 页面...")
+                await session.navigate(url="https://myaccount.google.com/people-and-sharing")
+                await asyncio.sleep(2.0)  # 等待页面完全加载
+
+                # ========== 查找 "Get started" 按钮 ==========
+                log(f"[{email}] 查找 'Get started' 按钮...")
+                observe_response = await session.observe(
+                    instruction="""
+                    在 "Your family on Google" 区域查找以下按钮：
+                    1. "Get started" 按钮 - 用于创建家庭组
+                    2. "开始使用" 按钮 - 中文版
+                    3. "Create a family group" / "创建家庭群组" 按钮
+
+                    注意：如果页面显示 "You're a family manager" 或 "您是家庭管理员"，
+                    说明家庭组已创建，请在描述中注明 "already created" 或 "已创建"。
+                    """,
+                    options={"model": model_config},
+                )
+
+                results = observe_response.data.result
+                if not results:
+                    log(f"[{email}] 未找到任何元素，可能家庭组已存在或页面加载失败")
+                    return {"success": False, "message": "未找到创建家庭组入口"}
+
+                # 分析结果
+                get_started_btn = None
+                already_created = False
+
+                for elem in results:
+                    desc = (elem.description or "").lower()
+                    log(f"[{email}]   - {elem.description}")
+
+                    # 检查是否已创建家庭组
+                    if "already created" in desc or "已创建" in desc or "family manager" in desc or "家庭管理员" in desc:
+                        already_created = True
+                        break
+
+                    # 查找 Get started 按钮
+                    if ("get started" in desc or "开始使用" in desc or
+                        (("create" in desc or "创建" in desc) and ("family" in desc or "家庭" in desc))):
+                        get_started_btn = elem
+
+                if already_created:
+                    log(f"[{email}] ✅ 家庭组已存在")
+                    return {"success": True, "message": "家庭组已存在"}
+
+                if not get_started_btn:
+                    log(f"[{email}] 未找到 'Get started' 按钮")
+                    return {"success": False, "message": "未找到 'Get started' 按钮"}
+
+                # ========== 点击 "Get started" 按钮 ==========
+                log(f"[{email}] 点击: {get_started_btn.description}")
+                action = get_started_btn.to_dict(exclude_none=True)
+                await session.act(input=action)
+                await asyncio.sleep(3.0)  # 增加等待时间，确保页面跳转到 /family/create
+
+                # ========== 完成家庭组创建流程（可能需要多步）==========
+                # 流程：Get started → /family/create 页面（Create a Family Group 按钮）
+                #       → /family/createconfirmation 页面（Confirm 按钮）
+                log(f"[{email}] 完成家庭组创建流程...")
+                confirm_clicks = 0
+                max_confirm_clicks = 5  # 最多点击5次按钮
+                last_clicked_desc = ""  # 记录上一次点击的按钮描述，避免重复点击
+
+                for attempt in range(max_confirm_clicks):
+                    confirm_response = await session.observe(
+                        instruction="""
+                        在当前页面查找以下任意按钮（按优先级排序）：
+
+                        1. "Create a Family Group" 蓝色按钮 - 在 /family/create 页面
+                        2. "创建家庭群组" 蓝色按钮 - 中文版
+                        3. "Confirm" 蓝色按钮 - 在 /family/createconfirmation 确认页面
+                        4. "确认" 按钮 - 中文版
+                        5. "Create" / "创建" 按钮（但不是 "Create a Family Group" 的入口）
+                        6. "Continue" / "继续" 按钮
+                        7. "I agree" / "同意" 复选框或按钮
+                        8. "Next" / "下一步" 按钮
+
+                        **重要：不要选择 "Get started" 或 "开始使用" 按钮！**
+                        这些是创建入口，不是确认按钮。
+
+                        注意：查找页面上的蓝色主操作按钮。
+                        """,
+                        options={"model": model_config},
+                    )
+
+                    if not confirm_response.data.result:
+                        if confirm_clicks > 0:
+                            # 已经点击过按钮，可能已完成
+                            log(f"[{email}] 创建流程完成（已点击 {confirm_clicks} 次）")
+                            break
+                        log(f"[{email}] 尝试 {attempt + 1}: 未找到操作按钮")
+                        await asyncio.sleep(1.0)
+                        continue
+
+                    confirm_btn = confirm_response.data.result[0]
+                    current_desc = (confirm_btn.description or "").lower()
+
+                    # 跳过 "Get started" 按钮（这不是确认按钮）
+                    if "get started" in current_desc or "开始使用" in current_desc:
+                        log(f"[{email}] 跳过入口按钮: {confirm_btn.description}")
+                        # 如果只返回了 Get started，说明页面没有正确跳转
+                        if len(confirm_response.data.result) == 1:
+                            log(f"[{email}] ⚠️ 页面未跳转到创建确认页面")
+                            await asyncio.sleep(2.0)
+                            # 继续尝试，可能页面还在加载
+                            continue
+                        # 尝试使用返回列表中的下一个元素
+                        if len(confirm_response.data.result) > 1:
+                            confirm_btn = confirm_response.data.result[1]
+                            current_desc = (confirm_btn.description or "").lower()
+                            if "get started" in current_desc or "开始使用" in current_desc:
+                                continue
+
+                    # 检查是否与上一次点击相同（页面可能没有变化）
+                    if current_desc == last_clicked_desc and confirm_clicks > 0:
+                        log(f"[{email}] 检测到重复按钮，可能页面未变化，跳过...")
+                        await asyncio.sleep(1.0)
+                        # 再给一次机会，但如果连续两次相同则退出
+                        if attempt > 0:
+                            break
+                        continue
+
+                    log(f"[{email}] 点击: {confirm_btn.description}")
+                    confirm_action = confirm_btn.to_dict(exclude_none=True)
+                    await session.act(input=confirm_action)
+                    confirm_clicks += 1
+                    last_clicked_desc = current_desc
+                    await asyncio.sleep(2.0)  # 增加等待时间，确保页面完全加载
+
+                    # 检查是否还需要继续点击（至少点击2次：Create a Family Group + Confirm）
+                    if confirm_clicks >= 3:
+                        # 已经点击3次，应该足够了
+                        await asyncio.sleep(1.0)
+                        break
+
+                # ========== 验证创建成功 ==========
+                # 成功后应该不再显示 "Get started"，而是显示家庭管理选项
+                log(f"[{email}] 验证创建结果...")
+                await session.navigate(url="https://myaccount.google.com/people-and-sharing")
+                await asyncio.sleep(2.0)
+
+                verify_response = await session.observe(
+                    instruction="""
+                    检查 "Your family on Google" 区域的状态：
+                    1. 如果显示 "Get started" 或 "开始使用" 按钮 → 创建失败
+                    2. 如果显示 "You're a family manager" 或 "您是家庭管理员" → 创建成功
+                    3. 如果显示家庭成员列表或管理选项 → 创建成功
+
+                    请在描述中明确注明 "creation failed" 或 "creation success"。
+                    """,
+                    options={"model": model_config},
+                )
+
+                verify_results = verify_response.data.result
+                if verify_results:
+                    # 先收集所有信息，再做判断
+                    has_get_started = False
+                    has_success_indicator = False
+
+                    for vr in verify_results:
+                        vr_desc = (vr.description or "").lower()
+                        log(f"[{email}]   验证: {vr.description}")
+
+                        # 检查是否仍显示 Get started（创建失败指标）
+                        if "get started" in vr_desc or "开始使用" in vr_desc or "creation failed" in vr_desc:
+                            has_get_started = True
+
+                        # 检查成功标志
+                        if ("family manager" in vr_desc or "家庭管理员" in vr_desc or
+                            "creation success" in vr_desc or "created" in vr_desc or
+                            "member" in vr_desc or "成员" in vr_desc):
+                            has_success_indicator = True
+
+                    # 优先判断成功：如果有成功指标且没有 get started，则成功
+                    # 如果两者都有，以成功指标为准（AI 可能在描述中提到"不再显示 get started"）
+                    if has_success_indicator:
+                        log(f"[{email}] ✅ 家庭组创建成功")
+                        return {"success": True, "message": "家庭组创建成功"}
+
+                    if has_get_started and not has_success_indicator:
+                        log(f"[{email}] ❌ 家庭组创建失败（仍显示 Get started）")
+                        return {"success": False, "message": "创建失败，仍显示 Get started"}
+
+                # 如果无法确定，再导航到 one.google.com/settings 检查
+                log(f"[{email}] 在 Google One 设置页验证...")
+                await session.navigate(url="https://one.google.com/settings")
+                await asyncio.sleep(2.0)
+
+                final_response = await session.observe(
+                    instruction="""
+                    检查是否有以下元素表示家庭组已创建：
+                    1. "Share Google One with family" 开关
+                    2. "与家人共享 Google One" 开关
+                    3. "Manage family settings" 可展开区域（且不是创建家庭组入口）
+                    """,
+                    options={"model": model_config},
+                )
+
+                if final_response.data.result:
+                    for fr in final_response.data.result:
+                        fr_desc = (fr.description or "").lower()
+                        # 检测共享开关
+                        if ("share" in fr_desc and (
+                            "toggle" in fr_desc or "switch" in fr_desc or "开关" in fr_desc
+                        )):
+                            log(f"[{email}] ✅ 家庭组创建成功（发现共享开关）")
+                            return {"success": True, "message": "家庭组创建成功"}
+                        # 检测 Manage family settings（且不包含 create）
+                        if (("manage" in fr_desc or "管理" in fr_desc) and
+                            ("family" in fr_desc or "家庭" in fr_desc) and
+                            ("create" not in fr_desc and "创建" not in fr_desc)):
+                            log(f"[{email}] ✅ 家庭组创建成功（发现家庭管理选项）")
+                            return {"success": True, "message": "家庭组创建成功"}
+
+                log(f"[{email}] 家庭组创建状态不确定")
+                return {"success": False, "message": "创建状态不确定"}
+
+            finally:
+                try:
+                    await session.end()
+                except Exception:
+                    pass
+
+    except Exception as e:
+        log(f"[{email}] 创建家庭组异常: {e}")
+        return {"success": False, "message": f"异常: {e}"}
 
 
 async def _try_playwright_enable(page: Page, email: str, log: Callable) -> dict:

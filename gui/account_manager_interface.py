@@ -2306,13 +2306,11 @@ class AccountManagerInterface(BaseInterface):
         skipped_not_pro = []
         skipped_not_logged = []
         skipped_no_browser = []
-        skipped_already_enabled = []
 
         for account, browser_id in zip(accounts, browser_ids):
             email = account.get("email", "")
             is_pro = account.get("is_pro", "unknown")
             login_status = account.get("login_status", "")
-            sharing_enabled = account.get("family_sharing_enabled", "unknown")
 
             # 只处理普通 Pro 账户
             if is_pro != "yes":
@@ -2327,11 +2325,7 @@ class AccountManagerInterface(BaseInterface):
                 skipped_no_browser.append(email)
                 continue
 
-            # 已开启的跳过
-            if sharing_enabled == "yes":
-                skipped_already_enabled.append(email)
-                continue
-
+            # 允许重复开启共享（已开启的会检测到并返回已开启状态）
             valid_accounts.append(account)
             valid_browser_ids.append(browser_id)
 
@@ -2342,9 +2336,7 @@ class AccountManagerInterface(BaseInterface):
             if skipped_not_logged:
                 msg += f"⚠️ {len(skipped_not_logged)} 个未登录\n"
             if skipped_no_browser:
-                msg += f"⚠️ {len(skipped_no_browser)} 个未绑定窗口\n"
-            if skipped_already_enabled:
-                msg += f"✅ {len(skipped_already_enabled)} 个已开启共享"
+                msg += f"⚠️ {len(skipped_no_browser)} 个未绑定窗口"
             self._showWarning("警告", msg)
             return
 
@@ -2356,8 +2348,6 @@ class AccountManagerInterface(BaseInterface):
             msg += f"\n⚠️ 跳过 {len(skipped_not_logged)} 个未登录账户"
         if skipped_no_browser:
             msg += f"\n⚠️ 跳过 {len(skipped_no_browser)} 个未绑定窗口账户"
-        if skipped_already_enabled:
-            msg += f"\n✅ 跳过 {len(skipped_already_enabled)} 个已开启共享账户"
 
         w = MessageBox("确认开启共享", msg + "\n\n是否继续？", self)
         if not w.exec():
