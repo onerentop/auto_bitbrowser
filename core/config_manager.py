@@ -58,6 +58,8 @@ class ConfigManager:
         "account_manager": {
             "login_concurrency": 3,   # 并发登录数
             "login_timeout": 120,     # 登录超时（秒）
+            "login_max_retries": 2,   # 登录最大重试次数（首次 + 重试）
+            "login_retry_delay": 3,   # 重试间隔（秒）
             "oauth_timeout": 180      # OAuth 超时（秒）
         },
         # SMS-Bus 接码平台配置
@@ -615,6 +617,26 @@ class ConfigManager:
     def set_oauth_timeout(cls, timeout: int):
         """设置 OAuth 超时时间（秒）"""
         cls.set("account_manager.oauth_timeout", timeout)
+
+    @classmethod
+    def get_login_max_retries(cls) -> int:
+        """获取登录最大重试次数"""
+        return cls.get("account_manager.login_max_retries", 2)
+
+    @classmethod
+    def set_login_max_retries(cls, retries: int):
+        """设置登录最大重试次数"""
+        cls.set("account_manager.login_max_retries", retries)
+
+    @classmethod
+    def get_login_retry_delay(cls) -> int:
+        """获取登录重试间隔（秒）"""
+        return cls.get("account_manager.login_retry_delay", 3)
+
+    @classmethod
+    def set_login_retry_delay(cls, delay: int):
+        """设置登录重试间隔（秒）"""
+        cls.set("account_manager.login_retry_delay", delay)
 
     # ============ SMS-Bus 配置方法 ============
 
