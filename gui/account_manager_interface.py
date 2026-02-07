@@ -2006,9 +2006,15 @@ class AccountManagerInterface(BaseInterface):
         thread.start()
 
     def _allocateToProAccounts(self, invitees: list, pro_accounts: list) -> list:
-        """将普通账户分配到 Pro 账户家庭组"""
+        """将普通账户分配到 Pro 账户家庭组
+
+        注意：会过滤掉正在被其他任务处理的账户（通过 invite_lock_manager 检查）
+        """
+        from services.invite_lock import invite_lock_manager
+
         assignments = []
         pro_index = 0
+        skipped_locked = []
 
         # family_member_count: 0=未检测, 1-6=实际成员数
         # Pro账户至少有管理员自己，所以初始最小值为1
@@ -2018,6 +2024,13 @@ class AccountManagerInterface(BaseInterface):
         }
 
         for invitee in invitees:
+            invitee_email = invitee.get("email", "")
+
+            # 检查是否正在被其他任务处理
+            if invite_lock_manager.is_locked(invitee_email):
+                skipped_locked.append(invitee_email)
+                continue
+
             while pro_index < len(pro_accounts):
                 pro_email = pro_accounts[pro_index]['email']
                 if pro_slots[pro_email] > 0:
@@ -2028,6 +2041,9 @@ class AccountManagerInterface(BaseInterface):
                     pro_index += 1
             else:
                 break
+
+        # 返回分配结果（跳过数量通过属性记录，供调用方使用）
+        self._last_skipped_locked_count = len(skipped_locked)
 
         return assignments
 
@@ -2092,8 +2108,14 @@ class AccountManagerInterface(BaseInterface):
 
         assignments = self._allocateToProAccounts(normal_accounts, pro_accounts)
 
+        # 获取被锁定跳过的账户数量
+        skipped_locked_count = getattr(self, '_last_skipped_locked_count', 0)
+
         if not assignments:
-            self._showWarning("警告", "Pro 账户可用名额不足，无法分配任何账户")
+            msg = "Pro 账户可用名额不足，无法分配任何账户"
+            if skipped_locked_count > 0:
+                msg += f"\n\n⚠️ 另有 {skipped_locked_count} 个账户正在被其他任务处理"
+            self._showWarning("警告", msg)
             return
 
         pro_usage_preview = {}
@@ -2101,7 +2123,7 @@ class AccountManagerInterface(BaseInterface):
             pro_email = pro.get("email", "")
             pro_usage_preview[pro_email] = pro_usage_preview.get(pro_email, 0) + 1
 
-        unassigned_count = len(normal_accounts) - len(assignments)
+        unassigned_count = len(normal_accounts) - len(assignments) - skipped_locked_count
 
         msg = f"即将分配 {len(assignments)} 个普通账户到家庭组\n\n"
         msg += "分配预览:\n"
@@ -2112,6 +2134,9 @@ class AccountManagerInterface(BaseInterface):
 
         if unassigned_count > 0:
             msg += f"\n⚠️ {unassigned_count} 个账户因 Pro 名额不足未能分配\n"
+
+        if skipped_locked_count > 0:
+            msg += f"⚠️ {skipped_locked_count} 个账户正在被其他任务处理，已跳过\n"
 
         w = MessageBox("确认加入家庭组", msg, self)
         if not w.exec():

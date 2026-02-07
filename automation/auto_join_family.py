@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from services.database import DBManager
 from services.ix_api import openBrowser, closeBrowser
+from services.invite_lock import invite_lock_manager
 
 # 导入共享的 Stagehand AI 配置函数
 from automation.pro_status_detector import get_stagehand_config
@@ -147,20 +148,32 @@ async def auto_join_family(
                 error_type="already_in_family",
             )
 
-    # 检查 Stagehand SDK 是否可用
-    if not STAGEHAND_AVAILABLE:
-        log("❌ Stagehand SDK 不可用")
+    # ========== 前置检查：尝试获取邀请锁（防止重复邀请）==========
+    if not invite_lock_manager.try_lock(invitee_email):
+        log(f"⚠️ {invitee_email} 正在被其他任务邀请，跳过")
         return JoinFamilyResult(
             success=False,
-            message="Stagehand SDK 不可用，请安装 stagehand 包",
+            message="该账户正在被其他任务处理",
             inviter_email=inviter_email,
             invitee_email=invitee_email,
-            error_type="sdk_unavailable",
+            error_type="concurrent_operation",
         )
 
-    total_steps = 0
-
+    # 注意：后续所有代码都需要在 try-finally 中确保释放锁
     try:
+        # 检查 Stagehand SDK 是否可用
+        if not STAGEHAND_AVAILABLE:
+            log("❌ Stagehand SDK 不可用")
+            return JoinFamilyResult(
+                success=False,
+                message="Stagehand SDK 不可用，请安装 stagehand 包",
+                inviter_email=inviter_email,
+                invitee_email=invitee_email,
+                error_type="sdk_unavailable",
+            )
+
+        total_steps = 0
+
         # ==================== Step 1: 发送邀请 ====================
         log("=" * 50)
         log(f"Step 1: 在 {inviter_email} 窗口发送邀请...")
@@ -373,6 +386,10 @@ async def auto_join_family(
             error_type="exception",
             total_steps=total_steps,
         )
+
+    finally:
+        # ========== 释放邀请锁 ==========
+        invite_lock_manager.unlock(invitee_email)
 
 
 # ==================== observe 指令模板 ====================
