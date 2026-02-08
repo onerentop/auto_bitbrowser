@@ -77,8 +77,23 @@
    ```
 4. 运行:
    ```bash
-   python create_window_gui.py
+   python main.py
    ```
+
+### 安全回归测试（配置敏感字段）
+
+用于验证 `ConfigManager` 的敏感字段加密、明文迁移与安全读取逻辑：
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/test_config_manager_security.py -q
+```
+
+若本机暂未安装 `pytest`，可使用下面的一键最小验证命令：
+
+```bash
+python -c "import pathlib,tempfile; from tests.test_config_manager_security import test_set_api_key_encrypts_on_disk_and_decrypts_on_read,test_plaintext_sensitive_fields_are_migrated_on_load,test_generic_set_on_sensitive_key_is_auto_encrypted; td=tempfile.TemporaryDirectory(); p=pathlib.Path(td.name); test_set_api_key_encrypts_on_disk_and_decrypts_on_read(p); test_plaintext_sensitive_fields_are_migrated_on_load(p); test_generic_set_on_sensitive_key_is_auto_encrypted(p); print('config security tests: PASS')"
+```
 
 ## ⚙️ 配置说明 (Configuration)
 
