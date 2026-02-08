@@ -19,6 +19,11 @@ from services.ix_window import find_browser_by_email
 from services.database import DBManager
 from services.data_store import DataStore, CardInfo, ProxyInfo, get_data_store
 from core.config_manager import ConfigManager
+from application.settings_service import SettingsService
+from application.sub2api_settings_service import (
+    Sub2APISettingsService,
+    Sub2APISettingsSnapshot,
+)
 
 # 尝试导入 AI Agent 模块
 try:
@@ -1728,108 +1733,87 @@ class SettingsTab(QWidget):
     def load_settings(self):
         """加载设置"""
         try:
-            ConfigManager.load()
+            snapshot = SettingsService.load_settings_snapshot()
 
             # API
-            api_key = ConfigManager.get_api_key()
-            self.api_key_input.setText(api_key)
+            self.api_key_input.setText(snapshot.sheerid_api_key)
 
             # AI Agent 配置 - 默认提供商
-            default_provider = ConfigManager.get_ai_default_provider()
-            idx = self.ai_provider_combo.findText(default_provider)
+            idx = self.ai_provider_combo.findText(snapshot.ai_default_provider)
             if idx >= 0:
                 self.ai_provider_combo.setCurrentIndex(idx)
 
             # Gemini 配置
-            self.gemini_api_key_input.setText(ConfigManager.get_ai_provider_api_key("gemini"))
-            self.gemini_base_url_input.setText(ConfigManager.get_ai_provider_base_url("gemini"))
-            gemini_model = ConfigManager.get_ai_provider_model("gemini")
-            if gemini_model:
-                self.gemini_model_combo.setCurrentText(gemini_model)
+            self.gemini_api_key_input.setText(snapshot.gemini_api_key)
+            self.gemini_base_url_input.setText(snapshot.gemini_base_url)
+            if snapshot.gemini_model:
+                self.gemini_model_combo.setCurrentText(snapshot.gemini_model)
 
             # Anthropic 配置
-            self.anthropic_api_key_input.setText(ConfigManager.get_ai_provider_api_key("anthropic"))
-            self.anthropic_base_url_input.setText(ConfigManager.get_ai_provider_base_url("anthropic"))
-            anthropic_model = ConfigManager.get_ai_provider_model("anthropic")
-            if anthropic_model:
-                self.anthropic_model_combo.setCurrentText(anthropic_model)
+            self.anthropic_api_key_input.setText(snapshot.anthropic_api_key)
+            self.anthropic_base_url_input.setText(snapshot.anthropic_base_url)
+            if snapshot.anthropic_model:
+                self.anthropic_model_combo.setCurrentText(snapshot.anthropic_model)
 
             # 通用配置
-            self.ai_max_steps_spin.setValue(ConfigManager.get_ai_max_steps())
+            self.ai_max_steps_spin.setValue(snapshot.ai_max_steps)
 
             # Gmail IMAP
-            gmail_email = ConfigManager.get("gmail_imap_email", "")
-            gmail_password = ConfigManager.get_gmail_imap_password()
-            self.gmail_email_input.setText(gmail_email)
-            self.gmail_password_input.setText(gmail_password)
+            self.gmail_email_input.setText(snapshot.gmail_imap_email)
+            self.gmail_password_input.setText(snapshot.gmail_imap_password)
 
             # Timeouts
-            self.page_load_spin.setValue(ConfigManager.get("timeouts.page_load", 30))
-            self.status_check_spin.setValue(ConfigManager.get("timeouts.status_check", 20))
-            self.iframe_wait_spin.setValue(ConfigManager.get("timeouts.iframe_wait", 15))
+            self.page_load_spin.setValue(snapshot.timeout_page_load)
+            self.status_check_spin.setValue(snapshot.timeout_status_check)
+            self.iframe_wait_spin.setValue(snapshot.timeout_iframe_wait)
 
             # Delays
-            self.delay_login_spin.setValue(ConfigManager.get("delays.after_login", 3))
-            self.delay_offer_spin.setValue(ConfigManager.get("delays.after_offer", 8))
-            self.delay_add_card_spin.setValue(ConfigManager.get("delays.after_add_card", 10))
-            self.delay_save_spin.setValue(ConfigManager.get("delays.after_save", 18))
+            self.delay_login_spin.setValue(snapshot.delay_after_login)
+            self.delay_offer_spin.setValue(snapshot.delay_after_offer)
+            self.delay_add_card_spin.setValue(snapshot.delay_after_add_card)
+            self.delay_save_spin.setValue(snapshot.delay_after_save)
 
             # Other
-            self.thread_count_spin.setValue(ConfigManager.get("default_thread_count", 3))
+            self.thread_count_spin.setValue(snapshot.default_thread_count)
 
             # Proxy
-            self.proxy_max_windows_spin.setValue(ConfigManager.get("proxy.max_windows_per_ip", 3))
+            self.proxy_max_windows_spin.setValue(snapshot.proxy_max_windows_per_ip)
         except Exception as e:
             print(f"加载设置失败: {e}")
 
     def save_settings(self):
         """保存设置"""
         try:
-            # API
-            ConfigManager.set_api_key(self.api_key_input.text())
+            snapshot = SettingsService.load_settings_snapshot()
+            snapshot.sheerid_api_key = self.api_key_input.text()
+            snapshot.ai_default_provider = self.ai_provider_combo.currentText()
 
-            # AI Agent 配置 - 默认提供商
-            ConfigManager.set_ai_default_provider(self.ai_provider_combo.currentText())
+            snapshot.gemini_api_key = self.gemini_api_key_input.text().strip()
+            snapshot.gemini_base_url = self.gemini_base_url_input.text().strip()
+            snapshot.gemini_model = self.gemini_model_combo.currentText().strip()
 
-            # Gemini 配置
-            gemini_api_key = self.gemini_api_key_input.text().strip()
-            if gemini_api_key:
-                ConfigManager.set_ai_provider_api_key("gemini", gemini_api_key)
-            ConfigManager.set_ai_provider_base_url("gemini", self.gemini_base_url_input.text().strip())
-            ConfigManager.set_ai_provider_model("gemini", self.gemini_model_combo.currentText().strip())
+            snapshot.anthropic_api_key = self.anthropic_api_key_input.text().strip()
+            snapshot.anthropic_base_url = self.anthropic_base_url_input.text().strip()
+            snapshot.anthropic_model = self.anthropic_model_combo.currentText().strip()
 
-            # Anthropic 配置
-            anthropic_api_key = self.anthropic_api_key_input.text().strip()
-            if anthropic_api_key:
-                ConfigManager.set_ai_provider_api_key("anthropic", anthropic_api_key)
-            ConfigManager.set_ai_provider_base_url("anthropic", self.anthropic_base_url_input.text().strip())
-            ConfigManager.set_ai_provider_model("anthropic", self.anthropic_model_combo.currentText().strip())
+            snapshot.ai_max_steps = self.ai_max_steps_spin.value()
 
-            # 通用配置
-            ConfigManager.set_ai_max_steps(self.ai_max_steps_spin.value())
+            snapshot.gmail_imap_email = self.gmail_email_input.text().strip()
+            snapshot.gmail_imap_password = self.gmail_password_input.text()
 
-            # Gmail IMAP
-            ConfigManager.set("gmail_imap_email", self.gmail_email_input.text().strip())
-            ConfigManager.set_gmail_imap_password(self.gmail_password_input.text())
+            snapshot.timeout_page_load = self.page_load_spin.value()
+            snapshot.timeout_status_check = self.status_check_spin.value()
+            snapshot.timeout_iframe_wait = self.iframe_wait_spin.value()
 
-            # Timeouts
-            ConfigManager.set("timeouts.page_load", self.page_load_spin.value())
-            ConfigManager.set("timeouts.status_check", self.status_check_spin.value())
-            ConfigManager.set("timeouts.iframe_wait", self.iframe_wait_spin.value())
+            snapshot.delay_after_login = self.delay_login_spin.value()
+            snapshot.delay_after_offer = self.delay_offer_spin.value()
+            snapshot.delay_after_add_card = self.delay_add_card_spin.value()
+            snapshot.delay_after_save = self.delay_save_spin.value()
 
-            # Delays
-            ConfigManager.set("delays.after_login", self.delay_login_spin.value())
-            ConfigManager.set("delays.after_offer", self.delay_offer_spin.value())
-            ConfigManager.set("delays.after_add_card", self.delay_add_card_spin.value())
-            ConfigManager.set("delays.after_save", self.delay_save_spin.value())
+            snapshot.default_thread_count = self.thread_count_spin.value()
+            snapshot.proxy_max_windows_per_ip = self.proxy_max_windows_spin.value()
 
-            # Other
-            ConfigManager.set("default_thread_count", self.thread_count_spin.value())
-
-            # Proxy
-            ConfigManager.set("proxy.max_windows_per_ip", self.proxy_max_windows_spin.value())
-
-            ConfigManager.save()
+            SettingsService.save_settings_snapshot(snapshot)
             QMessageBox.information(self, "成功", "设置已保存")
         except Exception as e:
             QMessageBox.warning(self, "错误", f"保存设置失败: {e}")
@@ -2118,10 +2102,9 @@ class Sub2APISettingsTab(QWidget):
 
     def _update_api_key_status(self):
         """更新 API Key 状态显示"""
-        ConfigManager.reload()
-        api_key = ConfigManager.get_sub2api_token()
+        api_key = Sub2APISettingsService.get_sub2api_token()
         if api_key:
-            masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            masked = Sub2APISettingsService.mask_secret(api_key)
             self.key_status_label.setText(f"已配置 ({masked})")
             self.key_status_label.setStyleSheet("color: green; font-weight: bold;")
         else:
@@ -2135,11 +2118,9 @@ class Sub2APISettingsTab(QWidget):
             QMessageBox.warning(self, "警告", "请输入 API Key")
             return
 
-        ConfigManager.set_sub2api_token(api_key)
-        ConfigManager.reload()
-
-        saved_key = ConfigManager.get_sub2api_token()
-        if saved_key:
+        saved_ok = Sub2APISettingsService.set_sub2api_token(api_key)
+        saved_key = Sub2APISettingsService.get_sub2api_token()
+        if saved_ok and saved_key:
             self._update_api_key_status()
             self.api_key_edit.clear()
             self.api_key_result_label.setText("✅ 已保存")
@@ -2150,7 +2131,7 @@ class Sub2APISettingsTab(QWidget):
 
     def _clear_api_key(self):
         """清除 API Key"""
-        ConfigManager.set_sub2api_token("")
+        Sub2APISettingsService.clear_sub2api_token()
         self._update_api_key_status()
         self.api_key_result_label.setText("已清除")
         self.api_key_result_label.setStyleSheet("color: #666;")
@@ -2166,10 +2147,9 @@ class Sub2APISettingsTab(QWidget):
 
     def _update_sms_token_status(self):
         """更新 SMS Token 状态显示"""
-        ConfigManager.reload()
-        token = ConfigManager.get_sms_bus_token()
+        token = Sub2APISettingsService.get_sms_token()
         if token:
-            masked = token[:8] + "..." + token[-4:] if len(token) > 12 else "***"
+            masked = Sub2APISettingsService.mask_secret(token)
             self.sms_status_label.setText(f"已配置 ({masked})")
             self.sms_status_label.setStyleSheet("color: green; font-weight: bold;")
         else:
@@ -2183,11 +2163,9 @@ class Sub2APISettingsTab(QWidget):
             QMessageBox.warning(self, "警告", "请输入 SMS-Bus API Token")
             return
 
-        ConfigManager.set_sms_bus_token(token)
-        ConfigManager.reload()
-
-        saved_token = ConfigManager.get_sms_bus_token()
-        if saved_token:
+        saved_ok = Sub2APISettingsService.set_sms_token(token)
+        saved_token = Sub2APISettingsService.get_sms_token()
+        if saved_ok and saved_token:
             self._update_sms_token_status()
             self.sms_token_edit.clear()
             self.sms_token_result_label.setText("✅ 已保存")
@@ -2198,53 +2176,49 @@ class Sub2APISettingsTab(QWidget):
 
     def _clear_sms_token(self):
         """清除 SMS Token"""
-        ConfigManager.set_sms_bus_token("")
+        Sub2APISettingsService.clear_sms_token()
         self._update_sms_token_status()
         self.sms_token_result_label.setText("已清除")
         self.sms_token_result_label.setStyleSheet("color: #666;")
 
     def _load_settings(self):
         """加载设置"""
-        self.enabled_checkbox.setChecked(ConfigManager.get_sub2api_enabled())
-        self.base_url_edit.setText(ConfigManager.get_sub2api_base_url())
-        self.default_group_edit.setText(ConfigManager.get_sub2api_default_group())
+        snapshot = Sub2APISettingsService.load_snapshot()
+        self.enabled_checkbox.setChecked(snapshot.enabled)
+        self.base_url_edit.setText(snapshot.base_url)
+        self.default_group_edit.setText(snapshot.default_group)
 
-        self.login_concurrency_spin.setValue(ConfigManager.get_login_concurrency())
-        self.login_timeout_spin.setValue(ConfigManager.get_login_timeout())
-        self.oauth_timeout_spin.setValue(ConfigManager.get_oauth_timeout())
+        self.login_concurrency_spin.setValue(snapshot.login_concurrency)
+        self.login_timeout_spin.setValue(snapshot.login_timeout)
+        self.oauth_timeout_spin.setValue(snapshot.oauth_timeout)
 
         self._update_api_key_status()
 
         # 加载 SMS-Bus 设置
         self._update_sms_token_status()
-        country_id = ConfigManager.get_sms_bus_default_country_id()
-        self.sms_country_spin.setValue(country_id if country_id else 0)
-        project_id = ConfigManager.get_sms_bus_default_project_id()
-        self.sms_project_spin.setValue(project_id if project_id else 0)
-        self.sms_timeout_spin.setValue(ConfigManager.get_sms_bus_timeout())
-        self.sms_poll_spin.setValue(ConfigManager.get_sms_bus_poll_interval())
-        self.sms_retries_spin.setValue(ConfigManager.get_sms_bus_max_retries())
+        self.sms_country_spin.setValue(snapshot.sms_country_id)
+        self.sms_project_spin.setValue(snapshot.sms_project_id)
+        self.sms_timeout_spin.setValue(snapshot.sms_timeout)
+        self.sms_poll_spin.setValue(snapshot.sms_poll_interval)
+        self.sms_retries_spin.setValue(snapshot.sms_max_retries)
 
     def _save_settings(self):
         """保存设置"""
         try:
-            ConfigManager.set_sub2api_enabled(self.enabled_checkbox.isChecked())
-            ConfigManager.set_sub2api_base_url(self.base_url_edit.text().strip())
-            ConfigManager.set_sub2api_default_group(self.default_group_edit.text().strip())
-
-            ConfigManager.set_login_concurrency(self.login_concurrency_spin.value())
-            ConfigManager.set_login_timeout(self.login_timeout_spin.value())
-            ConfigManager.set_oauth_timeout(self.oauth_timeout_spin.value())
-
-            # 保存 SMS-Bus 设置
-            country_val = self.sms_country_spin.value()
-            # 0 表示"未设置"，存储为 None
-            ConfigManager.set_sms_bus_default_country_id(country_val if country_val > 0 else None)
-            project_val = self.sms_project_spin.value()
-            ConfigManager.set_sms_bus_default_project_id(project_val if project_val > 0 else None)
-            ConfigManager.set_sms_bus_timeout(self.sms_timeout_spin.value())
-            ConfigManager.set_sms_bus_poll_interval(self.sms_poll_spin.value())
-            ConfigManager.set_sms_bus_max_retries(self.sms_retries_spin.value())
+            snapshot = Sub2APISettingsSnapshot(
+                enabled=self.enabled_checkbox.isChecked(),
+                base_url=self.base_url_edit.text().strip(),
+                default_group=self.default_group_edit.text().strip(),
+                login_concurrency=self.login_concurrency_spin.value(),
+                login_timeout=self.login_timeout_spin.value(),
+                oauth_timeout=self.oauth_timeout_spin.value(),
+                sms_country_id=self.sms_country_spin.value(),
+                sms_project_id=self.sms_project_spin.value(),
+                sms_timeout=self.sms_timeout_spin.value(),
+                sms_poll_interval=self.sms_poll_spin.value(),
+                sms_max_retries=self.sms_retries_spin.value(),
+            )
+            Sub2APISettingsService.save_snapshot(snapshot)
 
             QMessageBox.information(self, "成功", "设置已保存")
         except Exception as e:
@@ -2292,8 +2266,7 @@ class Sub2APISettingsTab(QWidget):
             self.base_url_edit.setText(base_url)
 
         # 强制重新加载配置，确保读取最新的 API Key
-        ConfigManager.reload()
-        api_key = ConfigManager.get_sub2api_token()
+        api_key = Sub2APISettingsService.get_sub2api_token()
 
         # 如果没有 API Key，给出警告
         if not api_key:

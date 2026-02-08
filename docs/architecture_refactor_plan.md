@@ -84,6 +84,8 @@
 - [x] 兼容保留原 GUI 行为与结果结构，确保迁移可回滚
 - [x] 旧版 `account_manager_gui.py` 的主批处理线程改为复用统一 orchestrator 执行链路
 - [x] 旧版 `account_manager_gui.py` 的检测403/单个加入家庭组/批量加入家庭组执行循环改为复用统一 orchestrator
+- [x] 新增 `application/sub2api_settings_service.py`，下沉 Sub2API/SMS-Bus 设置读写与 Token 掩码逻辑
+- [x] `gui/config_ui.py` 的 Sub2API/SMS-Bus 配置入口改为通过 `Sub2APISettingsService`
 
 ### Phase 5：测试与可观测性（持续）
 
@@ -94,6 +96,7 @@
 
 - [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖停止分支、异常兜底与适配层调用路径
 - [x] 新增 `tests/test_account_io_repository.py` 覆盖综合查询仓储分支
+- [x] 新增 `tests/test_sub2api_settings_service.py` 覆盖掩码规则核心分支
 - [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
 
 ---
