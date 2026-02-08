@@ -157,3 +157,21 @@ def test_execute_batch_delete_with_windows_and_failure():
     assert deleted_windows == ["w1", "w2", "w3"]
     assert progress == [1, 2, 3]
     assert any("删除 bad@example.com 失败" in item for item in logs)
+
+
+def test_execute_detect_403_no_linked_accounts():
+    logs = []
+    progress = []
+
+    results = AccountTaskOrchestrator.execute_detect_403(
+        accounts=[{"email": "a@example.com", "sub2api_status": "not_linked"}],
+        should_stop=lambda: False,
+        log_callback=logs.append,
+        progress_callback=progress.append,
+    )
+
+    assert results["total"] == 0
+    assert results["needs_unlock"] == 0
+    assert results["accounts"] == []
+    assert logs == []
+    assert progress == []

@@ -161,94 +161,16 @@ class AccountWorkerThread(QThread):
         return {"type": "unknown"}
 
 
-class Detect403Worker(QThread):
-    """检测 403 工作线程"""
-    progress = pyqtSignal(str)  # 日志消息
-    progress_value = pyqtSignal(int, int)  # current, total
-    finished_detect = pyqtSignal(dict)  # 结果
-    error = pyqtSignal(str)
-
-    def __init__(self, accounts: List[dict], parent=None):
-        super().__init__(parent)
-        self.accounts = accounts  # 传入的账号列表
-
-    def run(self):
-        """执行检测"""
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                result = loop.run_until_complete(self._run_async())
-                self.finished_detect.emit(result)
-            finally:
-                loop.close()
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-    async def _run_async(self):
-        """异步执行检测"""
-        async with Sub2APIClient() as client:
-            # 使用传入的账号列表，只检测已关联的账号
-            accounts_to_check = [
-                acc for acc in self.accounts
-                if acc.get("sub2api_status") == "linked"
-            ]
-
-            if not accounts_to_check:
-                return {"total": 0, "needs_unlock": 0, "accounts": []}
-
-            total = len(accounts_to_check)
-            needs_unlock = []
-
-            for i, account in enumerate(accounts_to_check):
-                email = account.get("email", "")
-                account_id = account.get("sub2api_account_id")
-
-                if not account_id:
-                    self.progress.emit(f"[{email}] 缺少 account_id，正在查询...")
-                    account_id = await client.check_account_exists(email)
-                    if account_id:
-                        DBManager.update_sub2api_status(email, "linked", account_id=account_id)
-                        self.progress.emit(f"[{email}] 已获取 account_id: {account_id}")
-                    else:
-                        self.progress.emit(f"[{email}] 在 Sub2API 中未找到，修正状态为未关联")
-                        DBManager.update_sub2api_status(email, "not_linked")
-                        self.progress_value.emit(i + 1, total)
-                        continue
-
-                self.progress.emit(f"[{email}] 检测中...")
-                response = await client.test_account_connection(account_id)
-
-                if not response.success:
-                    data = response.data or {}
-                    if data.get("needs_unlock"):
-                        validation_url = data.get("validation_url", "")
-                        DBManager.update_unlock_status(email, "needs_unlock", validation_url)
-                        needs_unlock.append(email)
-                        self.progress.emit(f"[{email}] 需要解锁")
-                    else:
-                        self.progress.emit(f"[{email}] 检测失败: {response.error}")
-                else:
-                    self.progress.emit(f"[{email}] 正常")
-
-                self.progress_value.emit(i + 1, total)
-
-            return {
-                "total": total,
-                "needs_unlock": len(needs_unlock),
-                "accounts": needs_unlock,
-            }
-
-
 class AccountManagerInterface(BaseInterface):
     """账号管理界面 - Fluent Design 版本"""
 
     def __init__(self, parent=None):
         super().__init__('accountManagerInterface', parent)
         self.worker_thread: Optional[AccountWorkerThread] = None
-        self.detect403_worker: Optional[Detect403Worker] = None
+        self._detect_403_thread = None
+        self._detect_403_stop_flag = False
+        self._detect_403_results = AccountTaskOrchestrator.create_detect_403_results(0)
+        self._detect_403_error = ""
         self._batch_bind_thread = None
         self._batch_bind_stop_flag = False
         self._batch_bind_results = AccountTaskOrchestrator.create_batch_bind_results(0)
@@ -928,7 +850,7 @@ class AccountManagerInterface(BaseInterface):
                 include_batch_bind and hasattr(self, '_batch_bind_thread') and self._batch_bind_thread and self._batch_bind_thread.is_alive()
             ),
             detect_403_running=bool(
-                include_detect_403 and self.detect403_worker and self.detect403_worker.isRunning()
+                include_detect_403 and hasattr(self, '_detect_403_thread') and self._detect_403_thread and self._detect_403_thread.is_alive()
             ),
             batch_delete_running=bool(
                 include_batch_delete and hasattr(self, '_batch_delete_thread') and self._batch_delete_thread and self._batch_delete_thread.is_alive()
@@ -1234,21 +1156,66 @@ class AccountManagerInterface(BaseInterface):
         self.progressBar.setValue(0)
         self._setButtonsEnabled(False)
 
-        # 创建并启动工作线程（传入选中的账号）
-        self.detect403_worker = Detect403Worker(linked_accounts, self)
-        self.detect403_worker.progress.connect(self.log)
-        self.detect403_worker.progress_value.connect(self._onProgressValue)
-        self.detect403_worker.finished_detect.connect(self._onDetect403Finished)
-        self.detect403_worker.error.connect(self._onDetect403Error)
-        self.detect403_worker.start()
+        self._detect_403_results = AccountTaskOrchestrator.create_detect_403_results(len(linked_accounts))
+        self._detect_403_error = ""
+        self._detect_403_stop_flag = False
 
-    def _onDetect403Finished(self, result: dict):
+        from threading import Thread
+        from PyQt6.QtCore import QMetaObject, Q_ARG, Qt as QtCore_Qt
+
+        def safe_log(msg: str):
+            QMetaObject.invokeMethod(
+                self.logText,
+                "append",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+            )
+
+        def update_progress(value: int):
+            QMetaObject.invokeMethod(
+                self.progressBar,
+                "setValue",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, value)
+            )
+            QMetaObject.invokeMethod(
+                self.statusLabel,
+                "setText",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"处理中: {value}/{len(linked_accounts)}")
+            )
+
+        def run_detect_403():
+            try:
+                self._detect_403_results = AccountTaskOrchestrator.execute_detect_403(
+                    accounts=linked_accounts,
+                    should_stop=lambda: self._detect_403_stop_flag,
+                    log_callback=safe_log,
+                    progress_callback=update_progress,
+                )
+            except Exception as error:
+                self._detect_403_error = str(error)
+            finally:
+                QTimer.singleShot(0, self._onDetect403ThreadCompleted)
+
+        self._detect_403_thread = Thread(target=run_detect_403, daemon=True)
+        self._detect_403_thread.start()
+
+    def _onDetect403ThreadCompleted(self):
+        """检测 403 线程结束回调（主线程）"""
+        if self._detect_403_error:
+            self._onDetect403Error(self._detect_403_error)
+            return
+        self._onDetect403Finished()
+
+    def _onDetect403Finished(self):
         """检测 403 完成回调"""
         self._setButtonsEnabled(True)
+        self._detect_403_thread = None
 
-        total = result.get("total", 0)
-        needs_unlock = result.get("needs_unlock", 0)
-        accounts = result.get("accounts", [])
+        total = self._detect_403_results.get("total", 0)
+        needs_unlock = self._detect_403_results.get("needs_unlock", 0)
+        accounts = self._detect_403_results.get("accounts", [])
 
         self.log(f"检测完成: 共 {total} 个账号，{needs_unlock} 个需要解锁")
 
@@ -1268,6 +1235,7 @@ class AccountManagerInterface(BaseInterface):
     def _onDetect403Error(self, error: str):
         """检测 403 错误回调"""
         self._setButtonsEnabled(True)
+        self._detect_403_thread = None
         self.progressBar.setVisible(False)
         self.log(f"检测失败: {error}")
         self._showError("错误", f"检测失败:\n{error}")
@@ -1357,6 +1325,10 @@ class AccountManagerInterface(BaseInterface):
         if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
             self.log("正在停止开启共享任务...")
             self._enable_sharing_stop_flag = True
+
+        if hasattr(self, '_detect_403_thread') and self._detect_403_thread and self._detect_403_thread.is_alive():
+            self.log("正在停止 403 检测...")
+            self._detect_403_stop_flag = True
 
         if hasattr(self, '_batch_bind_thread') and self._batch_bind_thread and self._batch_bind_thread.is_alive():
             self.log("正在停止批量绑定...")

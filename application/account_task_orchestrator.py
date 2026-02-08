@@ -59,6 +59,15 @@ class AccountTaskOrchestrator:
         }
 
     @staticmethod
+    def create_detect_403_results(total: int) -> dict:
+        """创建批量 403 检测任务结果骨架。"""
+        return {
+            "total": total,
+            "needs_unlock": 0,
+            "accounts": [],
+        }
+
+    @staticmethod
     def execute_batch_join_family(
         assignments: Sequence[tuple[dict, dict]],
         should_stop: Callable[[], bool],
@@ -290,3 +299,78 @@ class AccountTaskOrchestrator:
             progress_callback(index + 1)
 
         return results
+
+    @staticmethod
+    def execute_detect_403(
+        accounts: Sequence[dict],
+        should_stop: Callable[[], bool],
+        log_callback: Callable[[str], None],
+        progress_callback: Callable[[int], None],
+    ) -> dict:
+        """执行批量 403 检测任务。"""
+        from services.database import DBManager
+        from services.sub2api_client import Sub2APIClient
+
+        async def _run_async() -> dict:
+            async with Sub2APIClient() as client:
+                accounts_to_check = [
+                    account for account in accounts
+                    if account.get("sub2api_status") == "linked"
+                ]
+
+                if not accounts_to_check:
+                    return AccountTaskOrchestrator.create_detect_403_results(0)
+
+                total = len(accounts_to_check)
+                needs_unlock_accounts: list[str] = []
+
+                for index, account in enumerate(accounts_to_check):
+                    if should_stop():
+                        log_callback("用户停止任务")
+                        break
+
+                    email = account.get("email", "")
+                    account_id = account.get("sub2api_account_id")
+
+                    if not account_id:
+                        log_callback(f"[{email}] 缺少 account_id，正在查询...")
+                        account_id = await client.check_account_exists(email)
+                        if account_id:
+                            DBManager.update_sub2api_status(email, "linked", account_id=account_id)
+                            log_callback(f"[{email}] 已获取 account_id: {account_id}")
+                        else:
+                            log_callback(f"[{email}] 在 Sub2API 中未找到，修正状态为未关联")
+                            DBManager.update_sub2api_status(email, "not_linked")
+                            progress_callback(index + 1)
+                            continue
+
+                    log_callback(f"[{email}] 检测中...")
+                    response = await client.test_account_connection(account_id)
+
+                    if not response.success:
+                        response_data = response.data or {}
+                        if response_data.get("needs_unlock"):
+                            validation_url = response_data.get("validation_url", "")
+                            DBManager.update_unlock_status(email, "needs_unlock", validation_url)
+                            needs_unlock_accounts.append(email)
+                            log_callback(f"[{email}] 需要解锁")
+                        else:
+                            log_callback(f"[{email}] 检测失败: {response.error}")
+                    else:
+                        log_callback(f"[{email}] 正常")
+
+                    progress_callback(index + 1)
+
+                return {
+                    "total": total,
+                    "needs_unlock": len(needs_unlock_accounts),
+                    "accounts": needs_unlock_accounts,
+                }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            return loop.run_until_complete(_run_async())
+        finally:
+            loop.close()

@@ -116,7 +116,9 @@
 - [x] 迁移账号管理界面的开启家庭共享候选筛选与确认文案构建
 - [x] 新增 `application/account_task_orchestrator.py`，下沉批量加入家庭组与开启家庭共享执行编排
 - [x] 继续下沉账号管理界面批量绑定/批量删除执行循环到 `AccountTaskOrchestrator`
+- [x] 下沉账号管理界面批量 403 检测执行循环到 `AccountTaskOrchestrator`
 - [x] GUI 停止逻辑接入批量绑定/批量删除可中断标记（保持交互行为不变）
+- [x] GUI 停止逻辑接入批量 403 检测可中断标记（保持交互行为不变）
 - [x] 新增 `tests/test_account_manager_service.py` 覆盖核心纯逻辑分支
 - [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖批量绑定/批量删除执行器分支
 - [x] 完成编译与最小读写回归验证
