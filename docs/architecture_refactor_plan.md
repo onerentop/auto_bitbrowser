@@ -46,7 +46,11 @@
 - [x] 新增 `CardRepository` 与 `ProxyRepository`，下沉卡片/代理核心 CRUD 与统计 SQL
 - [x] `DBManager` 对卡片/代理核心方法改为兼容委托（调用方无感）
 - [x] 新增 `tests/test_card_repository.py` 与 `tests/test_proxy_repository.py`
-- [ ] 继续拆分历史记录与恢复邮箱池相关仓储
+- [x] 新增 `HistoryRepository`，下沉手机号/邮箱/2SV/验证器/SheerID/绑卡历史方法
+- [x] 新增 `RecoveryEmailRepository`，下沉辅助邮箱池/每日用量/绑定关系方法
+- [x] `DBManager` 对历史记录与恢复邮箱池核心方法改为兼容委托（调用方无感）
+- [x] 新增 `tests/test_history_repository.py` 与 `tests/test_recovery_email_repository.py`
+- [ ] 继续拆分 Sub2API / 账号状态更新相关仓储
 
 验收标准：
 

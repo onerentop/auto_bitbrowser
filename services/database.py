@@ -4,7 +4,13 @@ import sys
 import threading
 
 from core.data_parser import parse_account_line, build_account_line
-from services.repositories import AccountRepository, CardRepository, ProxyRepository
+from services.repositories import (
+    AccountRepository,
+    CardRepository,
+    HistoryRepository,
+    ProxyRepository,
+    RecoveryEmailRepository,
+)
 
 # 数据库路径 - 使用项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -507,35 +513,14 @@ class DBManager:
     @staticmethod
     def init_phone_modification_table():
         """初始化手机号修改历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS phone_modification_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    new_phone TEXT NOT NULL,
-                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_phone_modification_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_phone_modification_history() -> dict:
         """获取所有手机号修改历史记录，返回 {email: {new_phone, modified_at}}"""
         try:
-            # 确保表存在
             DBManager.init_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, new_phone, modified_at FROM phone_modification_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {'new_phone': row['new_phone'], 'modified_at': row['modified_at']} for row in rows}
+            return HistoryRepository.get_phone_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_phone_modification_history 失败: {e}")
             return {}
@@ -544,22 +529,13 @@ class DBManager:
     def add_phone_modification(email: str, new_phone: str):
         """添加或更新手机号修改记录"""
         try:
-            # 确保表存在
             DBManager.init_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO phone_modification_history (email, new_phone, modified_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        new_phone = excluded.new_phone,
-                        modified_at = CURRENT_TIMESTAMP
-                ''', (email, new_phone))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录手机号修改: {email} -> {new_phone}")
+            HistoryRepository.add_phone_modification(
+                email,
+                new_phone,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_phone_modification 失败: {e}")
 
@@ -567,18 +543,8 @@ class DBManager:
     def clear_phone_modification_history():
         """清除所有手机号修改历史记录"""
         try:
-            # 确保表存在
             DBManager.init_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM phone_modification_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条手机号修改记录")
-                return deleted
+            return HistoryRepository.clear_phone_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_phone_modification_history 失败: {e}")
             return 0
@@ -588,35 +554,14 @@ class DBManager:
     @staticmethod
     def init_email_modification_table():
         """初始化邮箱修改历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS email_modification_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    new_recovery_email TEXT NOT NULL,
-                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_email_modification_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_email_modification_history() -> dict:
         """获取所有邮箱修改历史记录，返回 {email: {new_recovery_email, modified_at}}"""
         try:
-            # 确保表存在
             DBManager.init_email_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, new_recovery_email, modified_at FROM email_modification_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {'new_recovery_email': row['new_recovery_email'], 'modified_at': row['modified_at']} for row in rows}
+            return HistoryRepository.get_email_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_email_modification_history 失败: {e}")
             return {}
@@ -625,22 +570,13 @@ class DBManager:
     def add_email_modification(email: str, new_recovery_email: str):
         """添加或更新邮箱修改记录"""
         try:
-            # 确保表存在
             DBManager.init_email_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO email_modification_history (email, new_recovery_email, modified_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        new_recovery_email = excluded.new_recovery_email,
-                        modified_at = CURRENT_TIMESTAMP
-                ''', (email, new_recovery_email))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录邮箱修改: {email} -> {new_recovery_email}")
+            HistoryRepository.add_email_modification(
+                email,
+                new_recovery_email,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_email_modification 失败: {e}")
 
@@ -648,18 +584,8 @@ class DBManager:
     def clear_email_modification_history():
         """清除所有邮箱修改历史记录"""
         try:
-            # 确保表存在
             DBManager.init_email_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM email_modification_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条邮箱修改记录")
-                return deleted
+            return HistoryRepository.clear_email_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_email_modification_history 失败: {e}")
             return 0
@@ -669,35 +595,14 @@ class DBManager:
     @staticmethod
     def init_2sv_phone_modification_table():
         """初始化2SV手机号修改历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS sv2_phone_modification_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    new_phone TEXT NOT NULL,
-                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_2sv_phone_modification_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_2sv_phone_modification_history() -> dict:
         """获取所有2SV手机号修改历史记录，返回 {email: {new_phone, modified_at}}"""
         try:
-            # 确保表存在
             DBManager.init_2sv_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, new_phone, modified_at FROM sv2_phone_modification_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {'new_phone': row['new_phone'], 'modified_at': row['modified_at']} for row in rows}
+            return HistoryRepository.get_2sv_phone_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_2sv_phone_modification_history 失败: {e}")
             return {}
@@ -706,22 +611,13 @@ class DBManager:
     def add_2sv_phone_modification(email: str, new_phone: str):
         """添加或更新2SV手机号修改记录"""
         try:
-            # 确保表存在
             DBManager.init_2sv_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO sv2_phone_modification_history (email, new_phone, modified_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        new_phone = excluded.new_phone,
-                        modified_at = CURRENT_TIMESTAMP
-                ''', (email, new_phone))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录2SV手机号修改: {email} -> {new_phone}")
+            HistoryRepository.add_2sv_phone_modification(
+                email,
+                new_phone,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_2sv_phone_modification 失败: {e}")
 
@@ -729,18 +625,8 @@ class DBManager:
     def clear_2sv_phone_modification_history():
         """清除所有2SV手机号修改历史记录"""
         try:
-            # 确保表存在
             DBManager.init_2sv_phone_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM sv2_phone_modification_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条2SV手机号修改记录")
-                return deleted
+            return HistoryRepository.clear_2sv_phone_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_2sv_phone_modification_history 失败: {e}")
             return 0
@@ -750,35 +636,14 @@ class DBManager:
     @staticmethod
     def init_authenticator_modification_table():
         """初始化身份验证器修改历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS authenticator_modification_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    new_secret TEXT NOT NULL,
-                    modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_authenticator_modification_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_authenticator_modification_history() -> dict:
         """获取所有身份验证器修改历史记录，返回 {email: {new_secret, modified_at}}"""
         try:
-            # 确保表存在
             DBManager.init_authenticator_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, new_secret, modified_at FROM authenticator_modification_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {'new_secret': row['new_secret'], 'modified_at': row['modified_at']} for row in rows}
+            return HistoryRepository.get_authenticator_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_authenticator_modification_history 失败: {e}")
             return {}
@@ -787,22 +652,13 @@ class DBManager:
     def add_authenticator_modification(email: str, new_secret: str):
         """添加或更新身份验证器修改记录"""
         try:
-            # 确保表存在
             DBManager.init_authenticator_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO authenticator_modification_history (email, new_secret, modified_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        new_secret = excluded.new_secret,
-                        modified_at = CURRENT_TIMESTAMP
-                ''', (email, new_secret))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录身份验证器修改: {email} -> {new_secret[:16]}...")
+            HistoryRepository.add_authenticator_modification(
+                email,
+                new_secret,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_authenticator_modification 失败: {e}")
 
@@ -810,18 +666,8 @@ class DBManager:
     def clear_authenticator_modification_history():
         """清除所有身份验证器修改历史记录"""
         try:
-            # 确保表存在
             DBManager.init_authenticator_modification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM authenticator_modification_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条身份验证器修改记录")
-                return deleted
+            return HistoryRepository.clear_authenticator_modification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_authenticator_modification_history 失败: {e}")
             return 0
@@ -831,42 +677,14 @@ class DBManager:
     @staticmethod
     def init_sheerid_verification_table():
         """初始化SheerID验证历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS sheerid_verification_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    verification_id TEXT,
-                    verification_result TEXT,
-                    message TEXT,
-                    verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_sheerid_verification_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_sheerid_verification_history() -> dict:
         """获取所有SheerID验证历史记录，返回 {email: {verification_id, verification_result, message, verified_at}}"""
         try:
-            # 确保表存在
             DBManager.init_sheerid_verification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, verification_id, verification_result, message, verified_at FROM sheerid_verification_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {
-                    'verification_id': row['verification_id'],
-                    'verification_result': row['verification_result'],
-                    'message': row['message'],
-                    'verified_at': row['verified_at']
-                } for row in rows}
+            return HistoryRepository.get_sheerid_verification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_sheerid_verification_history 失败: {e}")
             return {}
@@ -875,24 +693,15 @@ class DBManager:
     def add_sheerid_verification(email: str, verification_id: str, verification_result: str, message: str = None):
         """添加或更新SheerID验证记录"""
         try:
-            # 确保表存在
             DBManager.init_sheerid_verification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO sheerid_verification_history (email, verification_id, verification_result, message, verified_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        verification_id = excluded.verification_id,
-                        verification_result = excluded.verification_result,
-                        message = excluded.message,
-                        verified_at = CURRENT_TIMESTAMP
-                ''', (email, verification_id, verification_result, message))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录SheerID验证: {email} -> {verification_result}")
+            HistoryRepository.add_sheerid_verification(
+                email,
+                verification_id,
+                verification_result,
+                message,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_sheerid_verification 失败: {e}")
 
@@ -900,18 +709,8 @@ class DBManager:
     def clear_sheerid_verification_history():
         """清除所有SheerID验证历史记录"""
         try:
-            # 确保表存在
             DBManager.init_sheerid_verification_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM sheerid_verification_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条SheerID验证记录")
-                return deleted
+            return HistoryRepository.clear_sheerid_verification_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_sheerid_verification_history 失败: {e}")
             return 0
@@ -1024,35 +823,14 @@ class DBManager:
     @staticmethod
     def init_bind_card_history_table():
         """初始化绑卡历史表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS bind_card_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT NOT NULL,
-                    card_number TEXT NOT NULL,
-                    bound_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(email)
-                )
-            ''')
-            conn.commit()
-            conn.close()
+        HistoryRepository.init_bind_card_history_table(DBManager.get_connection, lock)
 
     @staticmethod
     def get_bind_card_history() -> dict:
         """获取所有绑卡历史记录，返回 {email: {card_number, bound_at}}"""
         try:
-            # 确保表存在
             DBManager.init_bind_card_history_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT email, card_number, bound_at FROM bind_card_history")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: {'card_number': row['card_number'], 'bound_at': row['bound_at']} for row in rows}
+            return HistoryRepository.get_bind_card_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_bind_card_history 失败: {e}")
             return {}
@@ -1061,22 +839,13 @@ class DBManager:
     def add_bind_card_history(email: str, card_number: str):
         """添加或更新绑卡记录"""
         try:
-            # 确保表存在
             DBManager.init_bind_card_history_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO bind_card_history (email, card_number, bound_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(email) DO UPDATE SET
-                        card_number = excluded.card_number,
-                        bound_at = CURRENT_TIMESTAMP
-                ''', (email, card_number))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 记录绑卡: {email} -> {card_number}")
+            HistoryRepository.add_bind_card_history(
+                email,
+                card_number,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_bind_card_history 失败: {e}")
 
@@ -1084,18 +853,8 @@ class DBManager:
     def clear_bind_card_history() -> int:
         """清除所有绑卡历史记录"""
         try:
-            # 确保表存在
             DBManager.init_bind_card_history_table()
-
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM bind_card_history")
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 已清除 {deleted} 条绑卡记录")
-                return deleted
+            return HistoryRepository.clear_bind_card_history(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB ERROR] clear_bind_card_history 失败: {e}")
             return 0
@@ -1140,58 +899,14 @@ class DBManager:
     @staticmethod
     def init_recovery_email_pool_tables():
         """初始化辅助邮箱池相关表"""
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-
-            # 辅助邮箱池表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS recovery_email_pool (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email TEXT UNIQUE NOT NULL,
-                    imap_password TEXT,
-                    is_enabled INTEGER DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    note TEXT
-                )
-            ''')
-
-            # 每日使用量表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS recovery_email_daily_usage (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    recovery_email TEXT NOT NULL,
-                    usage_date TEXT NOT NULL,
-                    bind_count INTEGER DEFAULT 0,
-                    UNIQUE(recovery_email, usage_date)
-                )
-            ''')
-
-            # 账号绑定关系表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS account_recovery_binding (
-                    email TEXT PRIMARY KEY,
-                    bound_recovery_email TEXT,
-                    bound_at TIMESTAMP,
-                    status TEXT DEFAULT 'unbound'
-                )
-            ''')
-
-            conn.commit()
-            conn.close()
+        RecoveryEmailRepository.init_recovery_email_pool_tables(DBManager.get_connection, lock)
 
     @staticmethod
     def get_recovery_email_pool() -> list:
         """获取所有辅助邮箱池"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM recovery_email_pool ORDER BY created_at DESC")
-                rows = cursor.fetchall()
-                conn.close()
-                return [dict(row) for row in rows]
+            return RecoveryEmailRepository.get_recovery_email_pool(DBManager.get_connection, lock)
         except Exception as e:
             print(f"[DB] get_recovery_email_pool 失败: {e}")
             return []
@@ -1201,20 +916,13 @@ class DBManager:
         """添加辅助邮箱到池"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO recovery_email_pool (email, imap_password, note)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(email) DO UPDATE SET
-                        imap_password = excluded.imap_password,
-                        note = excluded.note
-                ''', (email, imap_password, note))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 添加辅助邮箱到池: {email}")
-                return True
+            return RecoveryEmailRepository.add_recovery_email_to_pool(
+                email,
+                imap_password,
+                note,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] add_recovery_email_to_pool 失败: {e}")
             return False
@@ -1224,14 +932,11 @@ class DBManager:
         """从池中移除辅助邮箱"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM recovery_email_pool WHERE email = ?", (email,))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 从池中移除辅助邮箱: {email}")
-                return True
+            return RecoveryEmailRepository.remove_recovery_email_from_pool(
+                email,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] remove_recovery_email_from_pool 失败: {e}")
             return False
@@ -1241,16 +946,12 @@ class DBManager:
         """更新辅助邮箱启用状态"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE recovery_email_pool SET is_enabled = ? WHERE email = ?",
-                    (1 if is_enabled else 0, email)
-                )
-                conn.commit()
-                conn.close()
-                return True
+            return RecoveryEmailRepository.update_recovery_email_enabled(
+                email,
+                is_enabled,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] update_recovery_email_enabled 失败: {e}")
             return False
@@ -1261,22 +962,13 @@ class DBManager:
         获取指定日期的邮箱使用量
         返回 {email: bind_count}
         """
-        from datetime import datetime
-        if date is None:
-            date = datetime.now().strftime('%Y-%m-%d')
-
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT recovery_email, bind_count FROM recovery_email_daily_usage WHERE usage_date = ?",
-                    (date,)
-                )
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['recovery_email']: row['bind_count'] for row in rows}
+            return RecoveryEmailRepository.get_recovery_email_daily_usage(
+                date,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB] get_recovery_email_daily_usage 失败: {e}")
             return {}
@@ -1284,25 +976,14 @@ class DBManager:
     @staticmethod
     def increment_recovery_email_usage(recovery_email: str, date: str = None) -> bool:
         """增加辅助邮箱今日使用次数"""
-        from datetime import datetime
-        if date is None:
-            date = datetime.now().strftime('%Y-%m-%d')
-
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO recovery_email_daily_usage (recovery_email, usage_date, bind_count)
-                    VALUES (?, ?, 1)
-                    ON CONFLICT(recovery_email, usage_date) DO UPDATE SET
-                        bind_count = bind_count + 1
-                ''', (recovery_email, date))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 增加辅助邮箱使用次数: {recovery_email} ({date})")
-                return True
+            return RecoveryEmailRepository.increment_recovery_email_usage(
+                recovery_email,
+                date,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] increment_recovery_email_usage 失败: {e}")
             return False
@@ -1310,24 +991,13 @@ class DBManager:
     @staticmethod
     def reset_recovery_email_daily_usage(date: str = None) -> int:
         """重置指定日期的使用量（默认今天）"""
-        from datetime import datetime
-        if date is None:
-            date = datetime.now().strftime('%Y-%m-%d')
-
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM recovery_email_daily_usage WHERE usage_date = ?",
-                    (date,)
-                )
-                conn.commit()
-                deleted = cursor.rowcount
-                conn.close()
-                print(f"[DB] 重置 {date} 的使用量，删除 {deleted} 条记录")
-                return deleted
+            return RecoveryEmailRepository.reset_recovery_email_daily_usage(
+                date,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] reset_recovery_email_daily_usage 失败: {e}")
             return 0
@@ -1345,25 +1015,15 @@ class DBManager:
         Returns:
             bool: 操作是否成功
         """
-        from datetime import datetime
-        if date is None:
-            date = datetime.now().strftime('%Y-%m-%d')
-
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO recovery_email_daily_usage (recovery_email, usage_date, bind_count)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(recovery_email, usage_date) DO UPDATE SET
-                        bind_count = ?
-                ''', (recovery_email, date, limit, limit))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 标记辅助邮箱今日不可用: {recovery_email} ({date}) = {limit}")
-                return True
+            return RecoveryEmailRepository.set_recovery_email_usage_full(
+                recovery_email,
+                limit,
+                date,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] set_recovery_email_usage_full 失败: {e}")
             return False
@@ -1373,16 +1033,11 @@ class DBManager:
         """获取账号的辅助邮箱绑定信息"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM account_recovery_binding WHERE email = ?",
-                    (email,)
-                )
-                row = cursor.fetchone()
-                conn.close()
-                return dict(row) if row else None
+            return RecoveryEmailRepository.get_account_recovery_binding(
+                email,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB] get_account_recovery_binding 失败: {e}")
             return None
@@ -1392,21 +1047,13 @@ class DBManager:
         """设置账号的辅助邮箱绑定关系"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO account_recovery_binding (email, bound_recovery_email, bound_at, status)
-                    VALUES (?, ?, CURRENT_TIMESTAMP, ?)
-                    ON CONFLICT(email) DO UPDATE SET
-                        bound_recovery_email = excluded.bound_recovery_email,
-                        bound_at = CURRENT_TIMESTAMP,
-                        status = excluded.status
-                ''', (email, bound_recovery_email, status))
-                conn.commit()
-                conn.close()
-                print(f"[DB] 设置绑定关系: {email} -> {bound_recovery_email} ({status})")
-                return True
+            return RecoveryEmailRepository.set_account_recovery_binding(
+                email,
+                bound_recovery_email,
+                status,
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB ERROR] set_account_recovery_binding 失败: {e}")
             return False
@@ -1416,13 +1063,10 @@ class DBManager:
         """获取所有账号的辅助邮箱绑定关系"""
         try:
             DBManager.init_recovery_email_pool_tables()
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM account_recovery_binding")
-                rows = cursor.fetchall()
-                conn.close()
-                return {row['email']: dict(row) for row in rows}
+            return RecoveryEmailRepository.get_all_account_recovery_bindings(
+                DBManager.get_connection,
+                lock,
+            )
         except Exception as e:
             print(f"[DB] get_all_account_recovery_bindings 失败: {e}")
             return {}
