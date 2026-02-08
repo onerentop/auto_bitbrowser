@@ -7,11 +7,13 @@ Why:
 
 from __future__ import annotations
 
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 
 class AutomationEngineAdapter:
     """自动化任务适配器。"""
+
+    _bind_card_cursor: int = 0
 
     @staticmethod
     def create_sub2api_client():
@@ -136,3 +138,310 @@ class AutomationEngineAdapter:
             close_browser_on_success=close_browser_on_success,
         )
 
+    @staticmethod
+    async def run_bind_card(
+        profile_id: str,
+        account_info: dict,
+        cards: Sequence[dict] | dict,
+        config: dict | None = None,
+    ) -> dict:
+        """执行 AI 绑卡自动化。"""
+        from automation.auto_bind_card_ai import auto_bind_card_ai
+
+        config = config or {}
+        card_info: dict
+        if isinstance(cards, dict):
+            card_info = cards
+        else:
+            cards_list = list(cards)
+            if not cards_list:
+                return {"success": False, "message": "无可用卡片"}
+
+            rotate_card = bool(config.get("rotate_card", True))
+            if rotate_card:
+                index = AutomationEngineAdapter._bind_card_cursor % len(cards_list)
+                AutomationEngineAdapter._bind_card_cursor += 1
+                card_info = cards_list[index]
+            else:
+                card_info = cards_list[0]
+
+        success, message = await auto_bind_card_ai(
+            browser_id=str(profile_id),
+            account_info=account_info,
+            card_info=card_info,
+            close_after=bool(config.get("close_after", False)),
+            max_steps=int(config.get("max_steps", 40)),
+            api_key=config.get("api_key"),
+            base_url=config.get("base_url"),
+            model=config.get("model"),
+            provider=config.get("provider"),
+        )
+
+        return {
+            "success": bool(success),
+            "message": message,
+        }
+
+    @staticmethod
+    async def run_kick_devices(profile_id: str, account_info: dict) -> dict:
+        """执行踢出设备自动化。"""
+        from automation.auto_kick_devices import auto_kick_devices
+
+        success, message, kicked_count = await auto_kick_devices(
+            browser_id=str(profile_id),
+            account_info=account_info,
+        )
+
+        return {
+            "success": bool(success),
+            "message": message,
+            "kicked_count": int(kicked_count),
+        }
+
+    @staticmethod
+    async def run_kick_devices_legacy(
+        browser_id: str,
+        account_info: dict,
+        close_after: bool,
+        api_key: str | None,
+        base_url: str | None,
+        model: str | None,
+        provider: str | None,
+        max_steps: int,
+    ) -> tuple[bool, str, int]:
+        """执行踢出设备自动化（兼容旧版 GUI 元组返回结构）。"""
+        from automation.auto_kick_devices import auto_kick_devices
+
+        return await auto_kick_devices(
+            browser_id=browser_id,
+            account_info=account_info,
+            close_after=close_after,
+            max_steps=max_steps,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+        )
+
+    @staticmethod
+    async def run_modify_2sv_phone(
+        profile_id: str,
+        account_info: dict,
+        new_phone: str,
+    ) -> dict:
+        """执行修改 2SV 手机自动化。"""
+        from automation.auto_modify_2sv_phone import auto_modify_2sv_phone
+
+        success, message = await auto_modify_2sv_phone(
+            browser_id=str(profile_id),
+            account_info=account_info,
+            new_phone=new_phone,
+        )
+
+        return {
+            "success": bool(success),
+            "message": message,
+        }
+
+    @staticmethod
+    async def run_modify_2sv_phone_legacy(
+        browser_id: str,
+        account_info: dict,
+        new_phone: str,
+        close_after: bool,
+        api_key: str | None,
+        base_url: str | None,
+        model: str | None,
+        provider: str | None,
+        max_steps: int,
+    ) -> tuple[bool, str]:
+        """执行修改 2SV 手机自动化（兼容旧版 GUI 元组返回结构）。"""
+        from automation.auto_modify_2sv_phone import auto_modify_2sv_phone
+
+        return await auto_modify_2sv_phone(
+            browser_id=browser_id,
+            account_info=account_info,
+            new_phone=new_phone,
+            close_after=close_after,
+            max_steps=max_steps,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+        )
+
+    @staticmethod
+    async def run_modify_authenticator(profile_id: str, account_info: dict) -> dict:
+        """执行修改身份验证器自动化。"""
+        from automation.auto_modify_authenticator import auto_modify_authenticator
+
+        success, message, new_secret = await auto_modify_authenticator(
+            browser_id=str(profile_id),
+            account_info=account_info,
+        )
+
+        return {
+            "success": bool(success),
+            "message": message,
+            "totp_secret": new_secret,
+        }
+
+    @staticmethod
+    async def run_modify_authenticator_legacy(
+        browser_id: str,
+        account_info: dict,
+        close_after: bool,
+        api_key: str | None,
+        base_url: str | None,
+        model: str | None,
+        provider: str | None,
+        max_steps: int,
+        save_to_file: bool,
+        output_file: str,
+    ) -> tuple[bool, str, str | None]:
+        """执行修改身份验证器自动化（兼容旧版 GUI 元组返回结构）。"""
+        from automation.auto_modify_authenticator import auto_modify_authenticator
+
+        return await auto_modify_authenticator(
+            browser_id=browser_id,
+            account_info=account_info,
+            close_after=close_after,
+            max_steps=max_steps,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+            save_to_file=save_to_file,
+            output_file=output_file,
+        )
+
+    @staticmethod
+    async def run_replace_email(
+        profile_id: str,
+        account_info: dict,
+        new_email: str,
+    ) -> dict:
+        """执行替换辅助邮箱自动化。"""
+        from automation.auto_replace_recovery_email import auto_replace_recovery_email
+
+        success, message, error_type = await auto_replace_recovery_email(
+            browser_id=str(profile_id),
+            account_info=account_info,
+            new_email=new_email,
+        )
+
+        return {
+            "success": bool(success),
+            "message": message,
+            "error_type": error_type,
+        }
+
+    @staticmethod
+    async def run_replace_recovery_email(
+        browser_id: str,
+        account_info: dict,
+        new_email: str,
+        close_after: bool,
+        api_key: str | None,
+        base_url: str | None,
+        model: str | None,
+        provider: str | None,
+        pool_emails: list | None = None,
+    ) -> tuple[bool, str, str | None]:
+        """执行替换辅助邮箱自动化（兼容旧版 GUI 元组返回结构）。"""
+        from automation.auto_replace_recovery_email import auto_replace_recovery_email
+
+        return await auto_replace_recovery_email(
+            browser_id=browser_id,
+            account_info=account_info,
+            new_email=new_email,
+            close_after=close_after,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+            pool_emails=pool_emails,
+        )
+
+    @staticmethod
+    async def run_replace_recovery_phone(
+        browser_id: str,
+        account_info: dict,
+        new_phone: str,
+        close_after: bool,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        max_steps: int = 25,
+    ) -> tuple[bool, str]:
+        """执行替换辅助手机号自动化。"""
+        from automation.auto_replace_recovery_phone import auto_replace_recovery_phone
+
+        return await auto_replace_recovery_phone(
+            browser_id=browser_id,
+            account_info=account_info,
+            new_phone=new_phone,
+            close_after=close_after,
+            max_steps=max_steps,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+        )
+
+    @staticmethod
+    async def run_get_sheerlink(
+        browser_id: str,
+        account_info: dict,
+        close_after: bool,
+        api_key: str,
+        base_url: str | None,
+        model: str | None,
+        provider: str,
+        max_steps: int = 20,
+        save_to_file: bool = True,
+    ) -> tuple[bool, str, str, str]:
+        """执行获取 SheerLink 自动化。"""
+        from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
+
+        return await auto_get_sheerlink_ai(
+            browser_id=browser_id,
+            account_info=account_info,
+            close_after=close_after,
+            max_steps=max_steps,
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            provider=provider,
+            save_to_file=save_to_file,
+        )
+
+    @staticmethod
+    async def run_auto_subscribe_batch(
+        accounts: list[dict],
+        cards: list[dict],
+        cards_per_account: int,
+        concurrent_count: int,
+        sheerid_api_key: str,
+        close_browser_after: bool,
+        on_progress: Callable[[str, str, str], None] | None = None,
+        on_log: Callable[[str], None] | None = None,
+        on_complete: Callable[[str, Any], None] | None = None,
+        stop_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """执行一键全自动订阅批处理。"""
+        from automation.auto_subscribe import process_accounts_batch
+
+        return await process_accounts_batch(
+            accounts=accounts,
+            cards=cards,
+            cards_per_account=cards_per_account,
+            concurrent_count=concurrent_count,
+            sheerid_api_key=sheerid_api_key,
+            close_browser_after=close_browser_after,
+            on_progress=on_progress,
+            on_log=on_log,
+            on_complete=on_complete,
+            stop_check=stop_check,
+        )

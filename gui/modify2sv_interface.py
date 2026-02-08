@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout
 from qfluentwidgets import FluentIcon as FIF, LineEdit, BodyLabel
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_modify_2sv_phone import auto_modify_2sv_phone
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class Modify2SVWorker(QThread):
@@ -48,7 +48,7 @@ class Modify2SVWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在修改 2SV 手机...")
 
             try:
-                result = await auto_modify_2sv_phone(
+                result = await AutomationEngineAdapter.run_modify_2sv_phone(
                     profile_id=profile_id,
                     account_info=acc.get('account_info', {}),
                     new_phone=new_phone

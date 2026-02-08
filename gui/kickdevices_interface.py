@@ -8,7 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from qfluentwidgets import FluentIcon as FIF
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_kick_devices import auto_kick_devices
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class KickDevicesWorker(QThread):
@@ -45,7 +45,7 @@ class KickDevicesWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在踢出设备...")
 
             try:
-                result = await auto_kick_devices(
+                result = await AutomationEngineAdapter.run_kick_devices(
                     profile_id=profile_id,
                     account_info=acc.get('account_info', {})
                 )

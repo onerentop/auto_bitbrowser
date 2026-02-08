@@ -1,7 +1,7 @@
 # 架构改造执行计划（保存版）
 
 > 更新时间：2026-02-10
-> 状态：执行中（Phase 4）
+> 状态：执行中（Phase 5）
 
 ## 1. 背景与目标
 
@@ -60,7 +60,7 @@
 - 新增数据访问全部走仓储层。
 - `database.py` 职责显著收敛。
 
-### Phase 3：GUI 瘦身（计划中）
+### Phase 3：GUI 瘦身（执行中）
 
 - 将流程编排下沉至 `application/`。
 - GUI 仅负责交互与展示。
@@ -69,7 +69,14 @@
 
 - 关键 GUI 文件复杂度下降，业务分支从界面层移除。
 
-### Phase 4：自动化引擎统一（计划中）
+执行进度（2026-02-10）：
+
+- [x] Fluent 任务界面 `kickdevices/modify2sv/modifyauth/replaceemail/replacephone/sheerlink` 调用入口统一改为 `AutomationEngineAdapter`
+- [x] 传统窗口 `kick_devices_gui/modify_2sv_phone_gui/modify_authenticator_gui/replace_phone_gui/replace_email_gui/replace_email_v2_gui/get_sheerlink_ai_gui` 调用入口统一改为 `AutomationEngineAdapter`
+- [x] `bindcard_interface.py` 与 `bind_card_ai_gui.py` 改为通过适配层执行绑卡任务（保留 UI 行为）
+- [x] `sheerid_gui_v2.py` 重新获取链接流程改为通过适配层执行
+
+### Phase 4：自动化引擎统一（执行中）
 
 - 统一自动化主入口与适配层，减少双轨维护负担。
 
@@ -88,6 +95,8 @@
 - [x] `gui/config_ui.py` 的 Sub2API/SMS-Bus 配置入口改为通过 `Sub2APISettingsService`
 - [x] `gui/sheerid_interface.py` 改为通过 `SheerIDService` 读写 API Key，移除界面层直接依赖
 - [x] `gui/setting_interface.py` 的提供商连接测试配置解析改为通过 `SettingsService`
+- [x] `AutomationEngineAdapter` 新增踢设备/改2SV/改验证器/换辅助邮箱/换辅助手机/取 SheerLink 的统一入口及旧版兼容入口
+- [x] `gui/auto_subscribe_gui.py` 改为通过 `AutomationEngineAdapter.run_auto_subscribe_batch` 执行批处理链路
 
 ### Phase 5：测试与可观测性（持续）
 
@@ -101,6 +110,7 @@
 - [x] 新增 `tests/test_sub2api_settings_service.py` 覆盖掩码规则核心分支
 - [x] 新增 `tests/test_sheerid_service.py` 覆盖 SheerIDService 基础分支
 - [x] 扩展 `tests/test_settings_service.py` 覆盖提供商运行时配置解析分支
+- [x] 新增 `tests/test_automation_engine_adapter.py` 覆盖适配层批处理代理与空卡片边界分支
 - [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
 
 ---

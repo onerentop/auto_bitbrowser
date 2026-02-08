@@ -34,7 +34,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_kick_devices import auto_kick_devices
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -214,7 +214,7 @@ class KickDevicesWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg, kicked_count = await auto_kick_devices(
+                    success, msg, kicked_count = await AutomationEngineAdapter.run_kick_devices_legacy(
                         browser_id,
                         account_info,
                         self.close_after,

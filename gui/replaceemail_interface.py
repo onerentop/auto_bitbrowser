@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout
 from qfluentwidgets import FluentIcon as FIF, LineEdit, BodyLabel
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_replace_email import auto_replace_email
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class ReplaceEmailWorker(QThread):
@@ -48,7 +48,7 @@ class ReplaceEmailWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在替换辅助邮箱...")
 
             try:
-                result = await auto_replace_email(
+                result = await AutomationEngineAdapter.run_replace_email(
                     profile_id=profile_id,
                     account_info=acc.get('account_info', {}),
                     new_email=new_email

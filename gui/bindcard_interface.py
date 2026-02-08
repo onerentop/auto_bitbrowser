@@ -25,7 +25,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_bind_card_ai import auto_bind_card_ai
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -132,7 +132,7 @@ class BindCardWorker(QThread):
             self.progressSignal.emit(email, "处理中", "开始绑卡...")
 
             try:
-                result = await auto_bind_card_ai(
+                result = await AutomationEngineAdapter.run_bind_card(
                     profile_id=profile_id,
                     account_info=acc,
                     cards=self.cards,

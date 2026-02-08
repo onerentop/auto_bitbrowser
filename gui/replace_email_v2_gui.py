@@ -42,7 +42,7 @@ from services.ix_api import get_group_list, update_profile
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_replace_recovery_email import auto_replace_recovery_email
+from application.automation_engine_adapter import AutomationEngineAdapter
 from services.recovery_email_manager import RecoveryEmailManager, DAILY_BIND_LIMIT
 
 # 最大轮换重试次数
@@ -323,7 +323,7 @@ class ReplaceEmailV2Worker(QThread):
                             'secret': account.get('secret', ''),
                         }
 
-                        success, msg, error_type = await auto_replace_recovery_email(
+                        success, msg, error_type = await AutomationEngineAdapter.run_replace_recovery_email(
                             browser_id,
                             account_info,
                             new_email,

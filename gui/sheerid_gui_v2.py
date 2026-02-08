@@ -29,7 +29,7 @@ from services.sheerid_verifier import SheerIDVerifier
 from services.database import DBManager
 from core.config_manager import ConfigManager
 from services.ix_window import find_browser_by_email
-from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class VerifyWorkerV2(QThread):
@@ -272,7 +272,7 @@ class VerifyWorkerV2(QThread):
             asyncio.set_event_loop(loop)
             try:
                 success, msg, status, link = loop.run_until_complete(
-                    auto_get_sheerlink_ai(
+                    AutomationEngineAdapter.run_get_sheerlink(
                         browser_id=str(profile_id),
                         account_info=account_info,
                         close_after=True,

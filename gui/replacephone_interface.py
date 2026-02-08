@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout
 from qfluentwidgets import FluentIcon as FIF, LineEdit, BodyLabel
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_replace_recovery_phone import auto_replace_recovery_phone
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class ReplacePhoneWorker(QThread):
@@ -49,7 +49,7 @@ class ReplacePhoneWorker(QThread):
 
             try:
                 # 使用 StagehandGoogleEngine 版本
-                success, message = await auto_replace_recovery_phone(
+                success, message = await AutomationEngineAdapter.run_replace_recovery_phone(
                     browser_id=profile_id,
                     account_info=acc.get('account_info', {}),
                     new_phone=new_phone,

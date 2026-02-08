@@ -24,7 +24,7 @@ from services.database import DBManager
 from services.ix_window import get_browser_list
 from services.data_store import get_data_store
 from core.config_manager import ConfigManager
-from automation.auto_subscribe import AutoSubscriber, SubscribeResult, process_accounts_batch
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class AutoSubscribeWorker(QThread):
@@ -77,7 +77,7 @@ class AutoSubscribeWorker(QThread):
         def on_log(message):
             self.log_signal.emit(message)
 
-        def on_complete(email, result: SubscribeResult):
+        def on_complete(email, result):
             self.account_complete_signal.emit(
                 email,
                 result.success,
@@ -89,7 +89,7 @@ class AutoSubscribeWorker(QThread):
             """检查是否请求停止"""
             return not self.is_running
 
-        await process_accounts_batch(
+        await AutomationEngineAdapter.run_auto_subscribe_batch(
             accounts=self.accounts,
             cards=self.cards,
             cards_per_account=self.cards_per_account,

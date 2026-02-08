@@ -8,8 +8,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from qfluentwidgets import FluentIcon as FIF, CheckBox
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
 from core.config_manager import ConfigManager
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class GetSheerlinkWorker(QThread):
@@ -61,7 +61,7 @@ class GetSheerlinkWorker(QThread):
 
             try:
                 # auto_get_sheerlink_ai 返回元组: (success, message, status, link)
-                success, message, status, link = await auto_get_sheerlink_ai(
+                success, message, status, link = await AutomationEngineAdapter.run_get_sheerlink(
                     browser_id=str(profile_id),
                     account_info=acc.get('account_info', {}),
                     close_after=close_after,

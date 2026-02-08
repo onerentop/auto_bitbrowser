@@ -35,7 +35,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_replace_recovery_phone import auto_replace_recovery_phone
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -226,7 +226,7 @@ class ReplacePhoneWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg = await auto_replace_recovery_phone(
+                    success, msg = await AutomationEngineAdapter.run_replace_recovery_phone(
                         browser_id,
                         account_info,
                         self.new_phone,

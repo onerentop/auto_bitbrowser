@@ -8,7 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from qfluentwidgets import FluentIcon as FIF
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_modify_authenticator import auto_modify_authenticator
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class ModifyAuthWorker(QThread):
@@ -45,7 +45,7 @@ class ModifyAuthWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在修改身份验证器...")
 
             try:
-                result = await auto_modify_authenticator(
+                result = await AutomationEngineAdapter.run_modify_authenticator(
                     profile_id=profile_id,
                     account_info=acc.get('account_info', {})
                 )

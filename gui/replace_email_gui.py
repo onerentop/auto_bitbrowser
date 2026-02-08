@@ -33,7 +33,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_replace_recovery_email import auto_replace_recovery_email
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class ReplaceEmailWorker(QThread):
@@ -103,7 +103,7 @@ class ReplaceEmailWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg, error_type = await auto_replace_recovery_email(
+                    success, msg, error_type = await AutomationEngineAdapter.run_replace_recovery_email(
                         browser_id,
                         account_info,
                         self.new_email,

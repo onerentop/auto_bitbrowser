@@ -37,7 +37,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_modify_authenticator import auto_modify_authenticator
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -230,7 +230,7 @@ class ModifyAuthenticatorWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg, new_secret = await auto_modify_authenticator(
+                    success, msg, new_secret = await AutomationEngineAdapter.run_modify_authenticator_legacy(
                         browser_id,
                         account_info,
                         self.close_after,

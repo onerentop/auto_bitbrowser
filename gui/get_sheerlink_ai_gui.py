@@ -34,7 +34,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -227,7 +227,7 @@ class GetSheerlinkAIWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg, status, link = await auto_get_sheerlink_ai(
+                    success, msg, status, link = await AutomationEngineAdapter.run_get_sheerlink(
                         browser_id,
                         account_info,
                         self.close_after,

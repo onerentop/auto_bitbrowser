@@ -34,7 +34,7 @@ from services.ix_api import get_group_list
 from services.ix_window import get_browser_list
 from services.database import DBManager
 from core.config_manager import ConfigManager
-from automation.auto_bind_card_ai import auto_bind_card_ai
+from application.automation_engine_adapter import AutomationEngineAdapter
 
 
 class LoadDataWorker(QThread):
@@ -282,17 +282,22 @@ class BindCardAIWorker(QThread):
                         'secret': account.get('secret', ''),
                     }
 
-                    success, msg = await auto_bind_card_ai(
-                        browser_id,
-                        account_info,
-                        card_info,
-                        self.close_after,
-                        api_key=self.ai_config.get('api_key'),
-                        base_url=self.ai_config.get('base_url'),
-                        model=self.ai_config.get('model'),
-                        provider=self.ai_config.get('provider'),
-                        max_steps=self.ai_config.get('max_steps', 40),
+                    bind_result = await AutomationEngineAdapter.run_bind_card(
+                        profile_id=browser_id,
+                        account_info=account_info,
+                        cards=card_info,
+                        config={
+                            'close_after': self.close_after,
+                            'api_key': self.ai_config.get('api_key'),
+                            'base_url': self.ai_config.get('base_url'),
+                            'model': self.ai_config.get('model'),
+                            'provider': self.ai_config.get('provider'),
+                            'max_steps': self.ai_config.get('max_steps', 40),
+                        },
                     )
+
+                    success = bool(bind_result.get('success'))
+                    msg = bind_result.get('message', '')
 
                     if success:
                         self._log(f"[{index + 1}] ✅ {email}: {msg}")
