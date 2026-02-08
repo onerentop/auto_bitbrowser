@@ -28,6 +28,7 @@ from services.sub2api_client import Sub2APIClient
 from services.ix_api import get_profile_list
 from core.config_manager import ConfigManager
 from application.account_manager_service import AccountManagerService
+from application.account_task_orchestrator import AccountTaskOrchestrator
 
 
 class AccountWorkerThread(QThread):
@@ -241,100 +242,6 @@ class Detect403Worker(QThread):
             }
 
 
-class BatchBindWorker(QThread):
-    """批量绑定窗口工作线程"""
-    progress = pyqtSignal(str)  # 日志消息
-    progress_value = pyqtSignal(int, int)  # current, total
-    finished_bind = pyqtSignal(dict)  # 结果
-    error = pyqtSignal(str)
-
-    def __init__(self, matched_pairs: list, parent=None):
-        super().__init__(parent)
-        self.matched_pairs = matched_pairs  # [(email, browser_id), ...]
-
-    def run(self):
-        """执行绑定"""
-        try:
-            total = len(self.matched_pairs)
-            success_count = 0
-
-            for i, (email, browser_id) in enumerate(self.matched_pairs):
-                try:
-                    DBManager.bind_account_to_browser(email, browser_id)
-                    self.progress.emit(f"绑定: {email} -> {browser_id}")
-                    success_count += 1
-                except Exception as e:
-                    self.progress.emit(f"绑定失败: {email} - {e}")
-
-                self.progress_value.emit(i + 1, total)
-
-            self.finished_bind.emit({
-                "total": total,
-                "success_count": success_count,
-            })
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class BatchDeleteWorker(QThread):
-    """批量删除工作线程"""
-    progress = pyqtSignal(str)  # 日志消息
-    progress_value = pyqtSignal(int, int)  # current, total
-    finished_delete = pyqtSignal(dict)  # 结果
-    error = pyqtSignal(str)
-
-    def __init__(self, accounts: list, browser_ids: list, with_windows: bool = False, parent=None):
-        super().__init__(parent)
-        self.accounts = accounts
-        self.browser_ids = browser_ids
-        self.with_windows = with_windows
-
-    def run(self):
-        """执行删除"""
-        from services.ix_api import closeBrowser, deleteBrowser
-
-        try:
-            total = len(self.accounts)
-            deleted_accounts = 0
-            deleted_windows = 0
-
-            for i, (account, browser_id) in enumerate(zip(self.accounts, self.browser_ids)):
-                email = account.get("email", "")
-
-                try:
-                    if self.with_windows and browser_id:
-                        try:
-                            closeBrowser(browser_id)
-                        except Exception:
-                            pass
-
-                        try:
-                            result = deleteBrowser(browser_id)
-                            if result.get("success"):
-                                deleted_windows += 1
-                        except Exception:
-                            pass
-
-                    DBManager.delete_account(email)
-                    deleted_accounts += 1
-                    self.progress.emit(f"已删除: {email}")
-
-                except Exception as e:
-                    self.progress.emit(f"删除 {email} 失败: {e}")
-
-                self.progress_value.emit(i + 1, total)
-
-            self.finished_delete.emit({
-                "total": total,
-                "deleted_accounts": deleted_accounts,
-                "deleted_windows": deleted_windows,
-            })
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class AccountManagerInterface(BaseInterface):
     """账号管理界面 - Fluent Design 版本"""
 
@@ -342,8 +249,14 @@ class AccountManagerInterface(BaseInterface):
         super().__init__('accountManagerInterface', parent)
         self.worker_thread: Optional[AccountWorkerThread] = None
         self.detect403_worker: Optional[Detect403Worker] = None
-        self.batch_bind_worker: Optional[BatchBindWorker] = None
-        self.batch_delete_worker: Optional[BatchDeleteWorker] = None
+        self._batch_bind_thread = None
+        self._batch_bind_stop_flag = False
+        self._batch_bind_results = AccountTaskOrchestrator.create_batch_bind_results(0)
+        self._batch_bind_error = ""
+        self._batch_delete_thread = None
+        self._batch_delete_stop_flag = False
+        self._batch_delete_results = AccountTaskOrchestrator.create_batch_delete_results(0)
+        self._batch_delete_error = ""
         self._initUI()
         self._loadData()
 
@@ -1012,13 +925,13 @@ class AccountManagerInterface(BaseInterface):
                 hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive()
             ),
             batch_bind_running=bool(
-                include_batch_bind and self.batch_bind_worker and self.batch_bind_worker.isRunning()
+                include_batch_bind and hasattr(self, '_batch_bind_thread') and self._batch_bind_thread and self._batch_bind_thread.is_alive()
             ),
             detect_403_running=bool(
                 include_detect_403 and self.detect403_worker and self.detect403_worker.isRunning()
             ),
             batch_delete_running=bool(
-                include_batch_delete and self.batch_delete_worker and self.batch_delete_worker.isRunning()
+                include_batch_delete and hasattr(self, '_batch_delete_thread') and self._batch_delete_thread and self._batch_delete_thread.is_alive()
             ),
             wait_action=wait_action,
         )
@@ -1169,28 +1082,77 @@ class AccountManagerInterface(BaseInterface):
             self._setButtonsEnabled(False)
 
             # 保存未匹配数量用于完成回调
+            self._batch_bind_results = AccountTaskOrchestrator.create_batch_bind_results(len(matched))
+            self._batch_bind_error = ""
+            self._batch_bind_stop_flag = False
             self._batch_bind_not_matched_count = len(not_matched)
 
-            self.batch_bind_worker = BatchBindWorker(matched, self)
-            self.batch_bind_worker.progress.connect(self.log)
-            self.batch_bind_worker.progress_value.connect(self._onProgressValue)
-            self.batch_bind_worker.finished_bind.connect(self._onBatchBindFinished)
-            self.batch_bind_worker.error.connect(self._onBatchBindError)
-            self.batch_bind_worker.start()
+            from threading import Thread
+            from PyQt6.QtCore import QMetaObject, Q_ARG, Qt as QtCore_Qt
+
+            def safe_log(msg: str):
+                QMetaObject.invokeMethod(
+                    self.logText,
+                    "append",
+                    QtCore_Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+                )
+
+            def update_progress(value: int):
+                QMetaObject.invokeMethod(
+                    self.progressBar,
+                    "setValue",
+                    QtCore_Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(int, value)
+                )
+                QMetaObject.invokeMethod(
+                    self.statusLabel,
+                    "setText",
+                    QtCore_Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"处理中: {value}/{len(matched)}")
+                )
+
+            def run_batch_bind():
+                try:
+                    self._batch_bind_results = AccountTaskOrchestrator.execute_batch_bind(
+                        matched_pairs=matched,
+                        should_stop=lambda: self._batch_bind_stop_flag,
+                        bind_account_callback=DBManager.bind_account_to_browser,
+                        log_callback=safe_log,
+                        progress_callback=update_progress,
+                    )
+                except Exception as error:
+                    self._batch_bind_error = str(error)
+                finally:
+                    QTimer.singleShot(0, self._onBatchBindThreadCompleted)
+
+            self._batch_bind_thread = Thread(target=run_batch_bind, daemon=True)
+            self._batch_bind_thread.start()
 
         except Exception as e:
             self.log(f"批量绑定失败: {e}")
             self._showError("错误", f"批量绑定失败:\n{e}")
 
-    def _onBatchBindFinished(self, result: dict):
+    def _onBatchBindThreadCompleted(self):
+        """批量绑定线程结束回调（主线程）"""
+        if self._batch_bind_error:
+            self._onBatchBindError(self._batch_bind_error)
+            return
+        self._onBatchBindFinished()
+
+    def _onBatchBindFinished(self):
         """批量绑定完成回调"""
         self._setButtonsEnabled(True)
+        self._batch_bind_thread = None
 
-        total = result.get("total", 0)
-        success_count = result.get("success_count", 0)
+        total = self._batch_bind_results.get("total", 0)
+        success_count = self._batch_bind_results.get("success_count", 0)
+        failed_count = self._batch_bind_results.get("failed_count", 0)
         not_matched_count = getattr(self, '_batch_bind_not_matched_count', 0)
 
         self.log(f"批量绑定完成: {success_count}/{total}")
+        if failed_count:
+            self.log(f"绑定失败: {failed_count} 个")
         if not_matched_count:
             self.log(f"未匹配: {not_matched_count} 个")
 
@@ -1200,6 +1162,7 @@ class AccountManagerInterface(BaseInterface):
     def _onBatchBindError(self, error: str):
         """批量绑定错误回调"""
         self._setButtonsEnabled(True)
+        self._batch_bind_thread = None
         self.progressBar.setVisible(False)
         self.log(f"批量绑定失败: {error}")
         self._showError("错误", f"批量绑定失败:\n{error}")
@@ -1394,6 +1357,14 @@ class AccountManagerInterface(BaseInterface):
         if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
             self.log("正在停止开启共享任务...")
             self._enable_sharing_stop_flag = True
+
+        if hasattr(self, '_batch_bind_thread') and self._batch_bind_thread and self._batch_bind_thread.is_alive():
+            self.log("正在停止批量绑定...")
+            self._batch_bind_stop_flag = True
+
+        if hasattr(self, '_batch_delete_thread') and self._batch_delete_thread and self._batch_delete_thread.is_alive():
+            self.log("正在停止批量删除...")
+            self._batch_delete_stop_flag = True
 
     # ==================== 任务执行 ====================
 
@@ -1780,22 +1751,76 @@ class AccountManagerInterface(BaseInterface):
         # 保存 with_windows 标志用于完成回调
         self._batch_delete_with_windows = with_windows
 
-        self.batch_delete_worker = BatchDeleteWorker(accounts, browser_ids, with_windows, self)
-        self.batch_delete_worker.progress.connect(self.log)
-        self.batch_delete_worker.progress_value.connect(self._onProgressValue)
-        self.batch_delete_worker.finished_delete.connect(self._onBatchDeleteFinished)
-        self.batch_delete_worker.error.connect(self._onBatchDeleteError)
-        self.batch_delete_worker.start()
+        self._batch_delete_results = AccountTaskOrchestrator.create_batch_delete_results(len(accounts))
+        self._batch_delete_error = ""
+        self._batch_delete_stop_flag = False
 
-    def _onBatchDeleteFinished(self, result: dict):
+        from services.ix_api import closeBrowser, deleteBrowser
+        from threading import Thread
+        from PyQt6.QtCore import QMetaObject, Q_ARG, Qt as QtCore_Qt
+
+        def safe_log(msg: str):
+            QMetaObject.invokeMethod(
+                self.logText,
+                "append",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+            )
+
+        def update_progress(value: int):
+            QMetaObject.invokeMethod(
+                self.progressBar,
+                "setValue",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(int, value)
+            )
+            QMetaObject.invokeMethod(
+                self.statusLabel,
+                "setText",
+                QtCore_Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"处理中: {value}/{len(accounts)}")
+            )
+
+        def run_batch_delete():
+            try:
+                self._batch_delete_results = AccountTaskOrchestrator.execute_batch_delete(
+                    accounts=accounts,
+                    browser_ids=browser_ids,
+                    with_windows=with_windows,
+                    should_stop=lambda: self._batch_delete_stop_flag,
+                    delete_account_callback=DBManager.delete_account,
+                    close_browser_callback=closeBrowser,
+                    delete_browser_callback=deleteBrowser,
+                    log_callback=safe_log,
+                    progress_callback=update_progress,
+                )
+            except Exception as error:
+                self._batch_delete_error = str(error)
+            finally:
+                QTimer.singleShot(0, self._onBatchDeleteThreadCompleted)
+
+        self._batch_delete_thread = Thread(target=run_batch_delete, daemon=True)
+        self._batch_delete_thread.start()
+
+    def _onBatchDeleteThreadCompleted(self):
+        """批量删除线程结束回调（主线程）"""
+        if self._batch_delete_error:
+            self._onBatchDeleteError(self._batch_delete_error)
+            return
+        self._onBatchDeleteFinished()
+
+    def _onBatchDeleteFinished(self):
         """批量删除完成回调"""
         self._setButtonsEnabled(True)
+        self._batch_delete_thread = None
 
-        total = result.get("total", 0)
-        deleted_accounts = result.get("deleted_accounts", 0)
-        deleted_windows = result.get("deleted_windows", 0)
+        total = self._batch_delete_results.get("total", 0)
+        deleted_accounts = self._batch_delete_results.get("deleted_accounts", 0)
+        deleted_windows = self._batch_delete_results.get("deleted_windows", 0)
+        failed_count = self._batch_delete_results.get("failed_count", 0)
         with_windows = getattr(self, '_batch_delete_with_windows', False)
 
+        self.log(f"批量删除完成: 删除账号 {deleted_accounts}/{total}, 失败 {failed_count}")
         self._loadData()
 
         if with_windows:
@@ -1806,6 +1831,7 @@ class AccountManagerInterface(BaseInterface):
     def _onBatchDeleteError(self, error: str):
         """批量删除错误回调"""
         self._setButtonsEnabled(True)
+        self._batch_delete_thread = None
         self.progressBar.setVisible(False)
         self.log(f"批量删除失败: {error}")
         self._showError("错误", f"批量删除失败:\n{error}")
@@ -2025,13 +2051,7 @@ class AccountManagerInterface(BaseInterface):
         self.progressBar.setValue(0)
 
         self._batch_join_assignments = assignments
-        self._batch_join_results = {
-            "total": len(assignments),
-            "success_count": 0,
-            "failed_count": 0,
-            "failed_list": [],
-            "pro_usage": {},
-        }
+        self._batch_join_results = AccountTaskOrchestrator.create_batch_join_results(len(assignments))
         self._batch_join_stop_flag = False
 
         from threading import Thread
@@ -2054,85 +2074,14 @@ class AccountManagerInterface(BaseInterface):
             )
 
         def run_batch_join():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
             try:
-                from automation.auto_join_family import auto_join_family, _is_family_full_error
-
-                # 记录已满的 Pro 账户，避免重复尝试
-                full_pro_accounts = set()
-
-                for i, (invitee, pro) in enumerate(self._batch_join_assignments):
-                    if self._batch_join_stop_flag:
-                        safe_log("用户停止任务")
-                        break
-
-                    invitee_email = invitee.get("email", "")
-                    pro_email = pro.get("email", "")
-                    invitee_browser_id = invitee.get("browser_profile_id", "")
-                    pro_browser_id = pro.get("browser_profile_id", "")
-
-                    # 检查该 Pro 账户是否已标记为已满
-                    if pro_email in full_pro_accounts:
-                        safe_log(f"[{i+1}/{len(self._batch_join_assignments)}] ⏭️ 跳过 {invitee_email}，{pro_email} 家庭组已满")
-                        self._batch_join_results["failed_count"] += 1
-                        self._batch_join_results["failed_list"].append({
-                            "email": invitee_email,
-                            "error": f"Pro账户 {pro_email} 家庭组已满"
-                        })
-                        update_progress(i + 1)
-                        continue
-
-                    safe_log(f"[{i+1}/{len(self._batch_join_assignments)}] {invitee_email} -> {pro_email}")
-
-                    try:
-                        result = loop.run_until_complete(
-                            auto_join_family(
-                                inviter_account=pro,
-                                invitee_account=invitee,
-                                inviter_browser_id=pro_browser_id,
-                                invitee_browser_id=invitee_browser_id,
-                                callback=safe_log,
-                                close_browser_on_success=False,
-                            )
-                        )
-
-                        if result.success:
-                            self._batch_join_results["success_count"] += 1
-                            self._batch_join_results["pro_usage"][pro_email] = \
-                                self._batch_join_results["pro_usage"].get(pro_email, 0) + 1
-                            safe_log(f"{invitee_email} 成功加入 {pro_email} 的家庭组")
-                        else:
-                            self._batch_join_results["failed_count"] += 1
-                            self._batch_join_results["failed_list"].append({
-                                "email": invitee_email,
-                                "error": result.message or "未知错误"
-                            })
-                            safe_log(f"{invitee_email} 加入失败: {result.message}")
-
-                            # 检测是否为家庭组已满错误，标记该 Pro 账户
-                            if _is_family_full_error(result.message or ""):
-                                full_pro_accounts.add(pro_email)
-                                safe_log(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
-
-                    except Exception as e:
-                        self._batch_join_results["failed_count"] += 1
-                        self._batch_join_results["failed_list"].append({
-                            "email": invitee_email,
-                            "error": str(e)
-                        })
-                        safe_log(f"{invitee_email} 异常: {e}")
-
-                        # 异常消息也检测是否为已满
-                        if _is_family_full_error(str(e)):
-                            full_pro_accounts.add(pro_email)
-                            safe_log(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
-
-                    update_progress(i + 1)
-
+                self._batch_join_results = AccountTaskOrchestrator.execute_batch_join_family(
+                    assignments=self._batch_join_assignments,
+                    should_stop=lambda: self._batch_join_stop_flag,
+                    log_callback=safe_log,
+                    progress_callback=update_progress,
+                )
             finally:
-                loop.close()
                 QTimer.singleShot(0, self._onBatchJoinFamilyFinished)
 
         self._batch_join_thread = Thread(target=run_batch_join, daemon=True)
@@ -2228,14 +2177,7 @@ class AccountManagerInterface(BaseInterface):
 
         self._enable_sharing_accounts = accounts
         self._enable_sharing_browser_ids = browser_ids
-        self._enable_sharing_results = {
-            "total": len(accounts),
-            "success_count": 0,
-            "already_enabled_count": 0,
-            "family_created_count": 0,  # 新增：创建了家庭组的数量
-            "failed_count": 0,
-            "failed_list": [],
-        }
+        self._enable_sharing_results = AccountTaskOrchestrator.create_enable_family_sharing_results(len(accounts))
         self._enable_sharing_stop_flag = False
 
         from threading import Thread
@@ -2258,64 +2200,15 @@ class AccountManagerInterface(BaseInterface):
             )
 
         def run_enable_sharing():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
             try:
-                from automation.auto_enable_family_sharing import auto_enable_family_sharing
-
-                for i, (account, browser_id) in enumerate(
-                    zip(self._enable_sharing_accounts, self._enable_sharing_browser_ids)
-                ):
-                    if self._enable_sharing_stop_flag:
-                        safe_log("用户停止任务")
-                        break
-
-                    email = account.get("email", "")
-                    safe_log(f"[{i+1}/{len(self._enable_sharing_accounts)}] 开启共享: {email}")
-
-                    try:
-                        result = loop.run_until_complete(
-                            auto_enable_family_sharing(
-                                account=account,
-                                browser_id=browser_id,
-                                callback=safe_log,
-                                close_browser_on_success=False,
-                            )
-                        )
-
-                        if result.success:
-                            if result.was_already_enabled:
-                                self._enable_sharing_results["already_enabled_count"] += 1
-                                safe_log(f"✅ {email} 已开启共享（跳过）")
-                            else:
-                                self._enable_sharing_results["success_count"] += 1
-                                # 检查是否创建了家庭组
-                                if result.family_created:
-                                    self._enable_sharing_results["family_created_count"] += 1
-                                    safe_log(f"✅ {email} 成功创建家庭组并开启共享")
-                                else:
-                                    safe_log(f"✅ {email} 成功开启家庭共享")
-                        else:
-                            self._enable_sharing_results["failed_count"] += 1
-                            self._enable_sharing_results["failed_list"].append({
-                                "email": email,
-                                "error": result.message or "未知错误"
-                            })
-                            safe_log(f"❌ {email} 开启失败: {result.message}")
-
-                    except Exception as e:
-                        self._enable_sharing_results["failed_count"] += 1
-                        self._enable_sharing_results["failed_list"].append({
-                            "email": email,
-                            "error": str(e)
-                        })
-                        safe_log(f"❌ {email} 异常: {e}")
-
-                    update_progress(i + 1)
-
+                self._enable_sharing_results = AccountTaskOrchestrator.execute_enable_family_sharing(
+                    accounts=self._enable_sharing_accounts,
+                    browser_ids=self._enable_sharing_browser_ids,
+                    should_stop=lambda: self._enable_sharing_stop_flag,
+                    log_callback=safe_log,
+                    progress_callback=update_progress,
+                )
             finally:
-                loop.close()
                 QTimer.singleShot(0, self._onEnableFamilySharingFinished)
 
         self._enable_sharing_thread = Thread(target=run_enable_sharing, daemon=True)

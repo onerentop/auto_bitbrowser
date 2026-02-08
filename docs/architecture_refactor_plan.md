@@ -1,7 +1,7 @@
 # 架构改造执行计划（保存版）
 
-> 更新时间：2026-02-09
-> 状态：执行中（Phase 1）
+> 更新时间：2026-02-10
+> 状态：执行中（Phase 3）
 
 ## 1. 背景与目标
 
@@ -114,11 +114,15 @@
 - [x] 迁移账号管理界面的 Pro 检测与 403 检测前置筛选及提示文案构建
 - [x] 迁移账号管理界面的批量 403 解锁目标筛选、窗口过滤与确认文案构建
 - [x] 迁移账号管理界面的开启家庭共享候选筛选与确认文案构建
+- [x] 新增 `application/account_task_orchestrator.py`，下沉批量加入家庭组与开启家庭共享执行编排
+- [x] 继续下沉账号管理界面批量绑定/批量删除执行循环到 `AccountTaskOrchestrator`
+- [x] GUI 停止逻辑接入批量绑定/批量删除可中断标记（保持交互行为不变）
 - [x] 新增 `tests/test_account_manager_service.py` 覆盖核心纯逻辑分支
+- [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖批量绑定/批量删除执行器分支
 - [x] 完成编译与最小读写回归验证
 
 下一步建议：
 
 1. 在 `application/` 抽出设置 DTO 与映射工具，进一步减少界面层字段拼装。
-2. 继续下沉账号管理异步线程编排（批量绑定/批删/家庭组执行器）到独立 orchestrator。
-3. Phase 2 继续拆分 `ProxyRepository` 与 `CardRepository`，保持 DBManager 兼容门面。
+2. 继续下沉账号管理界面剩余异步执行器（如批量 403 检测）到 `application/`。
+3. Phase 2 继续拆分导入/导出与综合查询聚合逻辑，保持 DBManager 兼容门面。
