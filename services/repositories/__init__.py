@@ -5,6 +5,7 @@
 """
 
 from .account_repository import AccountRepository
+from .card_repository import CardRepository
+from .proxy_repository import ProxyRepository
 
-__all__ = ["AccountRepository"]
-
+__all__ = ["AccountRepository", "CardRepository", "ProxyRepository"]

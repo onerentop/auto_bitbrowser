@@ -43,7 +43,10 @@
 - [x] 新增 `AccountRepository`，承接账号核心查询/删除/可用 Pro 查询/待解锁查询
 - [x] `DBManager` 对以上方法改为兼容委托（调用方无感）
 - [x] 新增 `tests/test_account_repository.py`，覆盖仓储纯 SQL 过滤逻辑
-- [ ] 继续拆分代理/卡片/历史记录仓储
+- [x] 新增 `CardRepository` 与 `ProxyRepository`，下沉卡片/代理核心 CRUD 与统计 SQL
+- [x] `DBManager` 对卡片/代理核心方法改为兼容委托（调用方无感）
+- [x] 新增 `tests/test_card_repository.py` 与 `tests/test_proxy_repository.py`
+- [ ] 继续拆分历史记录与恢复邮箱池相关仓储
 
 验收标准：
 
