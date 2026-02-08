@@ -82,6 +82,7 @@
 - [x] 新增 `application/automation_engine_adapter.py` 统一承接 automation / sub2api 外部调用
 - [x] `AccountTaskOrchestrator` 改造为优先依赖 `AutomationEngineAdapter`
 - [x] 兼容保留原 GUI 行为与结果结构，确保迁移可回滚
+- [x] 旧版 `account_manager_gui.py` 的主批处理线程改为复用统一 orchestrator 执行链路
 
 ### Phase 5：测试与可观测性（持续）
 

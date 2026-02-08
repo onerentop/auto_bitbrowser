@@ -21,6 +21,7 @@ from services.database import DBManager
 from services.sub2api_client import Sub2APIClient
 from services.ix_api import get_profile_list
 from core.config_manager import ConfigManager
+from application.account_task_orchestrator import AccountTaskOrchestrator
 
 
 class AccountWorkerThread(QThread):
@@ -60,78 +61,24 @@ class AccountWorkerThread(QThread):
     def run(self):
         """执行任务"""
         try:
-            # 创建事件循环
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                result = loop.run_until_complete(self._run_async())
-                self.finished.emit(result)
-            finally:
-                loop.close()
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-    async def _run_async(self):
-        """异步执行任务"""
-        from automation.batch_account_processor import BatchAccountProcessor
-
-        processor = BatchAccountProcessor(
-            concurrency=self.concurrency,
-            callback=lambda msg: self.progress.emit(msg),
-        )
-
-        if self.task_type == "login":
-            result = await processor.batch_login(
+            result = AccountTaskOrchestrator.execute_account_worker_task(
+                task_type=self.task_type,
                 accounts=self.accounts,
                 browser_ids=self.browser_ids,
-            )
-            return {"type": "login", "result": result.to_dict()}
-
-        elif self.task_type == "oauth":
-            async with Sub2APIClient() as client:
-                result = await processor.batch_oauth(
-                    accounts=self.accounts,
-                    browser_ids=self.browser_ids,
-                    sub2api_client=client,
-                    auto_bind_proxy=self.auto_bind_proxy,
-                )
-                return {"type": "oauth", "result": result.to_dict()}
-
-        elif self.task_type == "login_and_oauth":
-            async with Sub2APIClient() as client:
-                results = await processor.batch_login_and_oauth(
-                    accounts=self.accounts,
-                    browser_ids=self.browser_ids,
-                    sub2api_client=client,
-                    auto_bind_proxy=self.auto_bind_proxy,
-                )
-                return {
-                    "type": "login_and_oauth",
-                    "login_result": results["login"].to_dict(),
-                    "oauth_result": results["oauth"].to_dict(),
-                }
-
-        elif self.task_type == "unlock_403":
-            result = await processor.batch_unlock_403(
-                accounts=self.accounts,
-                browser_ids=self.browser_ids,
+                concurrency=self.concurrency,
                 sms_token=self.sms_token,
                 country_id=self.country_id,
                 project_id=self.project_id,
                 max_retries=self.max_retries,
+                auto_bind_proxy=self.auto_bind_proxy,
+                should_stop=lambda: self._stop_flag,
+                log_callback=self.progress.emit,
+                progress_callback=lambda current, total: None,
             )
-            return {"type": "unlock_403", "result": result.to_dict()}
+            self.finished.emit(result)
 
-        elif self.task_type == "detect_pro":
-            result = await processor.batch_detect_pro(
-                accounts=self.accounts,
-                browser_ids=self.browser_ids,
-            )
-            return {"type": "detect_pro", "result": result.to_dict()}
-
-        return {"type": "unknown"}
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class AccountManagerDialog(QDialog):
@@ -1375,6 +1322,12 @@ class AccountManagerDialog(QDialog):
         self.progress_bar.setVisible(False)
 
         task_type = result.get("type", "")
+
+        if task_type == "stopped":
+            stopped_task_type = result.get("task_type", "")
+            self.log(f"⏹️ 任务已停止: {stopped_task_type}")
+            self._load_data()
+            return
 
         if task_type == "login":
             r = result.get("result", {})
