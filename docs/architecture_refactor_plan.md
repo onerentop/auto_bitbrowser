@@ -50,7 +50,10 @@
 - [x] 新增 `RecoveryEmailRepository`，下沉辅助邮箱池/每日用量/绑定关系方法
 - [x] `DBManager` 对历史记录与恢复邮箱池核心方法改为兼容委托（调用方无感）
 - [x] 新增 `tests/test_history_repository.py` 与 `tests/test_recovery_email_repository.py`
-- [ ] 继续拆分 Sub2API / 账号状态更新相关仓储
+- [x] 扩展 `AccountRepository`，下沉 Sub2API / 登录状态 / 解锁状态 / 家庭组状态核心方法
+- [x] `DBManager` 对以上方法改为兼容委托（调用方无感）
+- [x] 新增 `tests/test_account_repository_status.py` 覆盖状态迁移核心分支
+- [ ] 继续拆分导入/导出与综合查询查询聚合逻辑（保留兼容 Facade）
 
 验收标准：
 
