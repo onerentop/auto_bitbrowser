@@ -16,7 +16,6 @@ from qfluentwidgets import (
     FluentIcon as FIF, Pivot,
     setTheme, Theme, InfoBar, InfoBarPosition, MessageBox,
 )
-from core.config_manager import ConfigManager
 from application.settings_service import SettingsService, SettingsSnapshot
 
 # 尝试导入 AI Agent 模块
@@ -447,14 +446,20 @@ class ConfigTab(ScrollArea):
     def _testProviderConnection(self, provider: str):
         """测试指定提供商的连接"""
         if provider == "gemini":
-            api_key = self.geminiApiKeyInput.text().strip() or ConfigManager.get_ai_provider_api_key("gemini")
-            base_url = self.geminiBaseUrlInput.text().strip() or ConfigManager.get_ai_provider_base_url("gemini")
-            model = self.geminiModelCombo.currentText().strip() or ConfigManager.get_ai_provider_model("gemini")
+            api_key, base_url, model = SettingsService.resolve_provider_runtime_config(
+                provider="gemini",
+                api_key_input=self.geminiApiKeyInput.text(),
+                base_url_input=self.geminiBaseUrlInput.text(),
+                model_input=self.geminiModelCombo.currentText(),
+            )
             btn = self.geminiTestBtn
         else:
-            api_key = self.anthropicApiKeyInput.text().strip() or ConfigManager.get_ai_provider_api_key("anthropic")
-            base_url = self.anthropicBaseUrlInput.text().strip() or ConfigManager.get_ai_provider_base_url("anthropic")
-            model = self.anthropicModelCombo.currentText().strip() or ConfigManager.get_ai_provider_model("anthropic")
+            api_key, base_url, model = SettingsService.resolve_provider_runtime_config(
+                provider="anthropic",
+                api_key_input=self.anthropicApiKeyInput.text(),
+                base_url_input=self.anthropicBaseUrlInput.text(),
+                model_input=self.anthropicModelCombo.currentText(),
+            )
             btn = self.anthropicTestBtn
 
         if not api_key:

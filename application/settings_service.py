@@ -52,6 +52,20 @@ class SettingsService:
     """设置页应用服务"""
 
     @staticmethod
+    def resolve_provider_runtime_config(
+        provider: str,
+        api_key_input: str,
+        base_url_input: str,
+        model_input: str,
+    ) -> tuple[str, str, str]:
+        """解析提供商运行时配置（优先使用界面输入，回退到已保存配置）。"""
+        provider_name = provider.strip().lower()
+        api_key = api_key_input.strip() or ConfigManager.get_ai_provider_api_key(provider_name)
+        base_url = base_url_input.strip() or ConfigManager.get_ai_provider_base_url(provider_name)
+        model = model_input.strip() or ConfigManager.get_ai_provider_model(provider_name)
+        return api_key, base_url, model
+
+    @staticmethod
     def load_settings_snapshot() -> SettingsSnapshot:
         """加载设置快照"""
         ConfigManager.load()
@@ -124,4 +138,3 @@ class SettingsService:
     def set_data_dir(path: str) -> None:
         """设置数据目录"""
         ConfigManager.set("data_dir", path)
-

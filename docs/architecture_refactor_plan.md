@@ -87,6 +87,7 @@
 - [x] 新增 `application/sub2api_settings_service.py`，下沉 Sub2API/SMS-Bus 设置读写与 Token 掩码逻辑
 - [x] `gui/config_ui.py` 的 Sub2API/SMS-Bus 配置入口改为通过 `Sub2APISettingsService`
 - [x] `gui/sheerid_interface.py` 改为通过 `SheerIDService` 读写 API Key，移除界面层直接依赖
+- [x] `gui/setting_interface.py` 的提供商连接测试配置解析改为通过 `SettingsService`
 
 ### Phase 5：测试与可观测性（持续）
 
@@ -99,6 +100,7 @@
 - [x] 新增 `tests/test_account_io_repository.py` 覆盖综合查询仓储分支
 - [x] 新增 `tests/test_sub2api_settings_service.py` 覆盖掩码规则核心分支
 - [x] 新增 `tests/test_sheerid_service.py` 覆盖 SheerIDService 基础分支
+- [x] 扩展 `tests/test_settings_service.py` 覆盖提供商运行时配置解析分支
 - [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
 
 ---
