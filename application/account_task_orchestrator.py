@@ -11,6 +11,8 @@ import asyncio
 import re
 from typing import Callable, Sequence
 
+from application.automation_engine_adapter import AutomationEngineAdapter
+
 
 class AccountTaskOrchestrator:
     """账号任务编排执行器。"""
@@ -85,8 +87,6 @@ class AccountTaskOrchestrator:
         progress_callback: Callable[[int], None],
     ) -> dict:
         """执行批量加入家庭组任务。"""
-        from automation.auto_join_family import auto_join_family, _is_family_full_error
-
         results = AccountTaskOrchestrator.create_batch_join_results(len(assignments))
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -122,7 +122,7 @@ class AccountTaskOrchestrator:
 
                 try:
                     task_result = loop.run_until_complete(
-                        auto_join_family(
+                        AutomationEngineAdapter.run_join_family(
                             inviter_account=pro_account,
                             invitee_account=invitee,
                             inviter_browser_id=pro_browser_id,
@@ -146,7 +146,7 @@ class AccountTaskOrchestrator:
                         )
                         log_callback(f"{invitee_email} 加入失败: {task_result.message}")
 
-                        if _is_family_full_error(task_result.message or ""):
+                        if AutomationEngineAdapter.is_family_full_error(task_result.message or ""):
                             full_pro_accounts.add(pro_email)
                             log_callback(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
 
@@ -155,7 +155,7 @@ class AccountTaskOrchestrator:
                     results["failed_list"].append({"email": invitee_email, "error": str(error)})
                     log_callback(f"{invitee_email} 异常: {error}")
 
-                    if _is_family_full_error(str(error)):
+                    if AutomationEngineAdapter.is_family_full_error(str(error)):
                         full_pro_accounts.add(pro_email)
                         log_callback(f"⚠️ {pro_email} 家庭组已满，后续分配将跳过")
 
@@ -175,8 +175,6 @@ class AccountTaskOrchestrator:
         progress_callback: Callable[[int], None],
     ) -> dict:
         """执行批量开启家庭共享任务。"""
-        from automation.auto_enable_family_sharing import auto_enable_family_sharing
-
         results = AccountTaskOrchestrator.create_enable_family_sharing_results(len(accounts))
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -193,7 +191,7 @@ class AccountTaskOrchestrator:
 
                 try:
                     task_result = loop.run_until_complete(
-                        auto_enable_family_sharing(
+                        AutomationEngineAdapter.run_enable_family_sharing(
                             account=account,
                             browser_id=browser_id,
                             callback=log_callback,
@@ -319,10 +317,9 @@ class AccountTaskOrchestrator:
     ) -> dict:
         """执行批量 403 检测任务。"""
         from services.database import DBManager
-        from services.sub2api_client import Sub2APIClient
 
         async def _run_async() -> dict:
-            async with Sub2APIClient() as client:
+            async with AutomationEngineAdapter.create_sub2api_client() as client:
                 accounts_to_check = [
                     account for account in accounts
                     if account.get("sub2api_status") == "linked"
@@ -401,12 +398,9 @@ class AccountTaskOrchestrator:
         progress_callback: Callable[[int, int], None],
     ) -> dict:
         """执行账号批处理线程任务（登录/OAuth/解锁/Pro检测）。"""
-        from automation.batch_account_processor import BatchAccountProcessor
-        from services.sub2api_client import Sub2APIClient
-
         total = len(accounts)
         completed_count = 0
-        processor = BatchAccountProcessor(concurrency=concurrency)
+        processor = AutomationEngineAdapter.create_batch_processor(concurrency=concurrency)
         stop_logged = False
 
         def processor_progress(message: str):
@@ -434,67 +428,22 @@ class AccountTaskOrchestrator:
         async def _run_async() -> dict:
             if should_stop():
                 return AccountTaskOrchestrator.create_stopped_result(task_type)
+            result = await AutomationEngineAdapter.run_account_worker_task(
+                task_type=task_type,
+                processor=processor,
+                accounts=accounts,
+                browser_ids=browser_ids,
+                auto_bind_proxy=auto_bind_proxy,
+                sms_token=sms_token,
+                country_id=country_id,
+                project_id=project_id,
+                max_retries=max_retries,
+            )
 
-            if task_type == "login":
-                result = await processor.batch_login(
-                    accounts=list(accounts),
-                    browser_ids=list(browser_ids),
-                )
-                if should_stop():
-                    return AccountTaskOrchestrator.create_stopped_result(task_type)
-                return {"type": "login", "result": result.to_dict()}
+            if should_stop():
+                return AccountTaskOrchestrator.create_stopped_result(task_type)
 
-            if task_type == "oauth":
-                async with Sub2APIClient() as client:
-                    result = await processor.batch_oauth(
-                        accounts=list(accounts),
-                        browser_ids=list(browser_ids),
-                        sub2api_client=client,
-                        auto_bind_proxy=auto_bind_proxy,
-                    )
-                if should_stop():
-                    return AccountTaskOrchestrator.create_stopped_result(task_type)
-                return {"type": "oauth", "result": result.to_dict()}
-
-            if task_type == "login_and_oauth":
-                async with Sub2APIClient() as client:
-                    results = await processor.batch_login_and_oauth(
-                        accounts=list(accounts),
-                        browser_ids=list(browser_ids),
-                        sub2api_client=client,
-                        auto_bind_proxy=auto_bind_proxy,
-                    )
-                if should_stop():
-                    return AccountTaskOrchestrator.create_stopped_result(task_type)
-                return {
-                    "type": "login_and_oauth",
-                    "login_result": results["login"].to_dict(),
-                    "oauth_result": results["oauth"].to_dict(),
-                }
-
-            if task_type == "unlock_403":
-                result = await processor.batch_unlock_403(
-                    accounts=list(accounts),
-                    browser_ids=list(browser_ids),
-                    sms_token=sms_token,
-                    country_id=country_id,
-                    project_id=project_id,
-                    max_retries=max_retries,
-                )
-                if should_stop():
-                    return AccountTaskOrchestrator.create_stopped_result(task_type)
-                return {"type": "unlock_403", "result": result.to_dict()}
-
-            if task_type == "detect_pro":
-                result = await processor.batch_detect_pro(
-                    accounts=list(accounts),
-                    browser_ids=list(browser_ids),
-                )
-                if should_stop():
-                    return AccountTaskOrchestrator.create_stopped_result(task_type)
-                return {"type": "detect_pro", "result": result.to_dict()}
-
-            return {"type": "unknown"}
+            return result
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -513,15 +462,13 @@ class AccountTaskOrchestrator:
         log_callback: Callable[[str], None],
     ) -> dict:
         """执行单个加入家庭组任务。"""
-        from automation.auto_join_family import auto_join_family
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
             try:
                 result = loop.run_until_complete(
-                    auto_join_family(
+                    AutomationEngineAdapter.run_join_family(
                         inviter_account=inviter_account,
                         invitee_account=invitee_account,
                         inviter_browser_id=inviter_browser_id,

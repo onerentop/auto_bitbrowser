@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from application.account_task_orchestrator import AccountTaskOrchestrator
 
@@ -241,3 +242,41 @@ def test_execute_single_join_family_exception_fallback(monkeypatch):
 
     assert result["success"] is False
     assert "join failed" in result["message"]
+
+
+def test_execute_account_worker_task_uses_adapter():
+    class FakeResult:
+        def to_dict(self):
+            return {"ok": True}
+
+    class FakeProcessor:
+        callback = None
+
+        async def batch_login(self, accounts, browser_ids):
+            return FakeResult()
+
+    with patch(
+        "application.account_task_orchestrator.AutomationEngineAdapter.create_batch_processor",
+        return_value=FakeProcessor(),
+    ):
+        with patch(
+            "application.account_task_orchestrator.AutomationEngineAdapter.run_account_worker_task",
+            return_value={"type": "login", "result": {"ok": True}},
+        ) as mocked_run:
+            result = AccountTaskOrchestrator.execute_account_worker_task(
+                task_type="login",
+                accounts=[{"email": "a@example.com"}],
+                browser_ids=["b1"],
+                concurrency=1,
+                sms_token=None,
+                country_id=None,
+                project_id=None,
+                max_retries=None,
+                auto_bind_proxy=False,
+                should_stop=lambda: False,
+                log_callback=lambda _: None,
+                progress_callback=lambda current, total: None,
+            )
+
+    assert result["type"] == "login"
+    mocked_run.assert_called_once()

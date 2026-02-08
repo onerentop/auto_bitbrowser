@@ -77,10 +77,22 @@
 
 - 批处理链路仅依赖统一适配接口。
 
+执行进度（2026-02-10）：
+
+- [x] 新增 `application/automation_engine_adapter.py` 统一承接 automation / sub2api 外部调用
+- [x] `AccountTaskOrchestrator` 改造为优先依赖 `AutomationEngineAdapter`
+- [x] 兼容保留原 GUI 行为与结果结构，确保迁移可回滚
+
 ### Phase 5：测试与可观测性（持续）
 
 - 建立单元/集成/冒烟分层。
 - 统一日志字段与故障定位路径。
+
+执行进度（2026-02-10）：
+
+- [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖停止分支、异常兜底与适配层调用路径
+- [x] 新增 `tests/test_account_io_repository.py` 覆盖综合查询仓储分支
+- [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
 
 ---
 
@@ -138,4 +150,4 @@
 
 1. 在 `application/` 抽出设置 DTO 与映射工具，进一步减少界面层字段拼装。
 2. 继续收敛 GUI 文件规模（拆分 `account_manager_interface.py` 内部私有方法簇）。
-3. Phase 4 启动自动化引擎统一适配层的最小可用实现与迁移验证。
+3. 在适配层基础上逐步迁移其他界面模块到统一入口（优先 `account_manager_gui.py`）。
