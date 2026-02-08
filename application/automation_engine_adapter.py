@@ -15,12 +15,14 @@ class AutomationEngineAdapter:
 
     _bind_card_cursor: int = 0
 
+    @staticmethod
     def create_sub2api_client():
         """创建 Sub2API 客户端。"""
         from services.sub2api_client import Sub2APIClient
 
         return Sub2APIClient()
 
+    @staticmethod
     def create_batch_processor(concurrency: int, callback: Callable[[str], None] | None = None):
         """创建批处理器实例。"""
         from automation.batch_account_processor import BatchAccountProcessor
@@ -140,28 +142,24 @@ class AutomationEngineAdapter:
     async def run_bind_card(
         profile_id: str,
         account_info: dict,
-        cards: Sequence[dict] | dict,
+        cards: Sequence[dict],
         config: dict | None = None,
     ) -> dict:
         """执行 AI 绑卡自动化。"""
         from automation.auto_bind_card_ai import auto_bind_card_ai
 
         config = config or {}
-        card_info: dict
-        if isinstance(cards, dict):
-            card_info = cards
-        else:
-            cards_list = list(cards)
-            if not cards_list:
-                return {"success": False, "message": "无可用卡片"}
+        cards_list = list(cards)
+        if not cards_list:
+            return {"success": False, "message": "无可用卡片"}
 
-            rotate_card = bool(config.get("rotate_card", True))
-            if rotate_card:
-                index = AutomationEngineAdapter._bind_card_cursor % len(cards_list)
-                AutomationEngineAdapter._bind_card_cursor += 1
-                card_info = cards_list[index]
-            else:
-                card_info = cards_list[0]
+        rotate_card = bool(config.get("rotate_card", True))
+        if rotate_card:
+            index = AutomationEngineAdapter._bind_card_cursor % len(cards_list)
+            AutomationEngineAdapter._bind_card_cursor += 1
+            card_info = cards_list[index]
+        else:
+            card_info = cards_list[0]
 
         success, message = await auto_bind_card_ai(
             browser_id=str(profile_id),
@@ -259,11 +257,6 @@ class AutomationEngineAdapter:
         account_info: dict,
         new_phone: str,
         close_after: bool,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        model: str | None = None,
-        provider: str | None = None,
-        max_steps: int = 25,
     ) -> tuple[bool, str]:
         """执行替换辅助手机号自动化。"""
         from automation.auto_replace_recovery_phone import auto_replace_recovery_phone
@@ -273,13 +266,9 @@ class AutomationEngineAdapter:
             account_info=account_info,
             new_phone=new_phone,
             close_after=close_after,
-            max_steps=max_steps,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            provider=provider,
         )
 
+    @staticmethod
     async def run_get_sheerlink(
         browser_id: str,
         account_info: dict,
