@@ -27,6 +27,7 @@ from services.database import DBManager
 from services.sub2api_client import Sub2APIClient
 from services.ix_api import get_profile_list
 from core.config_manager import ConfigManager
+from application.account_manager_service import AccountManagerService
 
 
 class AccountWorkerThread(QThread):
@@ -946,8 +947,7 @@ class AccountManagerInterface(BaseInterface):
 
     def _getSelectedAccounts(self) -> tuple[List[dict], List[str]]:
         """获取选中的账号和对应的浏览器 ID"""
-        accounts = []
-        browser_ids = []
+        selected_rows = []
 
         for row in range(self.table.rowCount()):
             if self.table.isRowHidden(row):
@@ -963,24 +963,81 @@ class AccountManagerInterface(BaseInterface):
                     if email_item:
                         email = email_item.text()
                         browser_id = browser_item.text() if browser_item else ""
+                        selected_rows.append((email, browser_id))
 
-                        account = DBManager.get_account_by_email(email)
-                        if account:
-                            accounts.append(account)
-                            browser_ids.append(browser_id if browser_id != "-" else "")
+        return AccountManagerService.resolve_selected_accounts(selected_rows)
 
-        return accounts, browser_ids
+    def _getSelectedRows(self) -> List[tuple[str, str]]:
+        """获取选中行的 (email, browser_id) 列表"""
+        selected_rows: List[tuple[str, str]] = []
+
+        for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
+
+            checkbox_widget = self.table.cellWidget(row, 0)
+            if not checkbox_widget:
+                continue
+
+            checkbox = checkbox_widget.findChild(CheckBox)
+            if not checkbox or not checkbox.isChecked():
+                continue
+
+            email_item = self.table.item(row, 1)
+            browser_item = self.table.item(row, 5)
+            if not email_item:
+                continue
+
+            email = email_item.text()
+            browser_id = browser_item.text() if browser_item else ""
+            selected_rows.append((email, browser_id))
+
+        return selected_rows
+
+    def _checkTaskConflicts(
+        self,
+        *,
+        include_batch_bind: bool = False,
+        include_detect_403: bool = False,
+        include_batch_delete: bool = False,
+        wait_action: str = "",
+    ) -> bool:
+        """统一检查任务冲突，避免重复分支判断"""
+        ok, message = AccountManagerService.check_task_conflicts(
+            worker_running=bool(self.worker_thread and self.worker_thread.isRunning()),
+            batch_join_running=bool(
+                hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive()
+            ),
+            enable_sharing_running=bool(
+                hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive()
+            ),
+            batch_bind_running=bool(
+                include_batch_bind and self.batch_bind_worker and self.batch_bind_worker.isRunning()
+            ),
+            detect_403_running=bool(
+                include_detect_403 and self.detect403_worker and self.detect403_worker.isRunning()
+            ),
+            batch_delete_running=bool(
+                include_batch_delete and self.batch_delete_worker and self.batch_delete_worker.isRunning()
+            ),
+            wait_action=wait_action,
+        )
+
+        if not ok:
+            self._showWarning("警告", message)
+            return False
+
+        return True
 
     # ==================== 单个账号操作 ====================
 
     def _singleLogin(self, email: str):
         """单个账号登录"""
-        account = DBManager.get_account_by_email(email)
+        account, browser_id = AccountManagerService.get_account_and_browser(email)
         if not account:
             self.log(f"未找到账号: {email}")
             return
 
-        browser_id = account.get("browser_profile_id", "")
         if not browser_id:
             self.log(f"账号未绑定窗口: {email}")
             self._showWarning("警告", f"账号 {email} 未绑定浏览器窗口")
@@ -990,12 +1047,11 @@ class AccountManagerInterface(BaseInterface):
 
     def _singleOAuth(self, email: str):
         """单个账号 OAuth"""
-        account = DBManager.get_account_by_email(email)
+        account, browser_id = AccountManagerService.get_account_and_browser(email)
         if not account:
             self.log(f"未找到账号: {email}")
             return
 
-        browser_id = account.get("browser_profile_id", "")
         if not browser_id:
             self.log(f"账号未绑定窗口: {email}")
             self._showWarning("警告", f"账号 {email} 未绑定浏览器窗口")
@@ -1013,7 +1069,7 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先选择要登录的账号")
             return
 
-        missing = [a["email"] for a, b in zip(accounts, browser_ids) if not b]
+        missing = AccountManagerService.collect_missing_browser_emails(accounts, browser_ids)
         if missing:
             self._showWarning(
                 "警告",
@@ -1032,7 +1088,7 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先选择要进行 OAuth 的账号")
             return
 
-        missing = [a["email"] for a, b in zip(accounts, browser_ids) if not b]
+        missing = AccountManagerService.collect_missing_browser_emails(accounts, browser_ids)
         if missing:
             self._showWarning(
                 "警告",
@@ -1050,7 +1106,7 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先选择账号")
             return
 
-        missing = [a["email"] for a, b in zip(accounts, browser_ids) if not b]
+        missing = AccountManagerService.collect_missing_browser_emails(accounts, browser_ids)
         if missing:
             self._showWarning(
                 "警告",
@@ -1062,37 +1118,11 @@ class AccountManagerInterface(BaseInterface):
 
     def onBatchBind(self):
         """批量绑定窗口（根据窗口名称匹配邮箱）"""
-        if self.batch_bind_worker and self.batch_bind_worker.isRunning():
-            self._showWarning("警告", "批量绑定任务正在执行中")
+        if not self._checkTaskConflicts(include_batch_bind=True):
             return
 
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
-            return
-
-        # 获取未绑定窗口的选中账号
-        unbound_accounts = []
-        for row in range(self.table.rowCount()):
-            if self.table.isRowHidden(row):
-                continue
-
-            checkbox_widget = self.table.cellWidget(row, 0)
-            if checkbox_widget:
-                checkbox = checkbox_widget.findChild(CheckBox)
-                if checkbox and checkbox.isChecked():
-                    browser_item = self.table.item(row, 5)
-                    if not browser_item or browser_item.text() == "-":
-                        email_item = self.table.item(row, 1)
-                        if email_item:
-                            unbound_accounts.append(email_item.text())
+        selected_rows = self._getSelectedRows()
+        unbound_accounts = AccountManagerService.collect_unbound_emails(selected_rows)
 
         if not unbound_accounts:
             self._showInfo("提示", "请先选择未绑定窗口的账号")
@@ -1104,36 +1134,10 @@ class AccountManagerInterface(BaseInterface):
                 self._showWarning("警告", "未找到可用的浏览器窗口\n请先在主界面创建窗口")
                 return
 
-            # 获取已绑定的窗口ID列表
-            all_accounts = DBManager.get_all_accounts()
-            bound_browser_ids = {
-                acc.get("browser_profile_id", "")
-                for acc in all_accounts
-                if acc.get("browser_profile_id")
-            }
-
-            # 构建窗口名称到ID的映射
-            window_map = {}
-            for w in windows:
-                name = w.get("name", "").strip().lower()
-                profile_id = str(w.get("profile_id", ""))
-                if name and profile_id:
-                    window_map[name] = profile_id
-
-            # 匹配账号和窗口
-            matched = []
-            not_matched = []
-            already_bound = []
-            for email in unbound_accounts:
-                email_lower = email.strip().lower()
-                if email_lower in window_map:
-                    browser_id = window_map[email_lower]
-                    if browser_id in bound_browser_ids:
-                        already_bound.append((email, browser_id))
-                    else:
-                        matched.append((email, browser_id))
-                else:
-                    not_matched.append(email)
+            matched, not_matched, already_bound = AccountManagerService.match_accounts_to_windows(
+                target_emails=unbound_accounts,
+                windows=windows,
+            )
 
             if not matched:
                 msg = "未找到可用的匹配窗口!\n\n"
@@ -1208,40 +1212,26 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先选择要检测的账号")
             return
 
-        valid_accounts = []
-        valid_browser_ids = []
-        skipped_not_logged = []
-        skipped_no_browser = []
-
-        for account, browser_id in zip(accounts, browser_ids):
-            email = account.get("email", "")
-            login_status = account.get("login_status", "")
-
-            if login_status != "logged_in":
-                skipped_not_logged.append(email)
-                continue
-
-            if not browser_id:
-                skipped_no_browser.append(email)
-                continue
-
-            valid_accounts.append(account)
-            valid_browser_ids.append(browser_id)
+        (
+            valid_accounts,
+            valid_browser_ids,
+            skipped_not_logged,
+            skipped_no_browser,
+        ) = AccountManagerService.prepare_detect_pro_candidates(accounts, browser_ids)
 
         if not valid_accounts:
-            msg = "没有可检测的账号\n\n"
-            if skipped_not_logged:
-                msg += f"❌ {len(skipped_not_logged)} 个未登录\n"
-            if skipped_no_browser:
-                msg += f"❌ {len(skipped_no_browser)} 个未绑定窗口"
+            msg = AccountManagerService.build_no_detect_pro_candidates_message(
+                skipped_not_logged=skipped_not_logged,
+                skipped_no_browser=skipped_no_browser,
+            )
             self._showWarning("警告", msg)
             return
 
-        msg = f"将检测 {len(valid_accounts)} 个已登录账号的 Pro 状态"
-        if skipped_not_logged:
-            msg += f"\n\n⚠️ 跳过 {len(skipped_not_logged)} 个未登录账号"
-        if skipped_no_browser:
-            msg += f"\n⚠️ 跳过 {len(skipped_no_browser)} 个未绑定窗口账号"
+        msg = AccountManagerService.build_detect_pro_confirm_message(
+            valid_count=len(valid_accounts),
+            skipped_not_logged_count=len(skipped_not_logged),
+            skipped_no_browser_count=len(skipped_no_browser),
+        )
 
         w = MessageBox("确认检测", msg + "\n\n是否继续？", self)
         if not w.exec():
@@ -1251,20 +1241,7 @@ class AccountManagerInterface(BaseInterface):
 
     def onDetect403(self):
         """检测 403 需要解锁的账号（异步执行）- 只检测选中的账号"""
-        if self.detect403_worker and self.detect403_worker.isRunning():
-            self._showWarning("警告", "检测任务正在执行中")
-            return
-
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
+        if not self._checkTaskConflicts(include_detect_403=True):
             return
 
         # 获取选中的账号
@@ -1275,16 +1252,14 @@ class AccountManagerInterface(BaseInterface):
             return
 
         # 筛选出已关联的账号
-        linked_accounts = [
-            acc for acc in selected_accounts
-            if acc.get("sub2api_status") == "linked"
-        ]
+        linked_accounts = AccountManagerService.filter_linked_accounts_for_detect403(selected_accounts)
 
         if not linked_accounts:
             self._showWarning(
                 "提示",
-                f"选中的 {len(selected_accounts)} 个账号中没有已关联的账号\n\n"
-                "只有 Sub2API 状态为「已关联」的账号才能检测 403"
+                AccountManagerService.build_no_linked_accounts_for_detect403_message(
+                    len(selected_accounts)
+                )
             )
             return
 
@@ -1297,7 +1272,7 @@ class AccountManagerInterface(BaseInterface):
         self._setButtonsEnabled(False)
 
         # 创建并启动工作线程（传入选中的账号）
-        self.detect403_worker = Detect403Worker(selected_accounts, self)
+        self.detect403_worker = Detect403Worker(linked_accounts, self)
         self.detect403_worker.progress.connect(self.log)
         self.detect403_worker.progress_value.connect(self._onProgressValue)
         self.detect403_worker.finished_detect.connect(self._onDetect403Finished)
@@ -1338,22 +1313,17 @@ class AccountManagerInterface(BaseInterface):
         """批量解锁 403 账号"""
         selected_accounts, selected_browser_ids = self._getSelectedAccounts()
 
-        accounts_to_unlock = []
-        browser_ids = []
+        accounts_to_unlock: List[dict] = []
+        browser_ids: List[str] = []
 
         if selected_accounts:
-            for account, browser_id in zip(selected_accounts, selected_browser_ids):
-                unlock_status = account.get("unlock_status", "")
-                if unlock_status in ("needs_unlock", "unlock_failed"):
-                    accounts_to_unlock.append(account)
-                    browser_ids.append(browser_id)
+            accounts_to_unlock, browser_ids = AccountManagerService.collect_unlock_targets_from_selected(
+                selected_accounts,
+                selected_browser_ids,
+            )
 
             if not accounts_to_unlock:
-                self._showInfo(
-                    "提示",
-                    "选中的账号中没有需要解锁的\n\n"
-                    "请选择 unlock_status 为 needs_unlock 或 unlock_failed 的账号"
-                )
+                self._showInfo("提示", AccountManagerService.build_no_selected_unlock_targets_message())
                 return
 
             self.log(f"用户选中了 {len(selected_accounts)} 个账号，其中 {len(accounts_to_unlock)} 个需要解锁")
@@ -1366,18 +1336,15 @@ class AccountManagerInterface(BaseInterface):
 
             w = MessageBox(
                 "确认",
-                f"未选择账号，是否解锁全部 {len(all_needing_unlock)} 个需要解锁的账号？\n\n"
-                "提示: 可以先勾选要解锁的账号再点击此按钮",
+                AccountManagerService.build_unlock_all_confirm_message(len(all_needing_unlock)),
                 self
             )
             if not w.exec():
                 return
 
-            for account in all_needing_unlock:
-                browser_id = account.get("browser_profile_id", "")
-                if browser_id:
-                    accounts_to_unlock.append(account)
-                    browser_ids.append(browser_id)
+            accounts_to_unlock, browser_ids = AccountManagerService.collect_unlock_targets_from_all(
+                all_needing_unlock
+            )
 
         # 检查 SMS-Bus Token
         sms_token = ConfigManager.get_sms_bus_token()
@@ -1389,16 +1356,9 @@ class AccountManagerInterface(BaseInterface):
             )
             return
 
-        accounts_with_browser = []
-        valid_browser_ids = []
-        no_browser = []
-
-        for account, browser_id in zip(accounts_to_unlock, browser_ids):
-            if browser_id and browser_id != "-":
-                accounts_with_browser.append(account)
-                valid_browser_ids.append(browser_id)
-            else:
-                no_browser.append(account.get("email", ""))
+        accounts_with_browser, valid_browser_ids, no_browser = (
+            AccountManagerService.split_accounts_with_browser(accounts_to_unlock, browser_ids)
+        )
 
         if not accounts_with_browser:
             self._showWarning("警告", "所有需要解锁的账号都未绑定窗口")
@@ -1408,10 +1368,12 @@ class AccountManagerInterface(BaseInterface):
         project_id = ConfigManager.get_sms_bus_default_project_id()
         self.log(f"SMS-Bus 配置: country_id={country_id}, project_id={project_id}")
 
-        msg = f"将解锁 {len(accounts_with_browser)} 个账号"
-        if no_browser:
-            msg += f"\n\n⚠️ {len(no_browser)} 个账号未绑定窗口（已跳过）"
-        msg += f"\n\n国家ID: {country_id or '自动'} | 服务ID: {project_id or '自动'}"
+        msg = AccountManagerService.build_unlock_confirm_message(
+            unlockable_count=len(accounts_with_browser),
+            no_browser_count=len(no_browser),
+            country_id=country_id,
+            project_id=project_id,
+        )
 
         w = MessageBox("确认解锁", msg + "\n\n是否继续？", self)
         if not w.exec():
@@ -1437,16 +1399,7 @@ class AccountManagerInterface(BaseInterface):
 
     def _startTask(self, task_type: str, accounts: List[dict], browser_ids: List[str]):
         """启动任务"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
+        if not self._checkTaskConflicts():
             return
 
         self.log(f"开始 {task_type} 任务，共 {len(accounts)} 个账号...")
@@ -1480,16 +1433,7 @@ class AccountManagerInterface(BaseInterface):
         sms_token: str,
     ):
         """启动解锁任务"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
+        if not self._checkTaskConflicts():
             return
 
         self.log(f"开始解锁任务，共 {len(accounts)} 个账号...")
@@ -1808,20 +1752,7 @@ class AccountManagerInterface(BaseInterface):
 
     def _deleteSelectedAccounts(self, with_windows: bool = False):
         """批量删除选中的账号（异步执行）"""
-        if self.batch_delete_worker and self.batch_delete_worker.isRunning():
-            self._showWarning("警告", "批量删除任务正在执行中")
-            return
-
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中，请等待完成后再删除")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中，请等待完成后再删除")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中，请等待完成后再删除")
+        if not self._checkTaskConflicts(include_batch_delete=True, wait_action="删除"):
             return
 
         accounts, browser_ids = self._getSelectedAccounts()
@@ -1830,10 +1761,10 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先勾选要删除的账号")
             return
 
-        if with_windows:
-            msg = f"确定要删除选中的 {len(accounts)} 个账号及其对应的浏览器窗口吗？\n\n⚠️ 此操作不可恢复！"
-        else:
-            msg = f"确定要删除选中的 {len(accounts)} 个账号吗？\n\n注意：仅删除账号记录，不会删除对应的浏览器窗口。"
+        msg = AccountManagerService.build_batch_delete_confirm_message(
+            total=len(accounts),
+            with_windows=with_windows,
+        )
 
         w = MessageBox("确认删除", msg, self)
         if not w.exec():
@@ -2010,41 +1941,11 @@ class AccountManagerInterface(BaseInterface):
 
         注意：会过滤掉正在被其他任务处理的账户（通过 invite_lock_manager 检查）
         """
-        from services.invite_lock import invite_lock_manager
-
-        assignments = []
-        pro_index = 0
-        skipped_locked = []
-
-        # family_member_count: 0=未检测, 1-6=实际成员数
-        # Pro账户至少有管理员自己，所以初始最小值为1
-        pro_slots = {
-            acc['email']: 6 - max((acc.get('family_member_count') or 0), 1)
-            for acc in pro_accounts
-        }
-
-        for invitee in invitees:
-            invitee_email = invitee.get("email", "")
-
-            # 检查是否正在被其他任务处理
-            if invite_lock_manager.is_locked(invitee_email):
-                skipped_locked.append(invitee_email)
-                continue
-
-            while pro_index < len(pro_accounts):
-                pro_email = pro_accounts[pro_index]['email']
-                if pro_slots[pro_email] > 0:
-                    assignments.append((invitee, pro_accounts[pro_index]))
-                    pro_slots[pro_email] -= 1
-                    break
-                else:
-                    pro_index += 1
-            else:
-                break
-
-        # 返回分配结果（跳过数量通过属性记录，供调用方使用）
-        self._last_skipped_locked_count = len(skipped_locked)
-
+        assignments, skipped_locked_count = AccountManagerService.allocate_to_pro_accounts(
+            invitees=invitees,
+            pro_accounts=pro_accounts,
+        )
+        self._last_skipped_locked_count = skipped_locked_count
         return assignments
 
     def onBatchJoinFamily(self):
@@ -2055,44 +1956,24 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先勾选要加入家庭组的账号")
             return
 
-        normal_accounts = []
-        normal_browser_ids = []
-        skipped_already_pro = []
-        skipped_not_logged = []
-        skipped_no_browser = []
-
-        for account, browser_id in zip(accounts, browser_ids):
-            email = account.get("email", "")
-            is_pro = account.get("is_pro", "unknown")
-            login_status = account.get("login_status", "")
-
-            if is_pro in ("yes", "family_yes"):
-                skipped_already_pro.append(email)
-                continue
-
-            if login_status != "logged_in":
-                skipped_not_logged.append(email)
-                continue
-
-            if not browser_id:
-                skipped_no_browser.append(email)
-                continue
-
-            normal_accounts.append(account)
-            normal_browser_ids.append(browser_id)
+        (
+            normal_accounts,
+            normal_browser_ids,
+            skipped_already_pro,
+            skipped_not_logged,
+            skipped_no_browser,
+        ) = AccountManagerService.prepare_family_join_candidates(accounts, browser_ids)
 
         if not normal_accounts:
-            msg = "没有可加入家庭组的普通账户\n\n"
-            if skipped_already_pro:
-                msg += f"⚠️ {len(skipped_already_pro)} 个已是 Pro 会员\n"
-            if skipped_not_logged:
-                msg += f"⚠️ {len(skipped_not_logged)} 个未登录\n"
-            if skipped_no_browser:
-                msg += f"⚠️ {len(skipped_no_browser)} 个未绑定窗口"
+            msg = AccountManagerService.build_no_family_candidates_message(
+                skipped_already_pro=skipped_already_pro,
+                skipped_not_logged=skipped_not_logged,
+                skipped_no_browser=skipped_no_browser,
+            )
             self._showWarning("警告", msg)
             return
 
-        pro_accounts = DBManager.get_available_pro_accounts()
+        pro_accounts = AccountManagerService.get_available_pro_accounts()
 
         if not pro_accounts:
             self._showWarning(
@@ -2118,25 +1999,11 @@ class AccountManagerInterface(BaseInterface):
             self._showWarning("警告", msg)
             return
 
-        pro_usage_preview = {}
-        for invitee, pro in assignments:
-            pro_email = pro.get("email", "")
-            pro_usage_preview[pro_email] = pro_usage_preview.get(pro_email, 0) + 1
-
-        unassigned_count = len(normal_accounts) - len(assignments) - skipped_locked_count
-
-        msg = f"即将分配 {len(assignments)} 个普通账户到家庭组\n\n"
-        msg += "分配预览:\n"
-        for i, (invitee, pro) in enumerate(assignments[:10]):
-            msg += f"  • {invitee.get('email', '')} -> {pro.get('email', '')}\n"
-        if len(assignments) > 10:
-            msg += f"  ... 等 {len(assignments)} 个\n"
-
-        if unassigned_count > 0:
-            msg += f"\n⚠️ {unassigned_count} 个账户因 Pro 名额不足未能分配\n"
-
-        if skipped_locked_count > 0:
-            msg += f"⚠️ {skipped_locked_count} 个账户正在被其他任务处理，已跳过\n"
+        msg = AccountManagerService.build_family_assignments_preview_message(
+            assignments=assignments,
+            normal_accounts_count=len(normal_accounts),
+            skipped_locked_count=skipped_locked_count,
+        )
 
         w = MessageBox("确认加入家庭组", msg, self)
         if not w.exec():
@@ -2146,16 +2013,7 @@ class AccountManagerInterface(BaseInterface):
 
     def _startBatchJoinFamily(self, assignments: list):
         """启动批量加入家庭组任务"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
+        if not self._checkTaskConflicts():
             return
 
         self.log(f"开始批量加入家庭组，共 {len(assignments)} 个账户...")
@@ -2325,54 +2183,29 @@ class AccountManagerInterface(BaseInterface):
             self._showInfo("提示", "请先勾选要开启共享的 Pro 账号")
             return
 
-        # 筛选符合条件的账号
-        valid_accounts = []
-        valid_browser_ids = []
-        skipped_not_pro = []
-        skipped_not_logged = []
-        skipped_no_browser = []
-
-        for account, browser_id in zip(accounts, browser_ids):
-            email = account.get("email", "")
-            is_pro = account.get("is_pro", "unknown")
-            login_status = account.get("login_status", "")
-
-            # 只处理普通 Pro 账户
-            if is_pro != "yes":
-                skipped_not_pro.append(email)
-                continue
-
-            if login_status != "logged_in":
-                skipped_not_logged.append(email)
-                continue
-
-            if not browser_id:
-                skipped_no_browser.append(email)
-                continue
-
-            # 允许重复开启共享（已开启的会检测到并返回已开启状态）
-            valid_accounts.append(account)
-            valid_browser_ids.append(browser_id)
+        (
+            valid_accounts,
+            valid_browser_ids,
+            skipped_not_pro,
+            skipped_not_logged,
+            skipped_no_browser,
+        ) = AccountManagerService.prepare_enable_family_sharing_candidates(accounts, browser_ids)
 
         if not valid_accounts:
-            msg = "没有可开启共享的普通 Pro 账户\n\n"
-            if skipped_not_pro:
-                msg += f"⚠️ {len(skipped_not_pro)} 个不是普通 Pro 账户\n"
-            if skipped_not_logged:
-                msg += f"⚠️ {len(skipped_not_logged)} 个未登录\n"
-            if skipped_no_browser:
-                msg += f"⚠️ {len(skipped_no_browser)} 个未绑定窗口"
+            msg = AccountManagerService.build_no_enable_family_sharing_candidates_message(
+                skipped_not_pro=skipped_not_pro,
+                skipped_not_logged=skipped_not_logged,
+                skipped_no_browser=skipped_no_browser,
+            )
             self._showWarning("警告", msg)
             return
 
-        # 确认操作
-        msg = f"将为 {len(valid_accounts)} 个普通 Pro 账户开启家庭共享"
-        if skipped_not_pro:
-            msg += f"\n\n⚠️ 跳过 {len(skipped_not_pro)} 个非普通 Pro 账户"
-        if skipped_not_logged:
-            msg += f"\n⚠️ 跳过 {len(skipped_not_logged)} 个未登录账户"
-        if skipped_no_browser:
-            msg += f"\n⚠️ 跳过 {len(skipped_no_browser)} 个未绑定窗口账户"
+        msg = AccountManagerService.build_enable_family_sharing_confirm_message(
+            valid_count=len(valid_accounts),
+            skipped_not_pro_count=len(skipped_not_pro),
+            skipped_not_logged_count=len(skipped_not_logged),
+            skipped_no_browser_count=len(skipped_no_browser),
+        )
 
         w = MessageBox("确认开启共享", msg + "\n\n是否继续？", self)
         if not w.exec():
@@ -2382,16 +2215,7 @@ class AccountManagerInterface(BaseInterface):
 
     def _startEnableFamilySharingTask(self, accounts: list, browser_ids: list):
         """启动开启家庭共享任务"""
-        if self.worker_thread and self.worker_thread.isRunning():
-            self._showWarning("警告", "已有任务在执行中")
-            return
-
-        if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
-            self._showWarning("警告", "批量加入家庭组任务正在执行中")
-            return
-
-        if hasattr(self, '_enable_sharing_thread') and self._enable_sharing_thread.is_alive():
-            self._showWarning("警告", "开启共享任务正在执行中")
+        if not self._checkTaskConflicts():
             return
 
         self.log(f"开始批量开启家庭共享，共 {len(accounts)} 个账户...")
