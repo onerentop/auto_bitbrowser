@@ -3,7 +3,6 @@
 完整迁移自 account_manager_gui.py，提供账号状态管理、批量登录、批量 OAuth 功能
 """
 
-import asyncio
 from typing import List, Optional
 from datetime import datetime
 
@@ -24,7 +23,6 @@ from qfluentwidgets import (
 
 from gui.base_interface import BaseInterface
 from services.database import DBManager
-from services.sub2api_client import Sub2APIClient
 from services.ix_api import get_profile_list
 from core.config_manager import ConfigManager
 from application.account_manager_service import AccountManagerService
@@ -69,96 +67,24 @@ class AccountWorkerThread(QThread):
     def run(self):
         """执行任务"""
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            try:
-                result = loop.run_until_complete(self._run_async())
-                self.finished.emit(result)
-            finally:
-                loop.close()
-
-        except Exception as e:
-            self.error.emit(str(e))
-
-    async def _run_async(self):
-        """异步执行任务"""
-        from automation.batch_account_processor import BatchAccountProcessor
-        import re
-
-        total = len(self.accounts)
-        self._completed_count = 0
-
-        def progress_callback(msg: str):
-            """进度回调，解析消息并发送进度"""
-            self.progress.emit(msg)
-            # 检测完成标记：成功/失败/跳过
-            if any(keyword in msg for keyword in ["✓", "✗", "成功", "失败", "跳过", "完成:"]):
-                # 尝试从消息中提取 [X/Y] 格式
-                match = re.search(r'\[(\d+)/(\d+)\]', msg)
-                if match:
-                    current = int(match.group(1))
-                    self.progress_value.emit(current, total)
-                else:
-                    # 简单计数
-                    self._completed_count += 1
-                    self.progress_value.emit(min(self._completed_count, total), total)
-
-        processor = BatchAccountProcessor(
-            concurrency=self.concurrency,
-            callback=progress_callback,
-        )
-
-        if self.task_type == "login":
-            result = await processor.batch_login(
+            result = AccountTaskOrchestrator.execute_account_worker_task(
+                task_type=self.task_type,
                 accounts=self.accounts,
                 browser_ids=self.browser_ids,
-            )
-            return {"type": "login", "result": result.to_dict()}
-
-        elif self.task_type == "oauth":
-            async with Sub2APIClient() as client:
-                result = await processor.batch_oauth(
-                    accounts=self.accounts,
-                    browser_ids=self.browser_ids,
-                    sub2api_client=client,
-                    auto_bind_proxy=self.auto_bind_proxy,
-                )
-                return {"type": "oauth", "result": result.to_dict()}
-
-        elif self.task_type == "login_and_oauth":
-            async with Sub2APIClient() as client:
-                results = await processor.batch_login_and_oauth(
-                    accounts=self.accounts,
-                    browser_ids=self.browser_ids,
-                    sub2api_client=client,
-                    auto_bind_proxy=self.auto_bind_proxy,
-                )
-                return {
-                    "type": "login_and_oauth",
-                    "login_result": results["login"].to_dict(),
-                    "oauth_result": results["oauth"].to_dict(),
-                }
-
-        elif self.task_type == "unlock_403":
-            result = await processor.batch_unlock_403(
-                accounts=self.accounts,
-                browser_ids=self.browser_ids,
+                concurrency=self.concurrency,
                 sms_token=self.sms_token,
                 country_id=self.country_id,
                 project_id=self.project_id,
                 max_retries=self.max_retries,
+                auto_bind_proxy=self.auto_bind_proxy,
+                should_stop=lambda: self._stop_flag,
+                log_callback=self.progress.emit,
+                progress_callback=self.progress_value.emit,
             )
-            return {"type": "unlock_403", "result": result.to_dict()}
+            self.finished.emit(result)
 
-        elif self.task_type == "detect_pro":
-            result = await processor.batch_detect_pro(
-                accounts=self.accounts,
-                browser_ids=self.browser_ids,
-            )
-            return {"type": "detect_pro", "result": result.to_dict()}
-
-        return {"type": "unknown"}
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class AccountManagerInterface(BaseInterface):
@@ -1414,6 +1340,14 @@ class AccountManagerInterface(BaseInterface):
 
         task_type = result.get("type", "")
 
+        if task_type == "stopped":
+            stopped_task_type = result.get("task_type", "")
+            self.log(f"任务已停止: {stopped_task_type}")
+            self.progressBar.setVisible(False)
+            self.statusLabel.setText("任务已停止")
+            self._loadData()
+            return
+
         if task_type == "login":
             r = result.get("result", {})
             self.log(f"登录完成: 成功 {r.get('success_count', 0)}, 失败 {r.get('failed_count', 0)}, 跳过 {r.get('skipped_count', 0)}")
@@ -1905,31 +1839,23 @@ class AccountManagerInterface(BaseInterface):
             )
 
         def run_async_join():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
             try:
-                from automation.auto_join_family import auto_join_family
-                result = loop.run_until_complete(
-                    auto_join_family(
-                        inviter_account=inviter_account,
-                        invitee_account=invitee_account,
-                        inviter_browser_id=inviter_browser_id,
-                        invitee_browser_id=invitee_browser_id,
-                        callback=safe_log,
-                    )
+                result = AccountTaskOrchestrator.execute_single_join_family(
+                    inviter_account=inviter_account,
+                    invitee_account=invitee_account,
+                    inviter_browser_id=inviter_browser_id,
+                    invitee_browser_id=invitee_browser_id,
+                    log_callback=safe_log,
                 )
 
-                if result.success:
+                if result.get("success"):
                     safe_log(f"{invitee_email} 成功加入 {inviter_account.get('email', '')} 的家庭组")
                     QTimer.singleShot(0, self._loadData)
                 else:
-                    safe_log(f"加入家庭组失败: {result.message}")
+                    safe_log(f"加入家庭组失败: {result.get('message', '')}")
 
             except Exception as e:
                 safe_log(f"加入家庭组异常: {e}")
-            finally:
-                loop.close()
 
         thread = Thread(target=run_async_join, daemon=True)
         thread.start()

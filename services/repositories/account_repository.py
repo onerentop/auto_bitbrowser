@@ -20,6 +20,122 @@ class AccountRepository:
     """账号数据仓储（纯数据访问，不包含 GUI/业务编排）。"""
 
     @staticmethod
+    def upsert_account(
+        email: str,
+        password: str | None,
+        recovery_email: str | None,
+        secret_key: str | None,
+        link: str | None,
+        status: str | None,
+        message: str | None,
+        sheerid_steps: int | None,
+        last_failed_step: str | None,
+        last_error: str | None,
+        browser_profile_id: str | None,
+        connection_factory: ConnectionFactory,
+        db_lock: Lock,
+    ) -> bool:
+        """插入或更新账号信息。"""
+        if not email:
+            print("[DB] upsert_account: email 为空，跳过")
+            return False
+
+        try:
+            with db_lock:
+                conn = connection_factory()
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT * FROM accounts WHERE email = ?", (email,))
+                exists = cursor.fetchone()
+
+                if exists:
+                    fields = []
+                    values = []
+                    if password is not None:
+                        fields.append("password = ?")
+                        values.append(password)
+                    if recovery_email is not None:
+                        fields.append("recovery_email = ?")
+                        values.append(recovery_email)
+                    if secret_key is not None:
+                        fields.append("secret_key = ?")
+                        values.append(secret_key)
+                    if link is not None:
+                        fields.append("verification_link = ?")
+                        values.append(link)
+                    if status is not None:
+                        fields.append("status = ?")
+                        values.append(status)
+                    if message is not None:
+                        fields.append("message = ?")
+                        values.append(message)
+                    if sheerid_steps is not None:
+                        fields.append("sheerid_steps = ?")
+                        values.append(sheerid_steps)
+                    if last_failed_step is not None:
+                        fields.append("last_failed_step = ?")
+                        values.append(last_failed_step if last_failed_step else None)
+                    if last_error is not None:
+                        fields.append("last_error = ?")
+                        values.append(last_error if last_error else None)
+                    if browser_profile_id is not None:
+                        fields.append("browser_profile_id = ?")
+                        values.append(browser_profile_id)
+
+                    if fields:
+                        fields.append("updated_at = CURRENT_TIMESTAMP")
+                        values.append(email)
+                        sql = f"UPDATE accounts SET {', '.join(fields)} WHERE email = ?"
+                        cursor.execute(sql, values)
+                        print(f"[DB] 更新账号: {email}, 状态: {status}")
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO accounts (
+                            email, password, recovery_email, secret_key,
+                            verification_link, status, message, sheerid_steps,
+                            last_failed_step, last_error, browser_profile_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            email,
+                            password,
+                            recovery_email,
+                            secret_key,
+                            link,
+                            status or "pending",
+                            message,
+                            sheerid_steps or 0,
+                            last_failed_step,
+                            last_error,
+                            browser_profile_id,
+                        ),
+                    )
+                    print(f"[DB] 插入新账号: {email}, 状态: {status or 'pending'}")
+
+                conn.commit()
+                conn.close()
+                return True
+        except Exception as error:
+            print(f"[DB ERROR] upsert_account 失败，email: {email}, 错误: {error}")
+            return False
+
+    @staticmethod
+    def get_accounts_by_status(
+        status: str,
+        connection_factory: ConnectionFactory,
+        db_lock: Lock,
+    ) -> list[dict]:
+        """按业务状态查询账号。"""
+        with db_lock:
+            conn = connection_factory()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM accounts WHERE status = ?", (status,))
+            rows = cursor.fetchall()
+            conn.close()
+            return [dict(row) for row in rows]
+
+    @staticmethod
     def get_all_accounts(connection_factory: ConnectionFactory, db_lock: Lock) -> list[dict]:
         """查询全部账号。"""
         with db_lock:

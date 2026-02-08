@@ -8,6 +8,7 @@ Why:
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Callable, Sequence
 
 
@@ -65,6 +66,15 @@ class AccountTaskOrchestrator:
             "total": total,
             "needs_unlock": 0,
             "accounts": [],
+        }
+
+    @staticmethod
+    def create_stopped_result(task_type: str) -> dict:
+        """创建统一的停止任务结果。"""
+        return {
+            "type": "stopped",
+            "task_type": task_type,
+            "message": "用户停止任务",
         }
 
     @staticmethod
@@ -372,5 +382,162 @@ class AccountTaskOrchestrator:
 
         try:
             return loop.run_until_complete(_run_async())
+        finally:
+            loop.close()
+
+    @staticmethod
+    def execute_account_worker_task(
+        task_type: str,
+        accounts: Sequence[dict],
+        browser_ids: Sequence[str],
+        concurrency: int,
+        sms_token: str | None,
+        country_id: int | None,
+        project_id: int | None,
+        max_retries: int | None,
+        auto_bind_proxy: bool,
+        should_stop: Callable[[], bool],
+        log_callback: Callable[[str], None],
+        progress_callback: Callable[[int, int], None],
+    ) -> dict:
+        """执行账号批处理线程任务（登录/OAuth/解锁/Pro检测）。"""
+        from automation.batch_account_processor import BatchAccountProcessor
+        from services.sub2api_client import Sub2APIClient
+
+        total = len(accounts)
+        completed_count = 0
+        processor = BatchAccountProcessor(concurrency=concurrency)
+        stop_logged = False
+
+        def processor_progress(message: str):
+            nonlocal completed_count, stop_logged
+
+            log_callback(message)
+
+            if should_stop():
+                processor.stop()
+                if not stop_logged:
+                    stop_logged = True
+                    log_callback("用户停止任务")
+
+            if any(keyword in message for keyword in ["✓", "✗", "成功", "失败", "跳过", "完成:"]):
+                match = re.search(r"\[(\d+)/(\d+)\]", message)
+                if match:
+                    current = int(match.group(1))
+                    progress_callback(current, total)
+                else:
+                    completed_count += 1
+                    progress_callback(min(completed_count, total), total)
+
+        processor.callback = processor_progress
+
+        async def _run_async() -> dict:
+            if should_stop():
+                return AccountTaskOrchestrator.create_stopped_result(task_type)
+
+            if task_type == "login":
+                result = await processor.batch_login(
+                    accounts=list(accounts),
+                    browser_ids=list(browser_ids),
+                )
+                if should_stop():
+                    return AccountTaskOrchestrator.create_stopped_result(task_type)
+                return {"type": "login", "result": result.to_dict()}
+
+            if task_type == "oauth":
+                async with Sub2APIClient() as client:
+                    result = await processor.batch_oauth(
+                        accounts=list(accounts),
+                        browser_ids=list(browser_ids),
+                        sub2api_client=client,
+                        auto_bind_proxy=auto_bind_proxy,
+                    )
+                if should_stop():
+                    return AccountTaskOrchestrator.create_stopped_result(task_type)
+                return {"type": "oauth", "result": result.to_dict()}
+
+            if task_type == "login_and_oauth":
+                async with Sub2APIClient() as client:
+                    results = await processor.batch_login_and_oauth(
+                        accounts=list(accounts),
+                        browser_ids=list(browser_ids),
+                        sub2api_client=client,
+                        auto_bind_proxy=auto_bind_proxy,
+                    )
+                if should_stop():
+                    return AccountTaskOrchestrator.create_stopped_result(task_type)
+                return {
+                    "type": "login_and_oauth",
+                    "login_result": results["login"].to_dict(),
+                    "oauth_result": results["oauth"].to_dict(),
+                }
+
+            if task_type == "unlock_403":
+                result = await processor.batch_unlock_403(
+                    accounts=list(accounts),
+                    browser_ids=list(browser_ids),
+                    sms_token=sms_token,
+                    country_id=country_id,
+                    project_id=project_id,
+                    max_retries=max_retries,
+                )
+                if should_stop():
+                    return AccountTaskOrchestrator.create_stopped_result(task_type)
+                return {"type": "unlock_403", "result": result.to_dict()}
+
+            if task_type == "detect_pro":
+                result = await processor.batch_detect_pro(
+                    accounts=list(accounts),
+                    browser_ids=list(browser_ids),
+                )
+                if should_stop():
+                    return AccountTaskOrchestrator.create_stopped_result(task_type)
+                return {"type": "detect_pro", "result": result.to_dict()}
+
+            return {"type": "unknown"}
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            return loop.run_until_complete(_run_async())
+        finally:
+            loop.close()
+
+    @staticmethod
+    def execute_single_join_family(
+        inviter_account: dict,
+        invitee_account: dict,
+        inviter_browser_id: str,
+        invitee_browser_id: str,
+        log_callback: Callable[[str], None],
+    ) -> dict:
+        """执行单个加入家庭组任务。"""
+        from automation.auto_join_family import auto_join_family
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            try:
+                result = loop.run_until_complete(
+                    auto_join_family(
+                        inviter_account=inviter_account,
+                        invitee_account=invitee_account,
+                        inviter_browser_id=inviter_browser_id,
+                        invitee_browser_id=invitee_browser_id,
+                        callback=log_callback,
+                    )
+                )
+            except Exception as error:
+                return {
+                    "success": False,
+                    "message": str(error),
+                }
+
+            return {
+                "success": bool(getattr(result, "success", False)),
+                "message": getattr(result, "message", ""),
+            }
         finally:
             loop.close()

@@ -175,3 +175,69 @@ def test_execute_detect_403_no_linked_accounts():
     assert results["accounts"] == []
     assert logs == []
     assert progress == []
+
+
+def test_execute_account_worker_task_stop_short_circuit():
+    logs = []
+    progress = []
+
+    result = AccountTaskOrchestrator.execute_account_worker_task(
+        task_type="login",
+        accounts=[{"email": "a@example.com"}],
+        browser_ids=["b1"],
+        concurrency=1,
+        sms_token=None,
+        country_id=None,
+        project_id=None,
+        max_retries=None,
+        auto_bind_proxy=False,
+        should_stop=lambda: True,
+        log_callback=logs.append,
+        progress_callback=lambda current, total: progress.append((current, total)),
+    )
+
+    assert result["type"] == "stopped"
+    assert result["task_type"] == "login"
+    assert progress == []
+
+
+def test_execute_single_join_family_success(monkeypatch):
+    def fake_auto_join_family(**kwargs):
+        return SimpleNamespace(success=True, message="")
+
+    monkeypatch.setattr(
+        "automation.auto_join_family.auto_join_family",
+        fake_auto_join_family,
+    )
+
+    logs = []
+    result = AccountTaskOrchestrator.execute_single_join_family(
+        inviter_account={"email": "pro@example.com"},
+        invitee_account={"email": "user@example.com"},
+        inviter_browser_id="p1",
+        invitee_browser_id="u1",
+        log_callback=logs.append,
+    )
+
+    assert result["success"] is True
+
+
+def test_execute_single_join_family_exception_fallback(monkeypatch):
+    async def fake_auto_join_family(**kwargs):
+        raise RuntimeError("join failed")
+
+    monkeypatch.setattr(
+        "automation.auto_join_family.auto_join_family",
+        fake_auto_join_family,
+    )
+
+    result = AccountTaskOrchestrator.execute_single_join_family(
+        inviter_account={"email": "pro@example.com"},
+        invitee_account={"email": "user@example.com"},
+        inviter_browser_id="p1",
+        invitee_browser_id="u1",
+        log_callback=lambda _: None,
+    )
+
+    assert result["success"] is False
+    assert "join failed" in result["message"]

@@ -5,6 +5,7 @@ import threading
 
 from core.data_parser import parse_account_line, build_account_line
 from services.repositories import (
+    AccountIoRepository,
     AccountRepository,
     CardRepository,
     HistoryRepository,
@@ -204,97 +205,31 @@ class DBManager:
     @staticmethod
     def import_from_files():
         """从现有文本文件导入数据到数据库（初始化用）"""
-        count_total = 0
-
-        # 从状态文件导入
-        files_map = {
-            "link_ready": "sheerIDlink.txt",
-            "verified": "已验证未绑卡.txt",
-            "subscribed": "已绑卡号.txt",
-            "ineligible": "无资格号.txt",
-            "error": "超时或其他错误.txt"
-        }
-        
-        count_status = 0
-        for status, filename in files_map.items():
-            path = os.path.join(BASE_DIR, filename)
-            if not os.path.exists(path): 
-                continue
-            
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    lines = [l.strip() for l in f.readlines() if l.strip() and not l.startswith('#')]
-                
-                for line in lines:
-                    email, pwd, rec, sec, link = DBManager._simple_parse(line)
-                    if email:
-                        DBManager.upsert_account(email, pwd, rec, sec, link, status=status)
-                        count_status += 1
-            except Exception as e:
-                print(f"从 {filename} 导入时出错: {e}")
-        
-        if count_status > 0:
-            print(f"从状态文件导入/更新了 {count_status} 个账号")
-        
-        total = count_total + count_status
-        if total > 0:
-            print(f"数据库初始化完成，共处理 {total} 条记录")
+        AccountIoRepository.import_from_status_files(
+            base_dir=BASE_DIR,
+            upsert_callback=DBManager.upsert_account,
+        )
 
     @staticmethod
     def upsert_account(email, password=None, recovery_email=None, secret_key=None,
                        link=None, status=None, message=None, sheerid_steps=None,
                        last_failed_step=None, last_error=None, browser_profile_id=None):
         """插入或更新账号信息"""
-        if not email:
-            print(f"[DB] upsert_account: email 为空，跳过")
-            return
-
-        try:
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-
-                # 先检查是否存在
-                cursor.execute("SELECT * FROM accounts WHERE email = ?", (email,))
-                exists = cursor.fetchone()
-
-                if exists:
-                    # 构建更新语句 - 使用 is not None 而不是 truthiness 判断
-                    # 特殊处理：空字符串 "" 表示要清除字段
-                    fields = []
-                    values = []
-                    if password is not None: fields.append("password = ?"); values.append(password)
-                    if recovery_email is not None: fields.append("recovery_email = ?"); values.append(recovery_email)
-                    if secret_key is not None: fields.append("secret_key = ?"); values.append(secret_key)
-                    if link is not None: fields.append("verification_link = ?"); values.append(link)
-                    if status is not None: fields.append("status = ?"); values.append(status)
-                    if message is not None: fields.append("message = ?"); values.append(message)
-                    if sheerid_steps is not None: fields.append("sheerid_steps = ?"); values.append(sheerid_steps)
-                    # last_failed_step 和 last_error 支持传 "" 来清除
-                    if last_failed_step is not None: fields.append("last_failed_step = ?"); values.append(last_failed_step if last_failed_step else None)
-                    if last_error is not None: fields.append("last_error = ?"); values.append(last_error if last_error else None)
-                    if browser_profile_id is not None: fields.append("browser_profile_id = ?"); values.append(browser_profile_id)
-
-                    if fields:
-                        fields.append("updated_at = CURRENT_TIMESTAMP")
-                        values.append(email)
-                        sql = f"UPDATE accounts SET {', '.join(fields)} WHERE email = ?"
-                        cursor.execute(sql, values)
-                        print(f"[DB] 更新账号: {email}, 状态: {status}")
-                else:
-                    # 插入新记录
-                    cursor.execute('''
-                        INSERT INTO accounts (email, password, recovery_email, secret_key, verification_link, status, message, sheerid_steps, last_failed_step, last_error, browser_profile_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (email, password, recovery_email, secret_key, link, status or 'pending', message, sheerid_steps or 0, last_failed_step, last_error, browser_profile_id))
-                    print(f"[DB] 插入新账号: {email}, 状态: {status or 'pending'}")
-
-                conn.commit()
-                conn.close()
-        except Exception as e:
-            print(f"[DB ERROR] upsert_account 失败，email: {email}, 错误: {e}")
-            import traceback
-            traceback.print_exc()
+        AccountRepository.upsert_account(
+            email,
+            password,
+            recovery_email,
+            secret_key,
+            link,
+            status,
+            message,
+            sheerid_steps,
+            last_failed_step,
+            last_error,
+            browser_profile_id,
+            DBManager.get_connection,
+            lock,
+        )
 
     @staticmethod
     def update_status(email, status, message=None):
@@ -322,13 +257,7 @@ class DBManager:
 
     @staticmethod
     def get_accounts_by_status(status):
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM accounts WHERE status = ?", (status,))
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(row) for row in rows]
+        return AccountRepository.get_accounts_by_status(status, DBManager.get_connection, lock)
             
     @staticmethod
     def get_all_accounts():
@@ -347,75 +276,11 @@ class DBManager:
     @staticmethod
     def export_to_files():
         """将数据库导出为传统文本文件，方便查看 (覆盖写入)"""
-        print("[DB] 开始导出数据库到文本文件...")
-
-        files_map = {
-            "link_ready": "sheerIDlink.txt",
-            "verified": "已验证未绑卡.txt",
-            "subscribed": "已绑卡号.txt",
-            "ineligible": "无资格号.txt",
-            "error": "超时或其他错误.txt"
-        }
-
-        # link_ready 状态的账号同时也写入"有资格待验证号.txt"作为备份
-        pending_file = "有资格待验证号.txt"
-
-        try:
-            # 优化：仅在数据库读取时持有锁，文件写入在锁外执行
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM accounts")
-                rows = cursor.fetchall()
-                conn.close()
-
-            print(f"[DB] 从数据库读取了 {len(rows)} 条记录")
-
-            # 数据处理在锁外进行
-            data = {k: [] for k in files_map.keys()}
-            pending_data = []
-
-            for row in rows:
-                st = row['status']
-                if st == 'running' or st == 'processing': continue
-
-                # 使用统一的行构建函数
-                line_acc = build_account_line(
-                    email=row['email'],
-                    password=row['password'],
-                    recovery=row['recovery_email'],
-                    secret=row['secret_key']
-                )
-
-                if st == 'link_ready':
-                    if row['verification_link']:
-                        line_link = f"{row['verification_link']}----{line_acc}"
-                        data['link_ready'].append(line_link)
-                    pending_data.append(line_acc)
-
-                elif st in data:
-                     data[st].append(line_acc)
-
-            # 文件写入在锁外执行，避免长时间持有锁
-            for status, filename in files_map.items():
-                target_path = os.path.join(BASE_DIR, filename)
-                lines = data[status]
-                with open(target_path, 'w', encoding='utf-8') as f:
-                    for l in lines:
-                        f.write(l + "\n")
-                print(f"[DB] 导出 {len(lines)} 条记录到 {filename}")
-
-            pending_path = os.path.join(BASE_DIR, pending_file)
-            with open(pending_path, 'w', encoding='utf-8') as f:
-                for l in pending_data:
-                    f.write(l + "\n")
-            print(f"[DB] 导出 {len(pending_data)} 条记录到 {pending_file}")
-
-            print("[DB] 导出完成！")
-        except Exception as e:
-            print(f"[DB ERROR] export_to_files 失败: {e}")
-            import traceback
-            traceback.print_exc()
+        AccountIoRepository.export_accounts_to_status_files(
+            base_dir=BASE_DIR,
+            connection_factory=DBManager.get_connection,
+            db_lock=lock,
+        )
 
     # ==================== Cards CRUD ====================
 
@@ -723,100 +588,17 @@ class DBManager:
         获取综合账户数据，合并所有修改历史
         返回包含所有状态信息的账户列表
         """
-        try:
-            # 确保所有表都存在
-            DBManager.init_phone_modification_table()
-            DBManager.init_email_modification_table()
-            DBManager.init_2sv_phone_modification_table()
-            DBManager.init_authenticator_modification_table()
-            DBManager.init_sheerid_verification_table()
-            DBManager.init_bind_card_history_table()
+        DBManager.init_phone_modification_table()
+        DBManager.init_email_modification_table()
+        DBManager.init_2sv_phone_modification_table()
+        DBManager.init_authenticator_modification_table()
+        DBManager.init_sheerid_verification_table()
+        DBManager.init_bind_card_history_table()
 
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-
-                # 使用 LEFT JOIN 合并所有表
-                cursor.execute('''
-                    SELECT
-                        a.email,
-                        a.password,
-                        a.recovery_email,
-                        a.secret_key,
-                        a.verification_link,
-                        a.status,
-                        a.message,
-                        a.updated_at,
-                        p.new_phone as phone_new,
-                        p.modified_at as phone_modified_at,
-                        e.new_recovery_email as email_new,
-                        e.modified_at as email_modified_at,
-                        sv.new_phone as sv2_phone_new,
-                        sv.modified_at as sv2_phone_modified_at,
-                        auth.new_secret as auth_new_secret,
-                        auth.modified_at as auth_modified_at,
-                        sh.verification_id as sheerid_id,
-                        sh.verification_result as sheerid_result,
-                        sh.message as sheerid_message,
-                        sh.verified_at as sheerid_verified_at,
-                        bc.card_number as bind_card_number,
-                        bc.bound_at as bind_card_at
-                    FROM accounts a
-                    LEFT JOIN phone_modification_history p ON a.email = p.email
-                    LEFT JOIN email_modification_history e ON a.email = e.email
-                    LEFT JOIN sv2_phone_modification_history sv ON a.email = sv.email
-                    LEFT JOIN authenticator_modification_history auth ON a.email = auth.email
-                    LEFT JOIN sheerid_verification_history sh ON a.email = sh.email
-                    LEFT JOIN bind_card_history bc ON a.email = bc.email
-                    ORDER BY a.updated_at DESC
-                ''')
-                rows = cursor.fetchall()
-                conn.close()
-
-                result = []
-                for row in rows:
-                    result.append({
-                        'email': row['email'],
-                        'password': row['password'],
-                        'recovery_email': row['recovery_email'],
-                        'secret_key': row['secret_key'],
-                        'verification_link': row['verification_link'],
-                        'status': row['status'],
-                        'message': row['message'],
-                        'updated_at': row['updated_at'],
-                        # 辅助手机号修改
-                        'phone_modified': row['phone_new'] is not None,
-                        'phone_new': row['phone_new'],
-                        'phone_modified_at': row['phone_modified_at'],
-                        # 辅助邮箱修改
-                        'email_modified': row['email_new'] is not None,
-                        'email_new': row['email_new'],
-                        'email_modified_at': row['email_modified_at'],
-                        # 2SV手机号修改
-                        'sv2_phone_modified': row['sv2_phone_new'] is not None,
-                        'sv2_phone_new': row['sv2_phone_new'],
-                        'sv2_phone_modified_at': row['sv2_phone_modified_at'],
-                        # 身份验证器修改
-                        'auth_modified': row['auth_new_secret'] is not None,
-                        'auth_new_secret': row['auth_new_secret'],
-                        'auth_modified_at': row['auth_modified_at'],
-                        # SheerID验证
-                        'sheerid_verified': row['sheerid_result'] is not None,
-                        'sheerid_id': row['sheerid_id'],
-                        'sheerid_result': row['sheerid_result'],
-                        'sheerid_message': row['sheerid_message'],
-                        'sheerid_verified_at': row['sheerid_verified_at'],
-                        # 绑卡记录
-                        'bind_card': row['bind_card_number'] is not None,
-                        'bind_card_number': row['bind_card_number'],
-                        'bind_card_at': row['bind_card_at'],
-                    })
-                return result
-        except Exception as e:
-            print(f"[DB ERROR] get_comprehensive_account_data 失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+        return AccountIoRepository.get_comprehensive_account_data(
+            connection_factory=DBManager.get_connection,
+            db_lock=lock,
+        )
 
     # ==================== Bind Card History ====================
 

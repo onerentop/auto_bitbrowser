@@ -119,12 +119,23 @@
 - [x] 下沉账号管理界面批量 403 检测执行循环到 `AccountTaskOrchestrator`
 - [x] GUI 停止逻辑接入批量绑定/批量删除可中断标记（保持交互行为不变）
 - [x] GUI 停止逻辑接入批量 403 检测可中断标记（保持交互行为不变）
+- [x] 下沉 `AccountWorkerThread` 的登录/OAuth/一键登录OAuth/解锁/Pro检测执行逻辑到 `AccountTaskOrchestrator`
+- [x] 修复主批处理线程“停止任务”可中断能力（统一返回 stopped 结果）
+- [x] 下沉单个“加入家庭组”执行逻辑到 `AccountTaskOrchestrator`
 - [x] 新增 `tests/test_account_manager_service.py` 覆盖核心纯逻辑分支
 - [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖批量绑定/批量删除执行器分支
+- [x] 扩展 `tests/test_account_task_orchestrator.py` 覆盖 worker 停止分支与单个加入家庭组执行器分支
 - [x] 完成编译与最小读写回归验证
+
+### Phase 2 增量进度（2026-02-10）
+
+- [x] 新增 `AccountIoRepository`，下沉账号导入/导出与综合查询聚合 SQL
+- [x] `DBManager.import_from_files/export_to_files/get_comprehensive_account_data` 改为兼容委托
+- [x] `AccountRepository` 新增 `upsert_account/get_accounts_by_status` 承接 `DBManager` 兼容门面
+- [x] 新增 `tests/test_account_io_repository.py` 覆盖综合查询仓储核心分支
 
 下一步建议：
 
 1. 在 `application/` 抽出设置 DTO 与映射工具，进一步减少界面层字段拼装。
-2. 继续下沉账号管理界面剩余异步执行器（如批量 403 解锁）到 `application/`。
-3. Phase 2 继续拆分导入/导出与综合查询聚合逻辑，保持 DBManager 兼容门面。
+2. 继续收敛 GUI 文件规模（拆分 `account_manager_interface.py` 内部私有方法簇）。
+3. Phase 4 启动自动化引擎统一适配层的最小可用实现与迁移验证。

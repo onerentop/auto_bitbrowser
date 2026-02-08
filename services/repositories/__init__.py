@@ -5,6 +5,7 @@
 """
 
 from .account_repository import AccountRepository
+from .account_io_repository import AccountIoRepository
 from .card_repository import CardRepository
 from .history_repository import HistoryRepository
 from .proxy_repository import ProxyRepository
@@ -12,6 +13,7 @@ from .recovery_email_repository import RecoveryEmailRepository
 
 __all__ = [
     "AccountRepository",
+    "AccountIoRepository",
     "CardRepository",
     "ProxyRepository",
     "HistoryRepository",
