@@ -1,6 +1,6 @@
 """
 账号管理界面 - Fluent Design 版本
-完整迁移自 account_manager_gui.py，提供账号状态管理、批量登录、批量 OAuth 功能
+账号管理主界面，提供账号状态管理、批量登录、批量 OAuth 功能
 """
 
 from typing import List, Optional

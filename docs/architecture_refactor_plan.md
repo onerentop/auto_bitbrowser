@@ -1,6 +1,6 @@
 # 架构改造执行计划（保存版）
 
-> 更新时间：2026-02-10
+> 更新时间：2026-02-11
 > 状态：执行中（Phase 5）
 
 ## 1. 背景与目标
@@ -72,9 +72,7 @@
 执行进度（2026-02-10）：
 
 - [x] Fluent 任务界面 `kickdevices/modify2sv/modifyauth/replaceemail/replacephone/sheerlink` 调用入口统一改为 `AutomationEngineAdapter`
-- [x] 传统窗口 `kick_devices_gui/modify_2sv_phone_gui/modify_authenticator_gui/replace_phone_gui/replace_email_gui/replace_email_v2_gui/get_sheerlink_ai_gui` 调用入口统一改为 `AutomationEngineAdapter`
-- [x] `bindcard_interface.py` 与 `bind_card_ai_gui.py` 改为通过适配层执行绑卡任务（保留 UI 行为）
-- [x] `sheerid_gui_v2.py` 重新获取链接流程改为通过适配层执行
+- [x] Fluent 主界面已覆盖核心业务流程，旧版 `*_gui.py` 迁移完成
 
 ### Phase 4：自动化引擎统一（执行中）
 
@@ -88,15 +86,13 @@
 
 - [x] 新增 `application/automation_engine_adapter.py` 统一承接 automation / sub2api 外部调用
 - [x] `AccountTaskOrchestrator` 改造为优先依赖 `AutomationEngineAdapter`
-- [x] 兼容保留原 GUI 行为与结果结构，确保迁移可回滚
-- [x] 旧版 `account_manager_gui.py` 的主批处理线程改为复用统一 orchestrator 执行链路
-- [x] 旧版 `account_manager_gui.py` 的检测403/单个加入家庭组/批量加入家庭组执行循环改为复用统一 orchestrator
+- [x] 下线旧版 GUI 入口：`main.py` 移除 `--legacy` 启动路径，仅保留 Fluent 主入口
+- [x] 移除旧版窗口文件：`main_window.py`、`account_manager_gui.py` 及历史 `*_gui.py` 功能窗口
 - [x] 新增 `application/sub2api_settings_service.py`，下沉 Sub2API/SMS-Bus 设置读写与 Token 掩码逻辑
 - [x] `gui/config_ui.py` 的 Sub2API/SMS-Bus 配置入口改为通过 `Sub2APISettingsService`
 - [x] `gui/sheerid_interface.py` 改为通过 `SheerIDService` 读写 API Key，移除界面层直接依赖
 - [x] `gui/setting_interface.py` 的提供商连接测试配置解析改为通过 `SettingsService`
-- [x] `AutomationEngineAdapter` 新增踢设备/改2SV/改验证器/换辅助邮箱/换辅助手机/取 SheerLink 的统一入口及旧版兼容入口
-- [x] `gui/auto_subscribe_gui.py` 改为通过 `AutomationEngineAdapter.run_auto_subscribe_batch` 执行批处理链路
+- [x] `AutomationEngineAdapter` 收敛为 Fluent 在用入口，移除旧版 GUI 兼容入口
 
 ### Phase 5：测试与可观测性（持续）
 
@@ -110,7 +106,6 @@
 - [x] 新增 `tests/test_sub2api_settings_service.py` 覆盖掩码规则核心分支
 - [x] 新增 `tests/test_sheerid_service.py` 覆盖 SheerIDService 基础分支
 - [x] 扩展 `tests/test_settings_service.py` 覆盖提供商运行时配置解析分支
-- [x] 新增 `tests/test_automation_engine_adapter.py` 覆盖适配层批处理代理与空卡片边界分支
 - [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
 
 ---
@@ -169,4 +164,4 @@
 
 1. 在 `application/` 抽出设置 DTO 与映射工具，进一步减少界面层字段拼装。
 2. 继续收敛 GUI 文件规模（拆分 `account_manager_interface.py` 内部私有方法簇）。
-3. 在适配层基础上逐步迁移其他界面模块到统一入口（优先 `account_manager_gui.py`）。
+3. 按需补齐 `automation_engine_adapter.py` 的单元测试覆盖（当前以编译+烟测兜底）。

@@ -18,16 +18,5 @@ def main():
     run_fluent_app()
 
 
-def main_legacy():
-    """旧版 GUI 入口 (保留用于回退)"""
-    from gui.main_window import main as legacy_main
-    legacy_main()
-
-
 if __name__ == "__main__":
-    # 检查命令行参数，支持 --legacy 回退到旧版
-    if len(sys.argv) > 1 and sys.argv[1] == "--legacy":
-        print("[Info] 使用旧版 GUI...")
-        main_legacy()
-    else:
-        main()
+    main()
