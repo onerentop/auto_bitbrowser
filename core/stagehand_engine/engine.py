@@ -159,6 +159,9 @@ class StagehandGoogleEngine:
         self.headless = headless
         self.verbose = verbose
 
+        # 记录配置信息
+        logger.info(f"StagehandGoogleEngine 配置: model={self.model_name}, has_api_key={bool(self.model_api_key)}, base_url={self.model_base_url or '(默认)'}")
+
         # 检查 API Key
         if not self.model_api_key:
             logger.warning(
@@ -175,6 +178,7 @@ class StagehandGoogleEngine:
         self._cdp_mode = False  # 是否为 CDP 连接模式
         self._cdp_url: Optional[str] = None  # CDP WebSocket URL
         self._browser_id: Optional[str] = None  # ixBrowser 窗口 ID
+        self._last_navigated_url: Optional[str] = None  # 最后导航的 URL（缓存）
 
         # 会话状态
         self._logged_in_email: Optional[str] = None
@@ -271,6 +275,44 @@ class StagehandGoogleEngine:
 
         return engine
 
+    def _setup_provider_env_vars(self) -> None:
+        """
+        根据模型提供商设置正确的环境变量
+
+        SEA 服务器（Node.js 二进制文件）会检查特定的环境变量来获取 API Key。
+        不同的 LLM 提供商需要不同的环境变量名：
+        - OpenAI: OPENAI_API_KEY
+        - Anthropic: ANTHROPIC_API_KEY
+        - Google: GOOGLE_GENERATIVE_AI_API_KEY 或 GEMINI_API_KEY
+        """
+        if not self.model_api_key or not self.model_name:
+            logger.warning(f"_setup_provider_env_vars: 跳过，model_api_key={bool(self.model_api_key)}, model_name={self.model_name}")
+            return
+
+        # 解析提供商
+        provider = ""
+        if "/" in self.model_name:
+            provider = self.model_name.split("/")[0].lower()
+
+        logger.info(f"设置 LLM 提供商环境变量: provider={provider}, model={self.model_name}")
+
+        # 根据提供商设置对应的环境变量
+        if provider == "anthropic":
+            os.environ["ANTHROPIC_API_KEY"] = self.model_api_key
+            logger.info(f"设置 ANTHROPIC_API_KEY 环境变量 (长度: {len(self.model_api_key)})")
+        elif provider == "google":
+            os.environ["GOOGLE_GENERATIVE_AI_API_KEY"] = self.model_api_key
+            os.environ["GEMINI_API_KEY"] = self.model_api_key
+            logger.info(f"设置 GOOGLE_GENERATIVE_AI_API_KEY 环境变量 (长度: {len(self.model_api_key)})")
+        elif provider == "openai":
+            os.environ["OPENAI_API_KEY"] = self.model_api_key
+            logger.info(f"设置 OPENAI_API_KEY 环境变量 (长度: {len(self.model_api_key)})")
+        else:
+            logger.warning(f"未知的 LLM 提供商: {provider}")
+
+        # 始终设置 MODEL_API_KEY 作为后备
+        os.environ["MODEL_API_KEY"] = self.model_api_key
+
     async def connect_cdp(self, ws_endpoint: str) -> None:
         """
         连接到现有的 CDP WebSocket 端点
@@ -295,6 +337,9 @@ class StagehandGoogleEngine:
             self._cdp_url = ws_endpoint
             self._cdp_mode = True
 
+            # 设置提供商特定的环境变量（SEA 服务器需要）
+            self._setup_provider_env_vars()
+
             # 创建 AsyncStagehand 客户端
             self._async_stagehand = AsyncStagehand(
                 server="local",
@@ -314,8 +359,10 @@ class StagehandGoogleEngine:
                 },
             )
 
-            self._session_id = self._session.session_id
-            self._page = self._session.page
+            self._session_id = self._session.id
+            # AsyncSession 本身提供 act/observe/extract/navigate 方法
+            # 不需要单独的 page 对象
+            self._page = self._session
 
             self._initialized = True
             logger.info(f"CDP 连接成功, session_id: {self._session_id}")
@@ -357,6 +404,9 @@ class StagehandGoogleEngine:
             if self.chrome_path:
                 os.environ["CHROME_PATH"] = self.chrome_path
 
+            # 设置提供商特定的环境变量（SEA 服务器需要）
+            self._setup_provider_env_vars()
+
             # 创建 AsyncStagehand 实例 (stagehand 3.x API)
             self._async_stagehand = AsyncStagehand(
                 server="local",  # 使用本地模式
@@ -374,8 +424,10 @@ class StagehandGoogleEngine:
                 model_name=self.model_name,
             )
 
-            self._session_id = self._session.session_id
-            self._page = self._session.page
+            self._session_id = self._session.id
+            # AsyncSession 本身提供 act/observe/extract/navigate 方法
+            # 不需要单独的 page 对象
+            self._page = self._session
 
             self._initialized = True
             self._cdp_mode = False  # 明确标记为非 CDP 模式
@@ -492,18 +544,18 @@ class StagehandGoogleEngine:
         检查页面 URL 是否有效（可以执行 AI 操作）
 
         Args:
-            url: 要检查的 URL，如果不提供则使用当前页面 URL
+            url: 要检查的 URL，如果不提供则假设页面有效
+                （因为 Stagehand API 不提供同步 URL 获取）
 
         Returns:
             bool: True 如果页面有效
         """
         if url is None:
-            if not self._page:
+            # Stagehand API 不提供同步的 URL 获取方式
+            # 当没有提供 URL 时，假设页面有效
+            if not self._session:
                 return False
-            try:
-                url = self._page.url
-            except Exception:
-                return False
+            return True
 
         if not url:
             return False
@@ -526,12 +578,10 @@ class StagehandGoogleEngine:
             str: 无效原因描述
         """
         if url is None:
-            if not self._page:
-                return "页面对象不存在"
-            try:
-                url = self._page.url
-            except Exception as e:
-                return f"无法获取页面 URL: {e}"
+            if not self._session:
+                return "会话对象不存在"
+            # Stagehand API 不提供同步的 URL 获取方式
+            return "未知原因（无法同步获取 URL）"
 
         if not url:
             return "页面 URL 为空"
@@ -563,7 +613,13 @@ class StagehandGoogleEngine:
 
     @property
     def page(self) -> Any:
-        """获取 Playwright Page 对象"""
+        """
+        获取 Stagehand Session 对象
+
+        注意: 在 Stagehand 3.x API 中，这返回的是 AsyncSession 对象，
+        不是 Playwright Page。使用 session.act(), session.observe(),
+        session.extract(), session.navigate() 进行操作。
+        """
         self._ensure_initialized()
         return self._page
 
@@ -608,6 +664,62 @@ class StagehandGoogleEngine:
         """当前登录状态"""
         return self._login_state
 
+    # ==================== 模型配置辅助方法 ====================
+
+    def _get_model_options(self) -> Dict[str, Any]:
+        """
+        构建 model options 用于 AI 操作 (extract, act, observe)
+
+        根据 Stagehand API，每个 AI 操作都可以通过 options.model 参数
+        传递模型配置。
+
+        注意：Stagehand Python SDK 使用 snake_case 键名，
+        SDK 会自动将其转换为 camelCase 发送到 SEA 服务器。
+
+        重要：对于 Anthropic 第三方 API，baseURL 需要包含 /v1 后缀，
+        因为 AI SDK 会在 baseURL 后追加 /messages 路径。
+
+        Returns:
+            Dict: 包含 model 配置的 options 字典
+        """
+        # 如果没有配置 model_name，返回空 options
+        if not self.model_name:
+            logger.warning("未配置 model_name，AI 操作可能会失败")
+            return {}
+
+        # 使用 snake_case 键名，SDK 会自动转换为 camelCase
+        model_config: Dict[str, Any] = {
+            "model_name": self.model_name,  # 转换为 modelName
+        }
+
+        # 只有当 API key 存在时才添加
+        if self.model_api_key:
+            model_config["api_key"] = self.model_api_key  # 转换为 apiKey
+
+        # 如果有 base_url，处理后添加
+        if self.model_base_url:
+            base_url = self.model_base_url.rstrip("/")
+
+            # 对于 Anthropic 提供商，确保 baseURL 以 /v1 结尾
+            # 因为 @ai-sdk/anthropic 会在 baseURL 后追加 /messages
+            # 例如: baseURL="https://api.example.com/v1" -> 请求 https://api.example.com/v1/messages
+            if self.model_name and self.model_name.startswith("anthropic/"):
+                if not base_url.endswith("/v1"):
+                    base_url = base_url + "/v1"
+                    logger.info(f"自动为 Anthropic 第三方 API 添加 /v1 后缀: {base_url}")
+
+            model_config["base_url"] = base_url  # 转换为 baseURL
+
+        # 从 model_name 解析 provider (如 "google/gemini-2.0-flash" -> "google")
+        if self.model_name and "/" in self.model_name:
+            provider = self.model_name.split("/")[0]
+            if provider in ["openai", "anthropic", "google", "microsoft"]:
+                model_config["provider"] = provider
+
+        options = {"model": model_config}
+        logger.info(f"_get_model_options: model_name={self.model_name}, provider={model_config.get('provider')}, has_api_key={bool(self.model_api_key)}, has_base_url={bool(self.model_base_url)}, base_url={model_config.get('base_url') or 'None'}")
+        return options
+
     # ==================== 基础操作 ====================
 
     async def navigate(
@@ -631,14 +743,26 @@ class StagehandGoogleEngine:
         start_time = time.time()
 
         try:
-            await self._page.goto(url, wait_until=wait_until, timeout=timeout)
-            final_url = self._page.url
+            # 使用 Stagehand navigate API
+            nav_response = await self._session.navigate(
+                url=url,
+                options={
+                    "wait_until": wait_until,
+                    "timeout": timeout,
+                },
+            )
             duration_ms = (time.time() - start_time) * 1000
 
-            logger.debug(f"导航成功: {url} -> {final_url}")
+            # 导航后的 URL 可能有重定向，但 Stagehand API 不直接返回
+            # 使用原始 URL 作为 final_url，并缓存
+            final_url = url
+            if nav_response.success:
+                self._last_navigated_url = url  # 缓存导航的 URL
+
+            logger.debug(f"导航成功: {url}")
 
             return NavigationResult(
-                success=True,
+                success=nav_response.success,
                 url=url,
                 final_url=final_url,
                 duration_ms=duration_ms,
@@ -686,14 +810,17 @@ class StagehandGoogleEngine:
             )
 
         try:
-            # 使用 Stagehand act API
-            result = await self._page.act(instruction)
+            # 使用 Stagehand act API，传递 model 配置
+            result = await self._session.act(
+                input=instruction,
+                options=self._get_model_options(),
+            )
             duration_ms = (time.time() - start_time) * 1000
 
             logger.debug(f"操作成功: {instruction}")
 
             return ActionResult(
-                success=True,
+                success=result.success if hasattr(result, 'success') else True,
                 message=f"执行成功: {instruction}",
                 duration_ms=duration_ms,
             )
@@ -739,15 +866,20 @@ class StagehandGoogleEngine:
             )
 
         try:
-            # 使用 Stagehand observe API
-            actions = await self._page.observe(instruction)
+            # 使用 Stagehand observe API，传递 model 配置
+            response = await self._session.observe(
+                instruction=instruction,
+                options=self._get_model_options(),
+            )
             duration_ms = (time.time() - start_time) * 1000
 
             # 转换为字典列表
             action_list = []
-            if actions:
-                for action in actions:
-                    if hasattr(action, '__dict__'):
+            if response.success and response.data and response.data.result:
+                for action in response.data.result:
+                    if hasattr(action, 'model_dump'):
+                        action_list.append(action.model_dump())
+                    elif hasattr(action, '__dict__'):
                         action_list.append(vars(action))
                     elif isinstance(action, dict):
                         action_list.append(action)
@@ -755,7 +887,7 @@ class StagehandGoogleEngine:
             logger.debug(f"观察成功: {instruction}, 找到 {len(action_list)} 个元素")
 
             return ObserveResult(
-                success=True,
+                success=response.success,
                 actions=action_list,
                 duration_ms=duration_ms,
             )
@@ -783,7 +915,7 @@ class StagehandGoogleEngine:
 
         Args:
             instruction: 提取描述 (如 "提取所有商品价格")
-            schema: Pydantic 模型类，用于验证提取结果
+            schema: Pydantic 模型类，用于生成 JSON Schema
             timeout: 超时时间（毫秒）
 
         Returns:
@@ -803,28 +935,61 @@ class StagehandGoogleEngine:
             )
 
         try:
+            # 构建 extract 调用参数
+            extract_kwargs: Dict[str, Any] = {
+                "instruction": instruction,
+            }
+
+            # 如果提供了 Pydantic schema，转换为 JSON Schema dict
+            if schema is not None:
+                try:
+                    # Pydantic v2 使用 model_json_schema()
+                    if hasattr(schema, 'model_json_schema'):
+                        json_schema = schema.model_json_schema()
+                    # Pydantic v1 使用 schema()
+                    elif hasattr(schema, 'schema'):
+                        json_schema = schema.schema()
+                    else:
+                        json_schema = None
+                        logger.warning(f"无法从 {schema} 获取 JSON Schema")
+
+                    if json_schema:
+                        extract_kwargs["schema"] = json_schema
+                        logger.debug(f"使用 JSON Schema: {list(json_schema.get('properties', {}).keys())}")
+                except Exception as schema_err:
+                    logger.warning(f"转换 schema 失败: {schema_err}")
+
+            # 调试信息：记录 extract 调用参数
+            model_options = self._get_model_options()
+            logger.info(f"extract 调用 - instruction: {instruction[:80]}...")
+            logger.info(f"extract 调用 - model_options: {model_options}")
+            logger.info(f"extract 调用 - schema_keys: {list(extract_kwargs.get('schema', {}).get('properties', {}).keys()) if extract_kwargs.get('schema') else 'None'}")
+
+            # 添加 model 配置到 options
+            extract_kwargs["options"] = model_options
+
             # 使用 Stagehand extract API
-            if schema:
-                result = await self._page.extract(instruction, schema=schema)
-            else:
-                result = await self._page.extract(instruction)
+            response = await self._session.extract(**extract_kwargs)
 
             duration_ms = (time.time() - start_time) * 1000
 
             # 转换结果为字典
-            if hasattr(result, 'model_dump'):
-                data = result.model_dump()
-            elif hasattr(result, '__dict__'):
-                data = vars(result)
-            elif isinstance(result, dict):
-                data = result
-            else:
-                data = {"result": result}
+            data = None
+            if response.success and response.data:
+                result = response.data.result
+                if hasattr(result, 'model_dump'):
+                    data = result.model_dump()
+                elif hasattr(result, '__dict__'):
+                    data = vars(result)
+                elif isinstance(result, dict):
+                    data = result
+                else:
+                    data = {"result": result}
 
-            logger.debug(f"提取成功: {instruction}")
+            logger.debug(f"提取成功: {instruction[:50]}...")
 
             return ExtractResult(
-                success=True,
+                success=response.success,
                 data=data,
                 duration_ms=duration_ms,
             )
@@ -833,17 +998,53 @@ class StagehandGoogleEngine:
             duration_ms = (time.time() - start_time) * 1000
             error_msg = str(e)
 
-            # 增强错误信息：检测 500 错误
-            if "500" in error_msg or "extract failed" in error_msg.lower():
-                current_url = "unknown"
+            # 尝试获取更详细的错误信息（从 APIStatusError 中提取 body）
+            error_body = None
+            if hasattr(e, 'body'):
+                error_body = e.body
+                logger.error(f"SEA 服务器返回错误 body: {error_body}")
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
                 try:
-                    current_url = self._page.url
+                    response_text = e.response.text
+                    logger.error(f"SEA 服务器响应内容: {response_text[:500]}")
                 except Exception:
                     pass
-                logger.error(f"extract API 调用失败 (500): {instruction}, 当前 URL: {current_url}")
-                error_msg = f"extract API 调用失败: {error_msg}. 当前页面: {current_url}"
+
+            # 增强错误信息：检测 500 错误
+            if "500" in error_msg or "extract failed" in error_msg.lower():
+                logger.error(f"extract API 调用失败 (500): {instruction[:100]}...")
+                logger.error(f"当前使用的模型: {self.model_name}")
+                logger.error(f"API Key 是否配置: {'是' if self.model_api_key else '否'}")
+                logger.error(f"传递的 options: {self._get_model_options()}")
+                # 检查是否是 LLM 提供商不匹配问题
+                if self.model_name and "/" in self.model_name:
+                    provider = self.model_name.split("/")[0]
+                    if provider == "anthropic":
+                        logger.error(
+                            "提示: 使用 Anthropic Claude 时，确保: "
+                            "1) API Key 是有效的 Anthropic API Key; "
+                            "2) ANTHROPIC_API_KEY 环境变量已设置; "
+                            "3) 模型名称格式正确 (如 anthropic/claude-3-5-sonnet)"
+                        )
+                    elif provider == "google":
+                        logger.error(
+                            "提示: 使用 Google Gemini 时，确保 API Key 是有效的 Google AI API Key。"
+                        )
+                # 包含 body 中的详细错误信息
+                if error_body:
+                    error_msg = (
+                        f"extract API 调用失败 (HTTP 500): {error_msg}. "
+                        f"详细错误: {error_body}"
+                    )
+                else:
+                    error_msg = (
+                        f"extract API 调用失败 (HTTP 500): {error_msg}. "
+                        f"这可能是 LLM API 调用失败导致的。请检查: "
+                        f"1) API Key 是否有效; 2) 模型名称 '{self.model_name}' 是否正确; "
+                        f"3) 网络连接是否正常"
+                    )
             else:
-                logger.error(f"提取失败: {instruction} - {e}")
+                logger.error(f"提取失败: {instruction[:50]}... - {e}")
 
             return ExtractResult(
                 success=False,
@@ -859,14 +1060,51 @@ class StagehandGoogleEngine:
         """获取页面文本内容"""
         self._ensure_initialized()
         try:
-            return await self._page.inner_text("body", timeout=5000)
-        except Exception:
+            # 使用 extract API 获取页面内容
+            # 传入简单的 schema 以提高成功率，并传递 model 配置
+            response = await self._session.extract(
+                instruction="Extract all visible text from this page",
+                schema={
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "All visible text content on the page"
+                        }
+                    },
+                    "required": ["text"]
+                },
+                options=self._get_model_options(),
+            )
+            if response.success and response.data and response.data.result:
+                result = response.data.result
+                if isinstance(result, str):
+                    return result
+                elif isinstance(result, dict):
+                    # 尝试多种可能的键名
+                    for key in ["text", "content", "result", "body"]:
+                        if key in result:
+                            return str(result[key])
+                    return str(result)
+                return str(result)
+            return ""
+        except Exception as e:
+            logger.debug(f"get_page_content 失败: {e}")
             return ""
 
     async def get_current_url(self) -> str:
-        """获取当前 URL"""
+        """
+        获取当前 URL
+
+        注意: Stagehand API 不直接提供 URL 属性，
+        优先返回最后一次导航的缓存 URL。
+        """
         self._ensure_initialized()
-        return self._page.url
+        # 优先返回缓存的 URL
+        if self._last_navigated_url:
+            return self._last_navigated_url
+        # 无缓存时返回空字符串
+        return ""
 
     # ==================== 高级操作 ====================
 

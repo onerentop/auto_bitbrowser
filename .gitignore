@@ -76,3 +76,16 @@ desktop.ini
 *.txtbak
 *.bak
 failed_tasks.json
+
+# Node.js (测试用)
+node_modules/
+package.json
+package-lock.json
+
+# 工具目录
+.claude/
+.plan/
+%USERPROFILE%/
+
+# 临时文件
+nul
