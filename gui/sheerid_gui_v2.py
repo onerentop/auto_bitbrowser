@@ -484,7 +484,7 @@ class SheerIDWindowV2(QDialog):
         """从配置管理加载 API Key"""
         try:
             ConfigManager.load()
-            api_key = ConfigManager.get("sheerid_api_key", "")
+            api_key = ConfigManager.get_api_key()
             if api_key:
                 # 显示脱敏的 API Key
                 if len(api_key) > 8:

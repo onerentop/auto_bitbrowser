@@ -1731,7 +1731,7 @@ class SettingsTab(QWidget):
             ConfigManager.load()
 
             # API
-            api_key = ConfigManager.get("sheerid_api_key", "")
+            api_key = ConfigManager.get_api_key()
             self.api_key_input.setText(api_key)
 
             # AI Agent 配置 - 默认提供商
@@ -1759,7 +1759,7 @@ class SettingsTab(QWidget):
 
             # Gmail IMAP
             gmail_email = ConfigManager.get("gmail_imap_email", "")
-            gmail_password = ConfigManager.get("gmail_imap_password", "")
+            gmail_password = ConfigManager.get_gmail_imap_password()
             self.gmail_email_input.setText(gmail_email)
             self.gmail_password_input.setText(gmail_password)
 
@@ -1786,7 +1786,7 @@ class SettingsTab(QWidget):
         """保存设置"""
         try:
             # API
-            ConfigManager.set("sheerid_api_key", self.api_key_input.text())
+            ConfigManager.set_api_key(self.api_key_input.text())
 
             # AI Agent 配置 - 默认提供商
             ConfigManager.set_ai_default_provider(self.ai_provider_combo.currentText())
@@ -1810,7 +1810,7 @@ class SettingsTab(QWidget):
 
             # Gmail IMAP
             ConfigManager.set("gmail_imap_email", self.gmail_email_input.text().strip())
-            ConfigManager.set("gmail_imap_password", self.gmail_password_input.text())
+            ConfigManager.set_gmail_imap_password(self.gmail_password_input.text())
 
             # Timeouts
             ConfigManager.set("timeouts.page_load", self.page_load_spin.value())

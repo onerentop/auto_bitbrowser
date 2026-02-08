@@ -15,3 +15,4 @@ openai
 anthropic
 pyzbar
 stagehand>=3.5.0
+aiohttp

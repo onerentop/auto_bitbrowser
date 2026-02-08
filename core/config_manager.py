@@ -7,6 +7,7 @@ import os
 import sys
 import base64
 import threading
+import copy
 
 # 获取基础路径
 def get_base_path():
@@ -21,7 +22,7 @@ class ConfigManager:
 
     CONFIG_FILE = os.path.join(BASE_PATH, "config.json")
     _config = None
-    _lock = threading.Lock()
+    _lock = threading.RLock()
 
     # 默认配置模板
     DEFAULT_CONFIG = {
@@ -131,12 +132,31 @@ class ConfigManager:
     # 混淆密钥 (简单混淆，非高安全性加密)
     _OBFUSCATION_KEY = "ixBrowser_AutoManager_2024"
 
+    # 需要加密保存的敏感字段路径
+    _SENSITIVE_CONFIG_PATHS = (
+        "sheerid_api_key",
+        "gmail_imap_password",
+        "sub2api.password",
+        "sub2api.admin_token",
+        "sms_bus.token",
+        "ai_agent.api_key",
+    )
+
+    @classmethod
+    def _is_sensitive_key_path(cls, key_path: str) -> bool:
+        """判断是否为敏感配置路径"""
+        if key_path in cls._SENSITIVE_CONFIG_PATHS:
+            return True
+        return key_path.startswith("ai_agent.providers.") and key_path.endswith(".api_key")
+
     @classmethod
     def load(cls) -> dict:
         """加载配置，不存在则创建默认配置"""
         with cls._lock:
             if cls._config is not None:
                 return cls._config.copy()
+
+            need_save = False
 
             if os.path.exists(cls.CONFIG_FILE):
                 try:
@@ -146,9 +166,17 @@ class ConfigManager:
                     cls._config = cls._merge_config(cls.DEFAULT_CONFIG, cls._config)
                 except Exception as e:
                     print(f"[ConfigManager] 加载配置失败: {e}，使用默认配置")
-                    cls._config = cls.DEFAULT_CONFIG.copy()
+                    cls._config = copy.deepcopy(cls.DEFAULT_CONFIG)
+                    need_save = True
             else:
-                cls._config = cls.DEFAULT_CONFIG.copy()
+                cls._config = copy.deepcopy(cls.DEFAULT_CONFIG)
+                need_save = True
+
+            # 兼容历史明文配置：自动迁移为加密存储
+            if cls._migrate_legacy_sensitive_fields():
+                need_save = True
+
+            if need_save:
                 cls._save_internal()
 
             return cls._config.copy()
@@ -173,6 +201,8 @@ class ConfigManager:
         with cls._lock:
             if config is not None:
                 cls._config = config
+            # 保存前再次兜底迁移，避免外部通过 set() 直接写入明文
+            cls._migrate_legacy_sensitive_fields()
             cls._save_internal()
 
     @classmethod
@@ -197,6 +227,8 @@ class ConfigManager:
         try:
             for k in keys:
                 value = value[k]
+            if isinstance(value, str) and cls._is_sensitive_key_path(key):
+                return cls.decrypt_sensitive(value)
             return value
         except (KeyError, TypeError):
             return default
@@ -222,7 +254,77 @@ class ConfigManager:
 
             # 设置最后一层的值
             config[keys[-1]] = value
+            # 若设置的是敏感字段，立即转为加密存储
+            cls._migrate_legacy_sensitive_fields()
             cls._save_internal()
+
+    @classmethod
+    def _get_nested_value(cls, key_path: str):
+        """获取嵌套配置值（内部方法）"""
+        if cls._config is None:
+            return None
+        current = cls._config
+        try:
+            for key in key_path.split('.'):
+                current = current[key]
+            return current
+        except (KeyError, TypeError):
+            return None
+
+    @classmethod
+    def _set_nested_value(cls, key_path: str, value):
+        """设置嵌套配置值（内部方法）"""
+        if cls._config is None:
+            cls._config = copy.deepcopy(cls.DEFAULT_CONFIG)
+
+        keys = key_path.split('.')
+        current = cls._config
+        for key in keys[:-1]:
+            if key not in current or not isinstance(current[key], dict):
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
+
+    @classmethod
+    def _collect_sensitive_paths(cls) -> list:
+        """收集需要加密的敏感字段路径"""
+        paths = set(cls._SENSITIVE_CONFIG_PATHS)
+
+        providers = cls._get_nested_value("ai_agent.providers")
+        if isinstance(providers, dict):
+            for provider_name in providers.keys():
+                paths.add(f"ai_agent.providers.{provider_name}.api_key")
+
+        return sorted(paths)
+
+    @classmethod
+    def _migrate_legacy_sensitive_fields(cls) -> bool:
+        """
+        将历史明文敏感字段迁移为加密存储
+
+        Returns:
+            bool: 是否发生迁移
+        """
+        if cls._config is None:
+            return False
+
+        migrated_fields = []
+        for key_path in cls._collect_sensitive_paths():
+            value = cls._get_nested_value(key_path)
+            if not isinstance(value, str) or not value:
+                continue
+            if value.startswith("ENC:"):
+                continue
+
+            encrypted = cls.encrypt_sensitive(value)
+            if encrypted and encrypted != value:
+                cls._set_nested_value(key_path, encrypted)
+                migrated_fields.append(key_path)
+
+        if migrated_fields:
+            print(f"[ConfigManager] 已迁移明文敏感字段: {', '.join(migrated_fields)}")
+            return True
+        return False
 
     @classmethod
     def encrypt_sensitive(cls, value: str) -> str:
@@ -513,12 +615,14 @@ class ConfigManager:
     @classmethod
     def get_gmail_imap_password(cls) -> str:
         """获取 Gmail IMAP 应用密码"""
-        return cls.get("gmail_imap_password", "")
+        encrypted = cls.get("gmail_imap_password", "")
+        return cls.decrypt_sensitive(encrypted)
 
     @classmethod
     def set_gmail_imap_password(cls, password: str):
         """设置 Gmail IMAP 应用密码"""
-        cls.set("gmail_imap_password", password)
+        encrypted = cls.encrypt_sensitive(password)
+        cls.set("gmail_imap_password", encrypted)
 
     # ============ Sub2API 配置方法 ============
 

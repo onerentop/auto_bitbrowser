@@ -150,7 +150,7 @@ class SheerIDInterface(BaseDialogInterface):
         self.apiKeyInput.setPlaceholderText("请输入 SheerID API Key")
         self.apiKeyInput.setFixedWidth(350)
         # 加载保存的 API Key
-        saved_key = ConfigManager.get("sheerid_api_key", "")
+        saved_key = ConfigManager.get_api_key()
         if saved_key:
             self.apiKeyInput.setText(saved_key)
         apiKeyLayout.addWidget(self.apiKeyInput)
@@ -297,7 +297,7 @@ class SheerIDInterface(BaseDialogInterface):
             return
 
         # 保存 API Key
-        ConfigManager.set("sheerid_api_key", api_key)
+        ConfigManager.set_api_key(api_key)
 
         # 获取选中的账号
         selected = []

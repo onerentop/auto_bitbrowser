@@ -529,7 +529,7 @@ class ConfigTab(ScrollArea):
 
             # SheerID API Key
             self.sheeridApiKeyInput.setText(
-                ConfigManager.get("sheerid_api_key", ""))
+                ConfigManager.get_api_key())
 
             # AI Agent 配置 - 默认提供商
             default_provider = ConfigManager.get_ai_default_provider()
@@ -556,7 +556,7 @@ class ConfigTab(ScrollArea):
 
             # Gmail IMAP
             self.gmailEmailInput.setText(ConfigManager.get("gmail_imap_email", ""))
-            self.gmailPasswordInput.setText(ConfigManager.get("gmail_imap_password", ""))
+            self.gmailPasswordInput.setText(ConfigManager.get_gmail_imap_password())
 
             # 超时设置
             self.pageLoadSpin.setValue(ConfigManager.get("timeouts.page_load", 30))
@@ -596,7 +596,7 @@ class ConfigTab(ScrollArea):
         """保存配置"""
         try:
             # SheerID API Key
-            ConfigManager.set("sheerid_api_key", self.sheeridApiKeyInput.text().strip())
+            ConfigManager.set_api_key(self.sheeridApiKeyInput.text().strip())
 
             # AI Agent 配置 - 默认提供商
             ConfigManager.set_ai_default_provider(self.aiProviderCombo.currentText())
@@ -620,7 +620,7 @@ class ConfigTab(ScrollArea):
 
             # Gmail IMAP
             ConfigManager.set("gmail_imap_email", self.gmailEmailInput.text().strip())
-            ConfigManager.set("gmail_imap_password", self.gmailPasswordInput.text())
+            ConfigManager.set_gmail_imap_password(self.gmailPasswordInput.text())
 
             # 超时设置
             ConfigManager.set("timeouts.page_load", self.pageLoadSpin.value())
