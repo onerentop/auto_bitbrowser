@@ -4,6 +4,7 @@ import sys
 import threading
 
 from core.data_parser import parse_account_line, build_account_line
+from services.repositories import AccountRepository
 
 # 数据库路径 - 使用项目根目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -325,42 +326,17 @@ class DBManager:
             
     @staticmethod
     def get_all_accounts():
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM accounts")
-            rows = cursor.fetchall()
-            conn.close()
-            return [dict(row) for row in rows]
+        return AccountRepository.get_all_accounts(DBManager.get_connection, lock)
 
     @staticmethod
     def get_account_by_email(email: str) -> dict:
         """根据邮箱获取单个账号信息"""
-        if not email:
-            return None
-        with lock:
-            conn = DBManager.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM accounts WHERE email = ?", (email,))
-            row = cursor.fetchone()
-            conn.close()
-            return dict(row) if row else None
+        return AccountRepository.get_account_by_email(email, DBManager.get_connection, lock)
 
     @staticmethod
     def delete_account(email: str) -> bool:
         """从数据库删除账号"""
-        with lock:
-            try:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM accounts WHERE email = ?", (email,))
-                conn.commit()
-                deleted = cursor.rowcount > 0
-                conn.close()
-                return deleted
-            except Exception as e:
-                print(f"[DB] 删除账号失败: {e}")
-                return False
+        return AccountRepository.delete_account(email, DBManager.get_connection, lock)
 
     @staticmethod
     def export_to_files():
@@ -2115,22 +2091,7 @@ class DBManager:
         Returns:
             list: 需要解锁的账号列表
         """
-        try:
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM accounts
-                    WHERE unlock_status IN ('needs_unlock', 'unlock_failed')
-                    AND validation_url IS NOT NULL
-                    AND validation_url != ''
-                """)
-                rows = cursor.fetchall()
-                conn.close()
-                return [dict(row) for row in rows]
-        except Exception as e:
-            print(f"[DB ERROR] get_accounts_needing_unlock 失败: {e}")
-            return []
+        return AccountRepository.get_accounts_needing_unlock(DBManager.get_connection, lock)
 
     # ==================== 家庭组功能 ====================
 
@@ -2251,26 +2212,7 @@ class DBManager:
         Returns:
             list: 可用的 Pro 账户列表，包含 available_slots 字段
         """
-        try:
-            with lock:
-                conn = DBManager.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT *, (6 - COALESCE(family_member_count, 0)) as available_slots
-                    FROM accounts
-                    WHERE is_pro = 'yes'
-                    AND COALESCE(family_member_count, 0) < 6
-                    AND login_status = 'logged_in'
-                    AND browser_profile_id IS NOT NULL
-                    AND browser_profile_id != ''
-                    ORDER BY family_member_count ASC
-                """)
-                rows = cursor.fetchall()
-                conn.close()
-                return [dict(row) for row in rows]
-        except Exception as e:
-            print(f"[DB ERROR] get_available_pro_accounts 失败: {e}")
-            return []
+        return AccountRepository.get_available_pro_accounts(DBManager.get_connection, lock)
 
     @staticmethod
     def get_family_pro_accounts() -> list:

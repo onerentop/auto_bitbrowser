@@ -37,6 +37,14 @@
 - 拆分 `services/database.py` 为仓储模块（账号/代理/卡片/历史）。
 - 保留兼容 Facade，避免一次性改穿全项目。
 
+执行进度（2026-02-09）：
+
+- [x] 新增 `services/repositories/` 仓储层目录与导出入口
+- [x] 新增 `AccountRepository`，承接账号核心查询/删除/可用 Pro 查询/待解锁查询
+- [x] `DBManager` 对以上方法改为兼容委托（调用方无感）
+- [x] 新增 `tests/test_account_repository.py`，覆盖仓储纯 SQL 过滤逻辑
+- [ ] 继续拆分代理/卡片/历史记录仓储
+
 验收标准：
 
 - 新增数据访问全部走仓储层。
@@ -103,4 +111,4 @@
 
 1. 在 `application/` 抽出设置 DTO 与映射工具，进一步减少界面层字段拼装。
 2. 继续下沉账号管理异步线程编排（批量绑定/批删/家庭组执行器）到独立 orchestrator。
-3. Phase 2 启动 `services/database.py` 仓储拆分设计草案与兼容 Facade。
+3. Phase 2 继续拆分 `ProxyRepository` 与 `CardRepository`，保持 DBManager 兼容门面。
