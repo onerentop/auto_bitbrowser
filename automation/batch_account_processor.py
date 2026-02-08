@@ -27,11 +27,15 @@ except ImportError:
 # 导入共享的 Pro 状态检测器
 from automation.pro_status_detector import check_pro_status_via_stagehand
 
-# 尝试导入 Stagehand SDK
+# 检查 StagehandGoogleEngine 是否可用
 try:
-    from stagehand import AsyncStagehand
+    from core.stagehand_engine import StagehandGoogleEngine
+    from core.stagehand_engine.constants import GoogleURLs
+    STAGEHAND_ENGINE_AVAILABLE = True
 except ImportError:
-    AsyncStagehand = None
+    STAGEHAND_ENGINE_AVAILABLE = False
+    StagehandGoogleEngine = None
+    GoogleURLs = None
 
 from services.proxy_smart_allocator import ProxySmartAllocator
 from automation.auto_google_login import auto_google_login, LoginResult
@@ -974,7 +978,7 @@ class BatchAccountProcessor:
             self._log(f"[{email}] 检测家庭组状态...")
 
             # 导航到家庭组页面
-            await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
+            await page.goto(GoogleURLs.FAMILY_ACCOUNT, wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_timeout(2000)
 
             # ========== CDP 优先检测 ==========
@@ -1089,7 +1093,7 @@ class BatchAccountProcessor:
             self._log(f"[{email}] 正在检测 Google One 会员状态...")
 
             # 导航到 Google One 页面
-            await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
+            await page.goto(GoogleURLs.GOOGLE_ONE, wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_timeout(2000)
 
             # ========== 阶段1: CDP 优先检测 ==========
@@ -1223,7 +1227,7 @@ class BatchAccountProcessor:
             # 如果不是，先导航
             current_url = page.url
             if "myaccount.google.com/family" not in current_url:
-                await page.goto("https://myaccount.google.com/family", wait_until="domcontentloaded", timeout=15000)
+                await page.goto(GoogleURLs.FAMILY_ACCOUNT, wait_until="domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(2000)
 
             # 方法 1: 通过计数页面上的成员头像/卡片

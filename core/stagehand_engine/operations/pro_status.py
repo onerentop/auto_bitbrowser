@@ -15,7 +15,7 @@ from ..types import (
     ProStatus,
     ProStatusResult,
 )
-from ..constants import GoogleURLs, Timeouts, ProKeywords
+from ..constants import GoogleURLs, Timeouts, ProKeywords, FamilyKeywords
 
 if TYPE_CHECKING:
     from ..engine import StagehandGoogleEngine
@@ -29,9 +29,13 @@ class ProStatusSchema(BaseModel):
         default=False,
         description="是否有 Google One 订阅"
     )
+    is_family_member: bool = Field(
+        default=False,
+        description="是否是家庭组成员（通过别人的订阅获得，不是自己付费）"
+    )
     plan_name: Optional[str] = Field(
         default=None,
-        description="订阅计划名称，如 '100 GB', '2 TB'"
+        description="订阅计划名称，如 '100 GB', '2 TB', 'AI Premium'"
     )
     storage_used: Optional[str] = Field(
         default=None,
@@ -48,6 +52,10 @@ class ProStatusSchema(BaseModel):
     is_trial: bool = Field(
         default=False,
         description="是否是试用期"
+    )
+    has_payment_options: bool = Field(
+        default=False,
+        description="页面是否有付款相关选项（Change payment method, Cancel membership等）"
     )
 
 
@@ -137,6 +145,8 @@ class ProStatusOperation:
             matched_positive = []
             matched_negative = []
             matched_expired = []
+            matched_family_member = []
+            matched_independent = []
 
             # 检测正面关键词 (Pro 会员)
             for kw in ProKeywords.POSITIVE:
@@ -153,6 +163,16 @@ class ProStatusOperation:
                 if kw.lower() in page_lower:
                     matched_expired.append(kw)
 
+            # 检测家庭组成员关键词
+            for kw in FamilyKeywords.FAMILY_MEMBER:
+                if kw.lower() in page_lower:
+                    matched_family_member.append(kw)
+
+            # 检测独立订阅者关键词
+            for kw in FamilyKeywords.INDEPENDENT_SUBSCRIBER:
+                if kw.lower() in page_lower:
+                    matched_independent.append(kw)
+
             # 判断状态
             if matched_expired:
                 return ProStatusResult(
@@ -164,18 +184,27 @@ class ProStatusOperation:
                 )
 
             # 检测具体的存储计划
-            storage_plans = ["2 tb", "200 gb", "100 gb"]
+            storage_plans = ["2 tb", "200 gb", "100 gb", "ai premium"]
+            detected_plan = None
             for plan in storage_plans:
                 if plan in page_lower:
-                    # 有付费计划，是 Pro
-                    return ProStatusResult(
-                        status=ProStatus.ACTIVE,
-                        is_pro=True,
-                        plan_name=plan.upper(),
-                        confidence=0.9,
-                        method_used="keyword_detection",
-                        raw_keywords=matched_positive,
-                    )
+                    detected_plan = plan.upper()
+                    break
+
+            if detected_plan:
+                # 有付费计划，是 Pro
+                # 判断是否为家庭组成员
+                is_family_member = len(matched_family_member) > len(matched_independent)
+
+                return ProStatusResult(
+                    status=ProStatus.ACTIVE,
+                    is_pro=True,
+                    is_family_member=is_family_member,
+                    plan_name=detected_plan,
+                    confidence=0.9,
+                    method_used="keyword_detection",
+                    raw_keywords=matched_positive + matched_family_member,
+                )
 
             # 检测免费用户
             if "15 gb" in page_lower and not matched_positive:
@@ -210,15 +239,36 @@ class ProStatusOperation:
             # 使用 Stagehand extract 提取结构化数据
             extract_result = await self.engine.extract(
                 instruction="""
-                提取当前页面的 Google One 订阅信息:
-                1. 是否有订阅 (is_subscribed)
-                2. 订阅计划名称，如 100 GB, 200 GB, 2 TB (plan_name)
-                3. 已使用存储空间 (storage_used)
-                4. 总存储空间 (storage_total)
-                5. 是否是试用期 (is_trial)
-                6. 到期日期 (expiry_date)
+                分析当前 Google One 页面，判断用户的会员订阅状态。
 
-                如果是免费 15 GB 用户，is_subscribed 应为 False。
+                **重要判断规则：**
+
+                1. 首先检查是否有"Upgrade"或"升级"按钮：
+                   - 如果有 → is_subscribed = false
+
+                2. 如果是会员，判断是独立订阅还是家庭组成员：
+
+                   **家庭组成员特征（is_family_member=true）：**
+                   - 看到"Shared with you"、"与您共享"
+                   - 看到"Leave family"、"退出家庭"选项
+                   - 没有看到"Next payment"、"下次付款"信息
+                   - 没有付款/取消选项
+
+                   **独立订阅者特征（is_family_member=false, has_payment_options=true）：**
+                   - 看到"Next payment"、"下次付款"信息
+                   - 看到"Cancel membership"、"取消会员"
+                   - 看到"Payment method"、"付款方式"
+                   - 看到"Share Google One with family"开关
+
+                请提取：
+                - is_subscribed: 是否有 Google One 订阅
+                - is_family_member: 是否是家庭组成员（通过别人的订阅获得）
+                - has_payment_options: 是否有付款相关选项
+                - plan_name: 订阅计划名称（如 100 GB, 200 GB, 2 TB, AI Premium）
+                - storage_used: 已使用存储空间
+                - storage_total: 总存储空间
+                - is_trial: 是否是试用期
+                - expiry_date: 到期日期
                 """,
                 schema=ProStatusSchema,
             )
@@ -235,6 +285,12 @@ class ProStatusOperation:
             # 解析结果
             is_subscribed = data.get("is_subscribed", False)
             is_trial = data.get("is_trial", False)
+            is_family_member = data.get("is_family_member", False)
+            has_payment_options = data.get("has_payment_options", False)
+
+            # 如果有付款选项，则不是家庭组成员
+            if has_payment_options:
+                is_family_member = False
 
             if is_subscribed:
                 if is_trial:
@@ -247,6 +303,7 @@ class ProStatusOperation:
             return ProStatusResult(
                 status=status,
                 is_pro=is_subscribed,
+                is_family_member=is_family_member,
                 plan_name=data.get("plan_name"),
                 storage_used=data.get("storage_used"),
                 storage_total=data.get("storage_total"),

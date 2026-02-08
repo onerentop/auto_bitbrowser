@@ -1,7 +1,7 @@
 """
-自动踢出非本机登录设备
+自动踢出非本机登录设备 - StagehandGoogleEngine 版
 
-使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成操作
+使用 StagehandGoogleEngine 自动完成操作
 1. 进入设备管理页面
 2. 识别本机设备（"您的当前会话"）
 3. 逐个踢出其他设备
@@ -11,10 +11,7 @@ import asyncio
 import traceback
 from typing import Optional, Tuple
 
-from core.ai_browser_agent import AIBrowserAgent, TaskResult
-
-# 目标 URL - 设备管理页面
-DEVICES_URL = "https://myaccount.google.com/device-activity"
+from core.stagehand_engine import StagehandGoogleEngine
 
 
 async def auto_kick_devices(
@@ -34,87 +31,59 @@ async def auto_kick_devices(
         browser_id: ixBrowser 窗口 ID
         account_info: 账号信息 {'email', 'password', 'secret'}
         close_after: 完成后是否关闭浏览器
-        max_steps: 最大执行步骤数
+        max_steps: 最大执行步骤数（保留兼容）
         api_key: API Key（可选，默认从配置读取）
         base_url: API Base URL（可选，用于第三方服务）
         model: 使用的模型（可选，默认从配置读取）
-        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
+        provider: LLM 提供商（已废弃）
 
     Returns:
         (success: bool, message: str, kicked_count: int)
         - success: 是否成功
         - message: 结果消息
         - kicked_count: 踢出的设备数量
-
-    Environment Variables:
-        GEMINI_API_KEY: Gemini API 密钥
-        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
-    print(f"踢出非本机登录设备")
+    print(f"踢出非本机登录设备 (StagehandGoogleEngine)")
     print(f"账号: {email}")
     print(f"{'='*50}")
 
-    # 导入 ixBrowser API
-    try:
-        from services.ix_api import openBrowser, closeBrowser
-    except ImportError:
-        return False, "无法导入 ix_api 模块", 0
-
-    browser = None
-    playwright = None
+    engine = None
     kicked_count = 0
 
     try:
-        from playwright.async_api import async_playwright
+        # 构建模型名称
+        model_name = None
+        if model:
+            if provider:
+                provider_map = {"gemini": "google", "anthropic": "anthropic"}
+                stagehand_provider = provider_map.get(provider, provider)
+                model_name = f"{stagehand_provider}/{model}"
+            else:
+                model_name = model
 
-        # 1. 打开 ixBrowser 窗口
-        print(f"打开浏览器窗口: {browser_id}")
-        result = openBrowser(browser_id)
-
-        if not result or "data" not in result:
-            return False, "无法打开浏览器窗口", 0
-
-        ws_endpoint = result["data"].get("ws", "")
-        if not ws_endpoint:
-            return False, "获取 WebSocket endpoint 失败", 0
-
-        # 2. 连接 Playwright
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-
-        # 获取页面
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        # 3. 创建并运行 Agent
-        agent = AIBrowserAgent(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            provider=provider,
+        # 1. 连接到 ixBrowser 窗口
+        print(f"连接 ixBrowser 窗口: {browser_id}")
+        engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+            browser_id=browser_id,
+            model_name=model_name,
+            model_api_key=api_key,
+            close_browser_on_exit=close_after,
         )
 
-        # 执行踢出设备任务
-        task_result = await agent.execute_task(
-            page=page,
-            goal=f"踢出 Google 账号 {email} 的所有非本机登录设备",
-            start_url=DEVICES_URL,
-            account=account_info,
-            params={},
-            task_type="kick_devices",
-            max_steps=max_steps,
-            navigate_first=True,
+        # 2. 执行踢出设备操作
+        print("执行踢出设备操作...")
+        result = await engine.kick_devices(
+            keep_current=True,
         )
 
-        # 任务成功完成
-        if task_result.success:
+        # 3. 处理结果
+        kicked_count = result.kicked_count or 0
+
+        if result.success:
             print(f"\n✅ 踢出设备任务完成!")
-            print(f"总步骤数: {task_result.total_steps}")
-
-            # 从 data 中获取踢出数量
-            kicked_count = task_result.data.get("kicked_count", 0)
+            print(f"耗时: {result.duration_ms:.0f}ms")
 
             if kicked_count > 0:
                 return True, f"成功踢出 {kicked_count} 个设备", kicked_count
@@ -123,11 +92,11 @@ async def auto_kick_devices(
 
         # 任务失败
         print(f"\n❌ 踢出设备失败")
-        print(f"原因: {task_result.message}")
-        if task_result.error_details:
-            print(f"详情: {task_result.error_details[:500]}")
+        print(f"原因: {result.message}")
+        if result.error:
+            print(f"详情: {result.error[:500]}")
 
-        return False, task_result.message, kicked_count
+        return False, result.message, kicked_count
 
     except Exception as e:
         traceback.print_exc()
@@ -135,22 +104,9 @@ async def auto_kick_devices(
 
     finally:
         # 清理资源
-        if close_after:
+        if engine:
             try:
-                if browser:
-                    await browser.close()
-            except Exception:
-                pass
-
-            try:
-                if playwright:
-                    await playwright.stop()
-            except Exception:
-                pass
-
-            try:
-                closeBrowser(browser_id)
-                print("浏览器已关闭")
+                await engine.stop(close_browser=close_after)
             except Exception:
                 pass
 

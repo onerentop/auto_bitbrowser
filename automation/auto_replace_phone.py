@@ -7,9 +7,7 @@ import pyotp
 from playwright.async_api import async_playwright, Page
 from services.ix_api import openBrowser, closeBrowser
 from core.config_manager import ConfigManager
-
-# 目标 URL
-PHONE_SETTINGS_URL = "https://myaccount.google.com/signinoptions/rescuephone"
+from core.stagehand_engine.constants import GoogleURLs
 
 
 async def check_and_login_for_phone(page: Page, account_info: dict) -> tuple[bool, str]:
@@ -687,10 +685,10 @@ async def auto_replace_phone(page: Page, phone_number: str, account_info: dict =
         print(f"{'='*50}\n")
 
         # 1. 导航到手机号设置页面
-        print(f"导航到: {PHONE_SETTINGS_URL}")
+        print(f"导航到: {GoogleURLs.RECOVERY_PHONE_SETTINGS}")
         try:
             page_load_timeout = ConfigManager.get("timeouts.page_load", 30) * 1000
-            await page.goto(PHONE_SETTINGS_URL, timeout=page_load_timeout)
+            await page.goto(GoogleURLs.RECOVERY_PHONE_SETTINGS, timeout=page_load_timeout)
         except Exception as e:
             print(f"导航失败: {e}")
             return False, f"导航失败: {e}"
@@ -705,7 +703,7 @@ async def auto_replace_phone(page: Page, phone_number: str, account_info: dict =
         # 登录后重新导航到目标页面
         if "登录成功" in login_msg:
             print("登录后重新导航到手机号设置页面...")
-            await page.goto(PHONE_SETTINGS_URL, timeout=60000)
+            await page.goto(GoogleURLs.RECOVERY_PHONE_SETTINGS, timeout=60000)
             await asyncio.sleep(3)
 
         # 2.5 处理重新验证身份挑战（已登录但访问敏感页面时可能需要再次验证密码/2FA）

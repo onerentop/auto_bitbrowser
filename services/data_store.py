@@ -93,10 +93,14 @@ class DataStore:
         self._data_lock = threading.Lock()
 
         # 尝试从数据库加载
-        self._load_from_db()
+        self._load_from_db(silent=False)
 
-    def _load_from_db(self):
-        """从数据库加载数据"""
+    def _load_from_db(self, silent: bool = False):
+        """从数据库加载数据
+
+        Args:
+            silent: 是否静默模式（不打印日志）
+        """
         try:
             from .database import DBManager
 
@@ -108,9 +112,11 @@ class DataStore:
             proxies_data = DBManager.get_all_proxies()
             self._proxies = [ProxyInfo.from_dict(p) for p in proxies_data]
 
-            print(f"[DataStore] 从数据库加载 {len(self._cards)} 张卡片, {len(self._proxies)} 个代理")
+            if not silent:
+                print(f"[DataStore] 从数据库加载 {len(self._cards)} 张卡片, {len(self._proxies)} 个代理")
         except Exception as e:
-            print(f"[DataStore] 数据库加载失败（可能表不存在）: {e}")
+            if not silent:
+                print(f"[DataStore] 数据库加载失败（可能表不存在）: {e}")
 
     # ==================== Cards ====================
 
@@ -218,9 +224,13 @@ class DataStore:
 
     # ==================== 刷新 ====================
 
-    def reload(self):
-        """重新从数据库加载"""
-        self._load_from_db()
+    def reload(self, silent: bool = True):
+        """重新从数据库加载
+
+        Args:
+            silent: 是否静默模式（不打印日志），默认 True
+        """
+        self._load_from_db(silent=silent)
 
 
 # 全局实例

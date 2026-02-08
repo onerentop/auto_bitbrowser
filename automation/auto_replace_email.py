@@ -8,9 +8,7 @@ from playwright.async_api import async_playwright, Page
 from services.ix_api import openBrowser, closeBrowser
 from core.config_manager import ConfigManager
 from services.email_code_reader import GmailCodeReader
-
-# 目标 URL
-RECOVERY_EMAIL_URL = "https://myaccount.google.com/signinoptions/rescueemail"
+from core.stagehand_engine.constants import GoogleURLs
 
 
 async def check_and_login_for_email(page: Page, account_info: dict) -> tuple[bool, str]:
@@ -926,10 +924,10 @@ async def auto_replace_email(page: Page, new_email: str, account_info: dict, cod
         print(f"{'='*50}\n")
 
         # 1. 导航到辅助邮箱设置页面
-        print(f"导航到: {RECOVERY_EMAIL_URL}")
+        print(f"导航到: {GoogleURLs.RECOVERY_EMAIL_SETTINGS}")
         try:
             page_load_timeout = ConfigManager.get("timeouts.page_load", 30) * 1000
-            await page.goto(RECOVERY_EMAIL_URL, timeout=page_load_timeout)
+            await page.goto(GoogleURLs.RECOVERY_EMAIL_SETTINGS, timeout=page_load_timeout)
         except Exception as e:
             print(f"导航失败: {e}")
             return False, f"导航失败: {e}"
@@ -944,7 +942,7 @@ async def auto_replace_email(page: Page, new_email: str, account_info: dict, cod
         # 登录后重新导航到目标页面
         if "登录成功" in login_msg:
             print("登录后重新导航到辅助邮箱设置页面...")
-            await page.goto(RECOVERY_EMAIL_URL, timeout=60000)
+            await page.goto(GoogleURLs.RECOVERY_EMAIL_SETTINGS, timeout=60000)
             await asyncio.sleep(3)
 
         # 2.5 处理重新验证身份挑战

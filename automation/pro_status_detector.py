@@ -1,26 +1,45 @@
 """
 Google One Pro 会员状态检测器
 
-提供统一的 Pro 状态检测功能，支持 Stagehand AI 检测。
+提供统一的 Pro 状态检测功能，使用 StagehandGoogleEngine 进行 AI 检测。
 """
 
 import traceback
-from typing import Callable
+from typing import Callable, Optional, Tuple, TYPE_CHECKING
 
 from playwright.async_api import Page
 
 from core.config_manager import ConfigManager
 
-# 尝试导入 Stagehand SDK
+# 类型检查时导入
+if TYPE_CHECKING:
+    from core.stagehand_engine import StagehandGoogleEngine as StagehandGoogleEngineType
+
+# 导入 StagehandGoogleEngine
 try:
-    from stagehand import AsyncStagehand
-    STAGEHAND_AVAILABLE = True
+    from core.stagehand_engine import StagehandGoogleEngine
+    from core.stagehand_engine.types import ProStatus
+    from core.stagehand_engine.constants import GoogleURLs
+    STAGEHAND_ENGINE_AVAILABLE = True
 except ImportError:
-    STAGEHAND_AVAILABLE = False
-    AsyncStagehand = None
+    STAGEHAND_ENGINE_AVAILABLE = False
+    StagehandGoogleEngine = None
+    ProStatus = None
+    GoogleURLs = None
+
+# 向后兼容别名
+STAGEHAND_AVAILABLE = STAGEHAND_ENGINE_AVAILABLE
 
 
-def get_stagehand_config(log: Callable[[str], None] = None) -> tuple[str, str, str]:
+# 提供商名称映射 (ConfigManager 格式 -> Stagehand 格式)
+PROVIDER_MAP = {
+    "gemini": "google",
+    "anthropic": "anthropic",
+    "openai": "openai",
+}
+
+
+def get_stagehand_config(log: Callable[[str], None] = None) -> Tuple[str, str, str]:
     """
     从配置管理获取 Stagehand AI 配置
 
@@ -47,7 +66,7 @@ def get_stagehand_config(log: Callable[[str], None] = None) -> tuple[str, str, s
     # 构建 Stagehand 模型名称格式
     # Anthropic: anthropic/claude-xxx
     # Gemini: google/gemini-xxx
-    provider_prefix = "google" if provider == "gemini" else provider
+    provider_prefix = PROVIDER_MAP.get(provider, provider)
     stagehand_model = f"{provider_prefix}/{model}"
 
     # 处理 base_url（Anthropic 需要 /v1 后缀）
@@ -73,13 +92,13 @@ async def check_pro_status_via_stagehand(
     log: Callable[[str], None] = None,
 ) -> str | None:
     """
-    使用 Stagehand AI 检测 Pro 状态
+    使用 StagehandGoogleEngine 检测 Pro 状态
 
-    通过 Stagehand SDK 连接到现有的 ixBrowser 窗口，
+    通过 StagehandGoogleEngine 连接到现有的 ixBrowser 窗口，
     使用 AI 智能提取 Google One 订阅信息。
 
     Args:
-        page: Playwright Page 对象（已连接到 ixBrowser）
+        page: Playwright Page 对象（已连接到 ixBrowser，用于兼容性保留）
         email: 账号邮箱（用于日志）
         ws_endpoint: ixBrowser 的 WebSocket 端点
         log: 日志回调函数
@@ -96,249 +115,56 @@ async def check_pro_status_via_stagehand(
         else:
             print(f"[ProDetector] {msg}")
 
-    if not STAGEHAND_AVAILABLE:
-        _log("Stagehand SDK 不可用")
+    if not STAGEHAND_ENGINE_AVAILABLE:
+        _log("StagehandGoogleEngine 不可用")
         return None
+
+    engine: Optional["StagehandGoogleEngineType"] = None
 
     try:
-        _log(f"[AI] 使用 Stagehand AI 检测 Pro 状态...")
+        _log("[AI] 使用 StagehandGoogleEngine 检测 Pro 状态...")
 
-        # 使用公共函数获取 AI 配置
-        model_api_key, model_base_url, stagehand_model = get_stagehand_config(_log)
+        # 创建 StagehandGoogleEngine 实例并连接到现有浏览器
+        engine = StagehandGoogleEngine(use_config=True)
+        await engine.connect_cdp(ws_endpoint)
 
-        if not model_api_key or not stagehand_model:
-            _log("[!] 未配置 AI API Key，无法使用 Stagehand")
+        _log("StagehandGoogleEngine 已连接")
+
+        # 使用 engine 的 detect_pro_status 方法
+        result = await engine.detect_pro_status(navigate_if_needed=True)
+
+        _log(f"检测结果: is_pro={result.is_pro}, is_family_member={result.is_family_member}, "
+             f"plan={result.plan_name}, confidence={result.confidence}")
+
+        # 检查是否需要登录
+        if result.method_used == "login_required":
+            _log("[!] 账号未登录，无法检测 Pro 状态")
             return None
 
-        # 构建 model_config（用于 extract 调用）
-        model_config = {
-            "model_name": stagehand_model,
-            "api_key": model_api_key,
-        }
-        if model_base_url:
-            model_config["base_url"] = model_base_url
+        # 根据结果返回状态
+        if not result.is_pro:
+            _log("[OK] 检测结果: 非 Pro 会员")
+            return "no"
 
-        # 创建 Stagehand 客户端（使用本地模式）
-        async with AsyncStagehand(
-            server="local",
-            model_api_key=model_api_key,
-            local_ready_timeout_s=30.0,
-        ) as client:
-            # 启动 session，连接到现有浏览器
-            _log("启动 Stagehand session (连接到现有浏览器)...")
-            session = await client.sessions.start(
-                model_name=stagehand_model,
-                browser={
-                    "type": "local",
-                    "cdp_url": ws_endpoint,
-                },
-            )
-
-            try:
-                # 同步 Stagehand 到当前 URL
-                await session.navigate(url="https://one.google.com/")
-
-                # 使用 AI 提取 Pro 状态
-                _log("使用 AI 提取订阅信息...")
-                extract_response = await session.extract(
-                    instruction="""
-                    仔细分析当前 Google One 页面，判断用户的会员订阅状态。
-
-                    **重要判断规则（按优先级顺序）：**
-
-                    1. 首先检查是否有"Upgrade"或"升级"按钮：
-                       - 如果页面左侧导航栏或页面上有"Upgrade"、"升级"按钮 → 说明是**非会员**
-                       - 非会员页面通常显示套餐选择、价格信息
-
-                    2. 如果没有"Upgrade"按钮，检查是否是会员：
-                       - 查找"Your membership"、"您的会员资格"、"Member benefits"、"会员福利"
-                       - 查找存储空间信息如"100 GB"、"2 TB"、"AI Premium"
-                       - 查找"Manage membership"、"管理会员"
-
-                    3. 如果是会员，判断是独立订阅还是家庭组成员：
-
-                       **家庭组成员特征（is_family_member=true）：**
-                       - 看到"Shared with you"、"与您共享"
-                       - 看到"Family plan"、"家庭方案"但没有付款/账单信息
-                       - 看到"Leave family"、"退出家庭"选项
-                       - 没有看到"Next payment"、"下次付款"信息
-                       - 页面显示是通过其他人的订阅获得的福利
-
-                       **独立订阅者特征（is_family_member=false）：**
-                       - 看到"Next payment"、"下次付款"信息
-                       - 看到"Cancel membership"、"取消会员"
-                       - 看到"Payment method"、"付款方式"
-                       - 看到"Manage family"、"管理家庭"（说明是家庭管理员）
-
-                    请返回：
-                    - is_subscribed: 是否有 Google One 会员（true/false）
-                    - is_family_member: 是否是家庭组成员（被邀请加入的，不是管理员）（true/false）
-                    - plan_name: 套餐名称（如"2 TB", "AI Premium", "100 GB"等）
-                    - confidence: 判断置信度（0-1）
-                    """,
-                    schema={
-                        "type": "object",
-                        "properties": {
-                            "is_subscribed": {
-                                "type": "boolean",
-                                "description": "用户是否有 Google One 会员资格（不论是自己订阅还是家庭共享）。如果页面有 Upgrade 按钮则为 false，如果显示会员福利或存储空间则为 true"
-                            },
-                            "is_family_member": {
-                                "type": "boolean",
-                                "description": "如果是会员，是否是通过家庭组共享获得的（被别人邀请加入）。如果没有付款信息或看到 shared with you 则为 true"
-                            },
-                            "plan_name": {
-                                "type": "string",
-                                "description": "会员套餐名称，如 2 TB, AI Premium, 100 GB 等"
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "description": "判断置信度 0-1"
-                            },
-                        },
-                        "required": ["is_subscribed", "is_family_member", "confidence"],
-                    },
-                    options={
-                        "model": model_config,
-                    },
-                )
-
-                # 解析结果
-                result_data = extract_response.data.result
-                _log(f"Stagehand 提取结果: {result_data}")
-
-                if result_data is None:
-                    _log("[!] Stagehand 提取结果为空")
-                    return None
-
-                is_subscribed = result_data.get("is_subscribed", False)
-                is_family_member = result_data.get("is_family_member", False)
-                plan_name = result_data.get("plan_name", "")
-                confidence = result_data.get("confidence", 0)
-
-                _log(f"AI 分析: 已订阅={is_subscribed}, 家庭成员={is_family_member}, 方案={plan_name}, 置信度={confidence}")
-
-                # 置信度检查
-                if confidence < 0.5:
-                    _log(f"[!] AI 置信度较低 ({confidence})，建议人工确认")
-
-                # 返回结果
-                if not is_subscribed:
-                    _log("[OK] Stagehand 检测: 非 Pro 会员")
-                    return "no"
-
-                # 是 Pro 会员，需要二次确认家庭组状态
-                # 导航到会员设置页面进行精确判断
-                _log("检测到 Pro 会员，正在检查是否为独立订阅...")
-                await session.navigate(url="https://one.google.com/settings")
-
-                # 在设置页面检查是否有独立订阅者特有的选项
-                settings_response = await session.extract(
-                    instruction="""
-                    分析当前 Google One 设置页面，判断用户是独立订阅者还是家庭组成员。
-
-                    **关键判断规则：**
-
-                    如果看到以下任一内容，说明是**独立订阅者**（自己付费）：
-                    - "Share Google One with family" 开关
-                    - "Change payment method" / "更改付款方式"
-                    - "Cancel membership" / "取消会员"
-                    - "Change membership plan" / "更改会员方案"
-                    - "Manage family settings" / "管理家庭设置"
-
-                    如果页面**没有**付款相关选项，或者显示：
-                    - "Your membership is shared by..." / "您的会员由...共享"
-                    - "Leave family" / "退出家庭"
-                    - 只有基本的会员信息，没有付款/取消选项
-                    说明是**家庭组成员**（通过别人的订阅获得）
-
-                    请返回：
-                    - has_payment_options: 页面是否有付款相关选项（Change payment method, Cancel membership等）
-                    - has_share_family_toggle: 页面是否有 "Share Google One with family" 开关
-                    - is_independent_subscriber: 是否是独立订阅者（自己付费的）
-                    - confidence: 判断置信度
-                    """,
-                    schema={
-                        "type": "object",
-                        "properties": {
-                            "has_payment_options": {
-                                "type": "boolean",
-                                "description": "页面是否有付款相关选项"
-                            },
-                            "has_share_family_toggle": {
-                                "type": "boolean",
-                                "description": "页面是否有 Share Google One with family 开关"
-                            },
-                            "is_independent_subscriber": {
-                                "type": "boolean",
-                                "description": "是否是独立订阅者（自己付费）"
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "description": "判断置信度 0-1"
-                            },
-                        },
-                        "required": ["has_payment_options", "has_share_family_toggle", "is_independent_subscriber", "confidence"],
-                    },
-                    options={
-                        "model": model_config,
-                    },
-                )
-
-                settings_data = settings_response.data.result
-                _log(f"设置页面检测结果: {settings_data}")
-
-                if settings_data:
-                    has_payment = settings_data.get("has_payment_options", False)
-                    has_share_toggle = settings_data.get("has_share_family_toggle", False)
-                    is_independent = settings_data.get("is_independent_subscriber", False)
-                    settings_confidence = settings_data.get("confidence", 0)
-
-                    _log(f"设置分析: 付款选项={has_payment}, 家庭共享开关={has_share_toggle}, 独立订阅={is_independent}, 置信度={settings_confidence}")
-
-                    # 判断逻辑优先级：
-                    # 1. 付款选项或家庭共享开关是**客观 UI 元素**，可信度最高
-                    # 2. is_independent_subscriber 是 AI 的主观判断，容易误判
-                    # 3. 第一次检测的 is_family_member 如果为 True，应该作为重要参考
-
-                    # 只有存在客观的付款/管理选项，才能判定为独立订阅者
-                    if has_payment or has_share_toggle:
-                        _log(f"[OK] Stagehand 检测: 普通 Pro 会员 ({plan_name})")
-                        return "yes"
-
-                    # 如果第一次检测认为是家庭成员，且设置页面没有付款选项，则信任第一次判断
-                    if is_family_member:
-                        _log(f"[OK] Stagehand 检测: 家庭组 Pro 会员 ({plan_name})")
-                        return "family_yes"
-
-                    # 如果第一次检测不是家庭成员，且 AI 认为是独立订阅者
-                    if is_independent and settings_confidence >= 0.7:
-                        _log(f"[OK] Stagehand 检测: 普通 Pro 会员 ({plan_name})")
-                        return "yes"
-
-                    # 无法确定时，默认为家庭组（保守判断）
-                    _log("[!] 无法确定订阅类型，默认为家庭组 Pro")
-                    return "family_yes"
-
-                # 设置页面提取失败时，信任第一次判断
-                if is_family_member:
-                    _log(f"[OK] Stagehand 检测: 家庭组 Pro 会员 ({plan_name})")
-                    return "family_yes"
-                else:
-                    _log(f"[OK] Stagehand 检测: 普通 Pro 会员 ({plan_name})")
-                    return "yes"
-
-            finally:
-                # 确保 session 结束
-                try:
-                    await session.end()
-                except Exception:
-                    pass
+        if result.is_family_member:
+            _log(f"[OK] 检测结果: 家庭组 Pro 会员 ({result.plan_name})")
+            return "family_yes"
+        else:
+            _log(f"[OK] 检测结果: 普通 Pro 会员 ({result.plan_name})")
+            return "yes"
 
     except Exception as e:
-        _log(f"[!] Stagehand 检测失败: {e}")
+        _log(f"[!] StagehandGoogleEngine 检测失败: {e}")
         _log(f"错误详情: {traceback.format_exc()}")
         return None
+
+    finally:
+        # 确保清理资源（不关闭浏览器窗口）
+        if engine and engine.is_initialized:
+            try:
+                await engine.stop(close_browser=False)
+            except Exception:
+                pass
 
 
 async def check_pro_status_simple(
@@ -348,7 +174,7 @@ async def check_pro_status_simple(
     """
     简单的 Pro 状态检测（基于页面文本分析）
 
-    作为 Stagehand AI 检测的备用方案。
+    作为 StagehandGoogleEngine 检测的备用方案。
 
     Args:
         page: Playwright Page 对象
@@ -369,7 +195,7 @@ async def check_pro_status_simple(
         _log("正在检测 Google One 会员状态...")
 
         # 导航到 Google One 页面
-        await page.goto("https://one.google.com/", wait_until="domcontentloaded", timeout=15000)
+        await page.goto(GoogleURLs.GOOGLE_ONE, wait_until="domcontentloaded", timeout=15000)
         await page.wait_for_timeout(2000)
 
         # 检查页面内容，寻找会员标识
@@ -429,13 +255,13 @@ async def check_login_status_via_stagehand(
     log: Callable[[str], None] = None,
 ) -> bool | None:
     """
-    使用 Stagehand AI 检测 Google 账号登录状态
+    使用 StagehandGoogleEngine 检测 Google 账号登录状态
 
-    通过 Stagehand SDK 连接到现有的 ixBrowser 窗口，
+    通过 StagehandGoogleEngine 连接到现有的 ixBrowser 窗口，
     使用 AI 智能判断当前浏览器是否已登录 Google 账号。
 
     Args:
-        page: Playwright Page 对象（已连接到 ixBrowser）
+        page: Playwright Page 对象（已连接到 ixBrowser，用于兼容性保留）
         email: 账号邮箱（用于日志和验证）
         ws_endpoint: ixBrowser 的 WebSocket 端点
         log: 日志回调函数
@@ -451,145 +277,96 @@ async def check_login_status_via_stagehand(
         else:
             print(f"[LoginDetector] {msg}")
 
-    if not STAGEHAND_AVAILABLE:
-        _log("Stagehand SDK 不可用")
+    if not STAGEHAND_ENGINE_AVAILABLE:
+        _log("StagehandGoogleEngine 不可用")
         return None
+
+    engine: Optional["StagehandGoogleEngineType"] = None
 
     try:
-        _log("[AI] 使用 Stagehand AI 检测登录状态...")
+        _log("[AI] 使用 StagehandGoogleEngine 检测登录状态...")
 
-        # 使用公共函数获取 AI 配置
-        model_api_key, model_base_url, stagehand_model = get_stagehand_config(_log)
+        # 创建 StagehandGoogleEngine 实例并连接到现有浏览器
+        engine = StagehandGoogleEngine(use_config=True)
+        await engine.connect_cdp(ws_endpoint)
 
-        if not model_api_key or not stagehand_model:
-            _log("[!] 未配置 AI API Key，无法使用 Stagehand")
+        _log("StagehandGoogleEngine 已连接")
+
+        # 导航到 Google 账号页面检测登录状态
+        _log("导航到 Google 账号页面...")
+        nav_result = await engine.navigate(GoogleURLs.ACCOUNT)
+
+        if not nav_result.success:
+            _log(f"[!] 导航失败: {nav_result.error_message}")
             return None
 
-        # 构建 model_config
-        model_config = {
-            "model_name": stagehand_model,
-            "api_key": model_api_key,
-        }
-        if model_base_url:
-            model_config["base_url"] = model_base_url
+        # 等待页面加载
+        await engine.wait(2000)
 
-        # 创建 Stagehand 客户端
-        async with AsyncStagehand(
-            server="local",
-            model_api_key=model_api_key,
-            local_ready_timeout_s=30.0,
-        ) as client:
-            _log("启动 Stagehand session (连接到现有浏览器)...")
-            session = await client.sessions.start(
-                model_name=stagehand_model,
-                browser={
-                    "type": "local",
-                    "cdp_url": ws_endpoint,
-                },
+        # 获取当前 URL
+        current_url = await engine.get_current_url()
+        _log(f"当前页面 URL: {current_url}")
+
+        # 如果被重定向到登录页面，说明未登录
+        if "accounts.google.com" in current_url and "signin" in current_url:
+            _log("[OK] 检测结果: 未登录")
+            return False
+
+        # 如果在 myaccount 页面，检查是否是目标账号
+        if "myaccount.google.com" in current_url:
+            # 使用 AI 提取登录的邮箱
+            extract_result = await engine.extract(
+                instruction=f"""
+                分析当前 Google 账号页面，判断用户是否已登录。
+
+                **判断规则：**
+                1. 如果页面显示邮箱地址，提取该邮箱
+                2. 检查是否登录的是目标账号: {email}
+
+                请返回：
+                - is_logged_in: 是否已登录 (true/false)
+                - logged_in_email: 已登录的邮箱地址
+                - is_target_account: 是否是目标账号 {email} (true/false)
+                """
             )
 
-            try:
-                # 导航到 Google 账号页面检测登录状态
-                _log("导航到 Google 账号页面...")
-                await session.navigate(url="https://accounts.google.com/")
+            if not extract_result.success:
+                _log(f"[!] 提取登录状态失败: {extract_result.error}")
+                # 如果在 myaccount 页面但无法提取，假设已登录
+                _log("[OK] 检测结果: 已登录（无法确认邮箱）")
+                return True
 
-                # 使用 AI 提取登录状态
-                _log("使用 AI 检测登录状态...")
-                extract_response = await session.extract(
-                    instruction=f"""
-                    分析当前 Google 账号页面，判断用户是否已登录。
+            data = extract_result.data or {}
+            is_logged_in = data.get("is_logged_in", True)
+            logged_in_email = data.get("logged_in_email", "")
+            is_target_account = data.get("is_target_account", False)
 
-                    **判断规则：**
+            _log(f"AI 分析: 已登录={is_logged_in}, 登录邮箱={logged_in_email}, 是目标账号={is_target_account}")
 
-                    1. **已登录的特征**：
-                       - 页面显示用户头像或用户名
-                       - 页面显示邮箱地址（如 xxx@gmail.com）
-                       - 页面 URL 是 myaccount.google.com
-                       - 看到 "Manage your Google Account" 或 "管理您的 Google 账号"
-                       - 看到账号设置选项（安全、隐私、数据等）
+            if not is_logged_in:
+                _log("[OK] 检测结果: 未登录")
+                return False
 
-                    2. **未登录的特征**：
-                       - 看到 "Sign in" 或 "登录" 按钮
-                       - 看到邮箱输入框
-                       - 页面要求输入密码
-                       - 页面 URL 包含 accounts.google.com/signin
+            if is_target_account:
+                _log(f"[OK] 检测结果: 已登录目标账号 ({email})")
+                return True
+            else:
+                _log(f"[!] 检测结果: 已登录其他账号 ({logged_in_email})，需要切换到 {email}")
+                return False
 
-                    3. **验证目标账号**：
-                       - 如果已登录，检查登录的邮箱是否是: {email}
-                       - 如果登录的是其他账号，也视为"未登录目标账号"
-
-                    请返回：
-                    - is_logged_in: 是否已登录任意 Google 账号 (true/false)
-                    - logged_in_email: 如果已登录，显示的邮箱地址（可能为空）
-                    - is_target_account: 是否登录的是目标账号 {email} (true/false)
-                    - confidence: 判断置信度 (0-1)
-                    """,
-                    schema={
-                        "type": "object",
-                        "properties": {
-                            "is_logged_in": {
-                                "type": "boolean",
-                                "description": "是否已登录任意 Google 账号"
-                            },
-                            "logged_in_email": {
-                                "type": "string",
-                                "description": "已登录的邮箱地址，未登录则为空"
-                            },
-                            "is_target_account": {
-                                "type": "boolean",
-                                "description": "是否登录的是目标账号"
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "description": "判断置信度 0-1"
-                            },
-                        },
-                        "required": ["is_logged_in", "is_target_account", "confidence"],
-                    },
-                    options={
-                        "model": model_config,
-                    },
-                )
-
-                # 解析结果
-                result_data = extract_response.data.result
-                _log(f"Stagehand 提取结果: {result_data}")
-
-                if result_data is None:
-                    _log("[!] Stagehand 提取结果为空")
-                    return None
-
-                is_logged_in = result_data.get("is_logged_in", False)
-                logged_in_email = result_data.get("logged_in_email", "")
-                is_target_account = result_data.get("is_target_account", False)
-                confidence = result_data.get("confidence", 0)
-
-                _log(f"AI 分析: 已登录={is_logged_in}, 登录邮箱={logged_in_email}, 是目标账号={is_target_account}, 置信度={confidence}")
-
-                # 置信度检查
-                if confidence < 0.5:
-                    _log(f"[!] AI 置信度较低 ({confidence})，建议人工确认")
-
-                # 返回结果
-                if not is_logged_in:
-                    _log("[OK] Stagehand 检测: 未登录")
-                    return False
-
-                if is_target_account:
-                    _log(f"[OK] Stagehand 检测: 已登录目标账号 ({email})")
-                    return True
-                else:
-                    # 登录了其他账号
-                    _log(f"[!] Stagehand 检测: 已登录其他账号 ({logged_in_email})，需要切换到 {email}")
-                    return False
-
-            finally:
-                try:
-                    await session.end()
-                except Exception:
-                    pass
+        # 无法确定
+        _log("[!] 无法确定登录状态")
+        return None
 
     except Exception as e:
-        _log(f"[!] Stagehand 登录检测失败: {e}")
+        _log(f"[!] StagehandGoogleEngine 登录检测失败: {e}")
         _log(f"错误详情: {traceback.format_exc()}")
         return None
+
+    finally:
+        # 确保清理资源（不关闭浏览器窗口）
+        if engine and engine.is_initialized:
+            try:
+                await engine.stop(close_browser=False)
+            except Exception:
+                pass

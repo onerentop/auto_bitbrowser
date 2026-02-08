@@ -4,7 +4,7 @@
 
 ## Overview
 
-Core utilities module. Provides configuration management, intelligent retry framework, unified data parsing, and the AI Browser Agent submodule.
+Core utilities module. Provides configuration management, intelligent retry framework, unified data parsing, **StagehandGoogleEngine** (AI browser agent), and legacy AI Browser Agent (deprecated).
 
 ## Module Structure
 
@@ -14,9 +14,29 @@ core/
 ├── config_manager.py     # Configuration manager (singleton)
 ├── data_parser.py        # Unified data parser
 ├── retry_helper.py       # Intelligent retry framework
-├── ai_browser_agent/     # AI Browser Agent submodule
+├── stagehand_engine/     # StagehandGoogleEngine (RECOMMENDED)
+│   ├── __init__.py       # Module exports
+│   ├── engine.py         # Main StagehandGoogleEngine class
+│   ├── types.py          # Operation result types
+│   └── operations/       # Operation implementations
+│       ├── login.py          # Google login
+│       ├── pro_status.py     # Pro status detection
+│       ├── family.py         # Family status detection
+│       ├── bind_card.py      # Card binding
+│       ├── sheerlink.py      # SheerID link extraction
+│       ├── kick_devices.py   # Device removal
+│       ├── modify_2sv.py     # 2SV phone modification
+│       ├── modify_auth.py    # Authenticator modification
+│       ├── replace_email.py  # Recovery email replacement
+│       ├── replace_phone.py  # Recovery phone replacement
+│       ├── subscribe.py      # Subscription
+│       ├── unlock_403.py     # 403 unlock
+│       ├── join_family.py    # Join family group
+│       ├── enable_sharing.py # Enable family sharing
+│       └── oauth.py          # OAuth authorization
+├── ai_browser_agent/     # [DEPRECATED] Legacy AI Browser Agent
 │   └── CLAUDE.md         # Submodule documentation
-└── totp_extractor/       # TOTP 密钥提取模块
+└── totp_extractor/       # TOTP secret extraction
     ├── __init__.py       # Module exports
     ├── migration_decoder.py  # Google Authenticator Protobuf decoder
     └── qr_scanner.py     # QR code scanner (pyzbar)
@@ -24,10 +44,60 @@ core/
 
 ## Submodule Navigation
 
-| Submodule | Description | CLAUDE.md |
-|-----------|-------------|-----------|
-| ai_browser_agent | Multi-LLM Vision-based browser agent (Gemini, Anthropic) | [ai_browser_agent/CLAUDE.md](ai_browser_agent/CLAUDE.md) |
-| totp_extractor | Extract TOTP secrets from Google Authenticator QR codes | - |
+| Submodule | Description | Status |
+|-----------|-------------|--------|
+| stagehand_engine | Stagehand-based Google account automation engine | ✅ RECOMMENDED |
+| ai_browser_agent | Multi-LLM Vision-based browser agent | ⚠️ DEPRECATED |
+| totp_extractor | Extract TOTP secrets from Google Authenticator QR codes | ✅ Active |
+
+## StagehandGoogleEngine (Recommended)
+
+The primary AI browser automation engine for Google account operations.
+
+### Quick Start
+
+```python
+from core.stagehand_engine import StagehandGoogleEngine
+
+async def example():
+    # Connect to existing ixBrowser window
+    engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+        browser_id="12345",
+        model_name="google/gemini-2.5-flash",
+        model_api_key="your-api-key",
+    )
+
+    try:
+        # Execute operations
+        result = await engine.bind_card(
+            card_number="4111111111111111",
+            card_exp="12/28",
+            card_cvv="123",
+        )
+        print(f"Success: {result.success}")
+    finally:
+        await engine.stop()
+```
+
+### Available Operations
+
+| Operation | Method | Returns |
+|-----------|--------|---------|
+| Login | `login()` | `LoginResult` |
+| Pro Status | `detect_pro_status()` | `ProStatusResult` |
+| Family Status | `detect_family_status()` | `FamilyStatusResult` |
+| Bind Card | `bind_card()` | `BindCardResult` |
+| Get SheerLink | `get_sheerlink()` | `SheerlinkResult` |
+| Kick Devices | `kick_devices()` | `KickDevicesResult` |
+| Modify 2SV Phone | `modify_2sv_phone()` | `ModifyPhoneResult` |
+| Modify Authenticator | `modify_authenticator()` | `ModifyAuthenticatorResult` |
+| Replace Recovery Email | `replace_recovery_email()` | `ReplaceEmailResult` |
+| Replace Recovery Phone | `replace_recovery_phone()` | `ReplacePhoneResult` |
+| Subscribe | `subscribe()` | `SubscribeResult` |
+| Unlock 403 | `unlock_403()` | `UnlockResult` |
+| Join Family | `join_family()` | `JoinFamilyResult` |
+| Enable Family Sharing | `enable_family_sharing()` | `EnableSharingResult` |
+| OAuth Authorize | `oauth_authorize()` | `OAuthResult` |
 
 ## Components
 
@@ -48,60 +118,10 @@ core/
 | `get(key, default)` | Get config value (supports nested key) |
 | `set(key, value)` | Set config value and auto-save |
 | `get_api_key()` | Get decrypted SheerID API Key |
-| `set_api_key(key)` | Encrypt and save API Key |
-| `get_ai_api_key()` | Get decrypted AI API Key (backward compatible) |
-| `set_ai_api_key(key)` | Encrypt and save AI API Key (backward compatible) |
-| `get_ai_default_provider()` | Get default AI provider (gemini/anthropic) |
-| `set_ai_default_provider(provider)` | Set default AI provider |
+| `get_ai_api_key()` | Get decrypted AI API Key |
+| `get_ai_default_provider()` | Get default AI provider |
 | `get_ai_provider_api_key(provider)` | Get API key for specific provider |
-| `set_ai_provider_api_key(provider, key)` | Set API key for specific provider |
-| `get_ai_provider_base_url(provider)` | Get base URL for specific provider |
 | `get_ai_provider_model(provider)` | Get model name for specific provider |
-| `get_llm_config(provider)` | Get full config for create_llm() |
-| `reload()` | Force reload config from file |
-
-**Default Config**:
-```json
-{
-  "sheerid_api_key": "",
-  "default_thread_count": 3,
-  "timeouts": {
-    "page_load": 30,
-    "status_check": 20,
-    "iframe_wait": 15
-  },
-  "delays": {
-    "after_login": 3,
-    "after_offer": 8,
-    "after_add_card": 10,
-    "after_save": 18
-  },
-  "proxy": {
-    "max_windows_per_ip": 3
-  },
-  "ai_agent": {
-    "default_provider": "gemini",
-    "providers": {
-      "gemini": {
-        "enabled": true,
-        "api_key": "",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-2.5-flash",
-        "timeout": 60
-      },
-      "anthropic": {
-        "enabled": true,
-        "api_key": "",
-        "base_url": "",
-        "model": "claude-sonnet-4-20250514",
-        "timeout": 60
-      }
-    },
-    "max_steps": 25,
-    "max_tokens": 8192
-  }
-}
-```
 
 ### DataParser (data_parser.py)
 
@@ -127,12 +147,6 @@ Intelligent retry framework with exponential backoff.
 |-------|-------------|
 | `RetryHelper` | Supports sync/async function retry |
 | `FailedTaskQueue` | Failed task queue management (JSON persistence) |
-
-**Configuration**:
-- `max_retries`: Maximum retry attempts (default: 3)
-- `base_delay`: Base delay seconds (default: 2.0)
-- `backoff_factor`: Backoff multiplier (default: 2.0)
-- `max_delay`: Maximum delay seconds (default: 60.0)
 
 **Decorators**:
 ```python
@@ -169,11 +183,12 @@ from core import RetryHelper, FailedTaskQueue
 helper = RetryHelper(max_retries=3, base_delay=2.0)
 result = await helper.execute_async(async_func, arg1, arg2)
 
-# AI Browser Agent
-from core import AIBrowserAgent, AI_BROWSER_AGENT_AVAILABLE
+# StagehandGoogleEngine (RECOMMENDED)
+from core.stagehand_engine import StagehandGoogleEngine
 
-if AI_BROWSER_AGENT_AVAILABLE:
-    agent = AIBrowserAgent()
+engine = await StagehandGoogleEngine.connect_to_ixbrowser("12345")
+result = await engine.kick_devices()
+await engine.stop()
 ```
 
 ## Exports
@@ -186,10 +201,18 @@ from core import (
     RetryHelper, FailedTaskQueue, with_retry, with_retry_async,
     # Data parsing
     parse_account_line, build_account_line,
-    # AI Browser Agent
-    AIBrowserAgent, VisionAnalyzer, ActionExecutor,
-    ActionType, AgentAction, AgentState, TaskResult, TaskContext,
-    AI_BROWSER_AGENT_AVAILABLE,
+)
+
+# StagehandGoogleEngine (recommended import)
+from core.stagehand_engine import (
+    StagehandGoogleEngine,
+    # Result types
+    LoginResult, ProStatusResult, FamilyStatusResult,
+    BindCardResult, SheerlinkResult, KickDevicesResult,
+    ModifyPhoneResult, ModifyAuthenticatorResult,
+    ReplaceEmailResult, ReplacePhoneResult,
+    SubscribeResult, UnlockResult, JoinFamilyResult,
+    EnableSharingResult, OAuthResult,
 )
 ```
 
@@ -197,7 +220,8 @@ from core import (
 
 - **Internal dependencies**: None (pure infrastructure module)
 - **External usage**: Used by `automation/*`, `gui/*`, `services/*`
+- **External packages**: stagehand, playwright
 
 ---
 
-*Updated: 2026-02-02*
+*Updated: 2026-02-04 - Added StagehandGoogleEngine, deprecated ai_browser_agent*

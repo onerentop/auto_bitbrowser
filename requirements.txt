@@ -14,4 +14,4 @@ imap_tools
 openai
 anthropic
 pyzbar
-stagehand
+stagehand>=3.5.0

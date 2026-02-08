@@ -1,6 +1,6 @@
 """
 替换手机号界面 - Fluent Design 版本
-AI 自动替换账号的辅助手机号
+AI 自动替换账号的辅助手机号 (StagehandGoogleEngine 版)
 """
 import asyncio
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout
 from qfluentwidgets import FluentIcon as FIF, LineEdit, BodyLabel
 
 from gui.ai_task_interface import AITaskInterface
-from automation.auto_replace_phone import auto_replace_phone
+from automation.auto_replace_recovery_phone import auto_replace_recovery_phone
 
 
 class ReplacePhoneWorker(QThread):
@@ -48,15 +48,17 @@ class ReplacePhoneWorker(QThread):
             self.progressSignal.emit(email, "处理中", "正在替换手机号...")
 
             try:
-                result = await auto_replace_phone(
-                    profile_id=profile_id,
+                # 使用 StagehandGoogleEngine 版本
+                success, message = await auto_replace_recovery_phone(
+                    browser_id=profile_id,
                     account_info=acc.get('account_info', {}),
-                    new_phone=new_phone
+                    new_phone=new_phone,
+                    close_after=False,
                 )
-                if result.get('success'):
-                    self.progressSignal.emit(email, "成功", result.get('message', '手机号已替换'))
+                if success:
+                    self.progressSignal.emit(email, "成功", message)
                 else:
-                    self.progressSignal.emit(email, "失败", result.get('message', '替换失败'))
+                    self.progressSignal.emit(email, "失败", message)
             except Exception as e:
                 self.progressSignal.emit(email, "错误", str(e))
 

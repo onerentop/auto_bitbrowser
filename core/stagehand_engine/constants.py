@@ -12,21 +12,32 @@ class GoogleURLs:
     LOGIN = "https://accounts.google.com/signin"
     LOGIN_V2 = "https://accounts.google.com/v3/signin/identifier"
     LOGOUT = "https://accounts.google.com/Logout"
+    GMAIL = "https://mail.google.com"
 
     # 账号管理
     ACCOUNT = "https://myaccount.google.com"
     SECURITY = "https://myaccount.google.com/security"
     PERSONAL_INFO = "https://myaccount.google.com/personal-info"
+    PEOPLE_SHARING = "https://myaccount.google.com/people-and-sharing"
 
     # Google One
     GOOGLE_ONE = "https://one.google.com"
     GOOGLE_ONE_SETTINGS = "https://one.google.com/settings"
     GOOGLE_ONE_STORAGE = "https://one.google.com/storage"
+    GOOGLE_ONE_PLANS = "https://one.google.com/about/plans"
+
+    # 绑卡订阅
+    BIND_CARD = "https://one.google.com/ai-student?g1_landing_page=75&utm_source=antigravity&utm_campaign=argon_limit_reached"
+    SHEERLINK = "https://goo.gle/freepro"
+    STUDENT_SUBSCRIBE = "https://one.google.com/ai-student"
 
     # 家庭组
     FAMILY = "https://families.google.com"
     FAMILY_MEMBERS = "https://families.google.com/families"
     FAMILY_SHARING = "https://families.google.com/sharing"
+    FAMILY_SETTINGS = "https://one.google.com/settings/family"
+    FAMILY_ACCOUNT = "https://myaccount.google.com/family"
+    FAMILY_INVITE_MEMBERS = "https://myaccount.google.com/family/invitemembers"
 
     # 订阅
     SUBSCRIPTIONS = "https://myaccount.google.com/subscriptions"
@@ -34,6 +45,23 @@ class GoogleURLs:
 
     # 设备
     DEVICES = "https://myaccount.google.com/device-activity"
+    SECURITY_DEVICES = "https://myaccount.google.com/device-activity"  # 别名，与 DEVICES 相同
+
+    # OAuth
+    ANTIGRAVITY_OAUTH = "https://app.antigravity.com/oauth/google"
+    ANTIGRAVITY_OAUTH_REDIRECT = "https://app.antigravity.com/oauth/callback"
+
+    # 安全设置
+    TWO_STEP_VERIFICATION = "https://myaccount.google.com/signinoptions/two-step-verification"
+    AUTHENTICATOR = "https://myaccount.google.com/two-step-verification/authenticator"
+    RECOVERY_PHONE = "https://myaccount.google.com/recovery/phone"
+    RECOVERY_EMAIL = "https://myaccount.google.com/recovery/email"
+    RECOVERY_PHONE_SETTINGS = "https://myaccount.google.com/signinoptions/rescuephone"
+    RECOVERY_EMAIL_SETTINGS = "https://myaccount.google.com/signinoptions/rescueemail"
+
+    # 账号恢复
+    ACCOUNT_RECOVERY = "https://accounts.google.com/signin/v2/challenge/recaptcha"
+    ACCOUNT_VERIFY = "https://accounts.google.com/signin/v2/identifier"
 
 
 class Timeouts:
@@ -47,6 +75,7 @@ class Timeouts:
     ACTION = 10000
     OBSERVE = 15000
     EXTRACT = 20000
+    OPERATION = 120000  # 复杂操作 (如绑卡、OAuth)
 
     # 登录流程
     LOGIN_TOTAL = 120000
@@ -222,6 +251,32 @@ class FamilyKeywords:
         "家庭群组管理员",
         "you manage this family",
         "manage members",
+    ]
+
+    # 家庭组成员标识（被邀请加入的，非管理员）
+    FAMILY_MEMBER = [
+        "shared with you",
+        "与您共享",
+        "shared by",
+        "由...共享",
+        "leave family",
+        "退出家庭",
+        "your membership is shared",
+        "您的会员由",
+    ]
+
+    # 独立订阅者标识（自己付费）
+    INDEPENDENT_SUBSCRIBER = [
+        "next payment",
+        "下次付款",
+        "cancel membership",
+        "取消会员",
+        "change payment method",
+        "更改付款方式",
+        "share google one with family",
+        "与家人共享 google one",
+        "manage family settings",
+        "管理家庭设置",
     ]
 
     # 共享状态

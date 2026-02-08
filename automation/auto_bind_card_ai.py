@@ -1,19 +1,16 @@
 """
-自动绑卡订阅 - AI Agent 版
+自动绑卡订阅 - StagehandGoogleEngine 版
 
-使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成 Google One AI Student 绑卡订阅
-替代传统的硬编码选择器方案，更稳定可维护
+使用 StagehandGoogleEngine 自动完成 Google One AI Student 绑卡订阅
+统一使用 Stagehand AI 驱动浏览器自动化
 """
 
 import asyncio
 import traceback
 from typing import Optional, Tuple
 
-from core.ai_browser_agent import AIBrowserAgent, TaskResult
+from core.stagehand_engine import StagehandGoogleEngine
 from services.database import DBManager
-
-# 目标 URL - Google One AI Student 页面
-BIND_CARD_URL = "https://one.google.com/ai-student?g1_landing_page=75&utm_source=antigravity&utm_campaign=argon_limit_reached"
 
 
 async def auto_bind_card_ai(
@@ -28,103 +25,76 @@ async def auto_bind_card_ai(
     provider: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """
-    使用 AI Agent 完成绑卡订阅
+    使用 StagehandGoogleEngine 完成绑卡订阅
 
     Args:
         browser_id: ixBrowser 窗口 ID
         account_info: 账号信息 {'email', 'password', 'secret'}
         card_info: 卡片信息 {'number', 'exp_month', 'exp_year', 'cvv', 'name', 'zip_code'}
         close_after: 完成后是否关闭浏览器
-        max_steps: 最大执行步骤数
+        max_steps: 最大执行步骤数（保留兼容，实际由 engine 控制）
         api_key: API Key（可选，默认从配置读取）
         base_url: API Base URL（可选，用于第三方服务）
         model: 使用的模型（可选，默认从配置读取）
-        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
+        provider: LLM 提供商（已废弃，由 ConfigManager 统一管理）
 
     Returns:
         (success: bool, message: str)
-
-    Environment Variables:
-        GEMINI_API_KEY: Gemini API 密钥
-        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     card_number = card_info.get('number', '')
     card_masked = f"**** **** **** {card_number[-4:]}" if len(card_number) >= 4 else "****"
 
     print(f"\n{'='*50}")
-    print(f"AI Agent 绑卡订阅")
+    print(f"StagehandGoogleEngine 绑卡订阅")
     print(f"账号: {email}")
     print(f"卡片: {card_masked}")
     print(f"{'='*50}")
 
-    # 导入 ixBrowser API
-    try:
-        from services.ix_api import openBrowser, closeBrowser
-    except ImportError:
-        return False, "无法导入 ix_api 模块"
-
-    browser = None
-    playwright = None
+    engine = None
 
     try:
-        from playwright.async_api import async_playwright
+        # 构建模型名称（如果指定了 model 参数）
+        model_name = None
+        if model:
+            # 转换为 Stagehand 格式: "provider/model"
+            if provider:
+                provider_map = {"gemini": "google", "anthropic": "anthropic"}
+                stagehand_provider = provider_map.get(provider, provider)
+                model_name = f"{stagehand_provider}/{model}"
+            else:
+                model_name = model
 
-        # 1. 打开 ixBrowser 窗口
-        print(f"打开浏览器窗口: {browser_id}")
-        result = openBrowser(browser_id)
-
-        if not result or "data" not in result:
-            return False, "无法打开浏览器窗口"
-
-        ws_endpoint = result["data"].get("ws", "")
-        if not ws_endpoint:
-            return False, "获取 WebSocket endpoint 失败"
-
-        # 2. 连接 Playwright
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-
-        # 获取页面
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        # 3. 构建任务参数
-        params = {
-            "card_number": card_info.get("number", ""),
-            "card_exp_month": card_info.get("exp_month", ""),
-            "card_exp_year": card_info.get("exp_year", ""),
-            "card_cvv": card_info.get("cvv", ""),
-            "card_name": card_info.get("name", "John Smith"),
-            "card_zip_code": card_info.get("zip_code", "10001"),
-        }
-
-        # 4. 创建并运行 Agent
-        agent = AIBrowserAgent(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            provider=provider,
+        # 1. 连接到 ixBrowser 窗口
+        print(f"连接 ixBrowser 窗口: {browser_id}")
+        engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+            browser_id=browser_id,
+            model_name=model_name,
+            model_api_key=api_key,
+            close_browser_on_exit=close_after,
         )
 
-        task_result = await agent.execute_task(
-            page=page,
-            goal=f"为 Google 账号 {email} 完成绑卡订阅",
-            start_url=BIND_CARD_URL,
-            account=account_info,
-            params=params,
-            task_type="bind_card",
-            max_steps=max_steps,
-            navigate_first=True,
+        # 2. 构建卡片有效期
+        exp_month = card_info.get("exp_month", "")
+        exp_year = card_info.get("exp_year", "")
+        card_exp = f"{exp_month}/{exp_year}" if exp_month and exp_year else ""
+
+        # 3. 执行绑卡操作
+        print("执行绑卡订阅操作...")
+        result = await engine.bind_card(
+            card_number=card_info.get("number", ""),
+            card_exp=card_exp,
+            card_cvv=card_info.get("cvv", ""),
+            card_name=card_info.get("name", "John Smith"),
+            zip_code=card_info.get("zip_code", "10001"),
         )
 
-        # 5. 处理结果
-        if task_result.success:
+        # 4. 处理结果
+        if result.success:
             print(f"\n✅ 绑卡订阅成功!")
-            print(f"总步骤数: {task_result.total_steps}")
+            print(f"耗时: {result.duration_ms:.0f}ms")
 
-            # 更新账号状态为已订阅 - 直接使用 DBManager，不使用 AccountManager
-            # 避免 account_line 解析导致 recovery_email 被覆盖
+            # 更新账号状态为已订阅
             try:
                 DBManager.upsert_account(
                     email=email,
@@ -132,7 +102,6 @@ async def auto_bind_card_ai(
                     message="绑卡订阅成功",
                 )
                 # 记录绑卡历史
-                card_number = card_info.get("number", "")
                 if card_number:
                     masked_card = card_number[-4:] if len(card_number) >= 4 else card_number
                     DBManager.add_bind_card_history(email, masked_card)
@@ -146,11 +115,11 @@ async def auto_bind_card_ai(
 
         # 任务失败
         print(f"\n❌ 绑卡订阅失败")
-        print(f"原因: {task_result.message}")
-        if task_result.error_details:
-            print(f"详情: {task_result.error_details[:500]}")
+        print(f"原因: {result.message}")
+        if result.error:
+            print(f"详情: {result.error[:500]}")
 
-        return False, task_result.message
+        return False, result.message
 
     except Exception as e:
         traceback.print_exc()
@@ -158,22 +127,9 @@ async def auto_bind_card_ai(
 
     finally:
         # 清理资源
-        if close_after:
+        if engine:
             try:
-                if browser:
-                    await browser.close()
-            except Exception:
-                pass
-
-            try:
-                if playwright:
-                    await playwright.stop()
-            except Exception:
-                pass
-
-            try:
-                closeBrowser(browser_id)
-                print("浏览器已关闭")
+                await engine.stop(close_browser=close_after)
             except Exception:
                 pass
 

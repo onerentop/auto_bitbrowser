@@ -1,18 +1,14 @@
 """
-自动替换 Google 辅助邮箱 (Recovery Email)
+自动替换 Google 辅助邮箱 (Recovery Email) - StagehandGoogleEngine 版
 
-使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动完成操作
+使用 StagehandGoogleEngine 自动完成操作
 """
 
 import asyncio
+import traceback
 from typing import Optional, Tuple
 
-from core.ai_browser_agent import AIBrowserAgent, TaskResult
-from core.ai_browser_agent.agent import run_with_ixbrowser
-
-
-# 目标 URL - 辅助邮箱设置页面
-RECOVERY_EMAIL_URL = "https://myaccount.google.com/signinoptions/rescueemail"
+from core.stagehand_engine import StagehandGoogleEngine
 
 
 async def auto_replace_recovery_email(
@@ -36,70 +32,80 @@ async def auto_replace_recovery_email(
         account_info: 账号信息 {'email', 'password', 'secret'}
         new_email: 新辅助邮箱
         close_after: 完成后是否关闭浏览器
-        max_steps: 最大执行步骤数
+        max_steps: 最大执行步骤数（保留兼容）
         api_key: API Key（可选，默认从配置读取）
-        base_url: API Base URL（可选，用于第三方服务）
-        model: 使用的模型（可选，默认从配置读取）
-        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
-        email_imap_config: 邮箱 IMAP 配置 {'email': str, 'password': str}
-                          用于自动读取邮箱验证码
-        pool_emails: 邮箱池列表（可选），用于告诉 AI 如果当前邮箱在池中则无需修改
+        base_url: API Base URL（可选）
+        model: 使用的模型（可选）
+        provider: LLM 提供商（已废弃）
+        email_imap_config: 邮箱 IMAP 配置（预留）
+        pool_emails: 邮箱池列表（可选）
 
     Returns:
         (success: bool, message: str, error_type: Optional[str])
         - success: 是否成功
         - message: 结果消息
-        - error_type: AI 识别的错误类型 (仅失败时有值)
-
-    Environment Variables:
-        GEMINI_API_KEY: Gemini API 密钥
-        ANTHROPIC_API_KEY: Anthropic API 密钥
+        - error_type: 错误类型 (仅失败时有值)
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
-    print(f"替换辅助邮箱 (Recovery Email)")
+    print(f"替换辅助邮箱 (StagehandGoogleEngine)")
     print(f"账号: {email}")
     print(f"新辅助邮箱: {new_email}")
     if pool_emails:
         print(f"邮箱池: {len(pool_emails)} 个邮箱")
     print(f"{'='*50}")
 
-    # 构建参数，包含邮箱池列表
-    params = {"new_email": new_email}
-    if pool_emails:
-        # 将邮箱列表转为逗号分隔的字符串，方便 AI 阅读
-        params["pool_emails"] = ", ".join(pool_emails)
-    else:
-        params["pool_emails"] = "(未提供邮箱池)"
+    engine = None
 
-    result: TaskResult = await run_with_ixbrowser(
-        browser_id=browser_id,
-        goal=f"将 Google 账号 {email} 的辅助邮箱修改为 {new_email}",
-        start_url=RECOVERY_EMAIL_URL,
-        account=account_info,
-        params=params,
-        task_type="replace_recovery_email",
-        max_steps=max_steps,
-        close_after=close_after,
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        provider=provider,
-        email_imap_config=email_imap_config,
-    )
+    try:
+        # 构建模型名称
+        model_name = None
+        if model:
+            if provider:
+                provider_map = {"gemini": "google", "anthropic": "anthropic"}
+                stagehand_provider = provider_map.get(provider, provider)
+                model_name = f"{stagehand_provider}/{model}"
+            else:
+                model_name = model
 
-    if result.success:
-        print(f"\n✅ 辅助邮箱替换成功!")
-        print(f"总步骤数: {result.total_steps}")
-    else:
+        # 1. 连接到 ixBrowser 窗口
+        print(f"连接 ixBrowser 窗口: {browser_id}")
+        engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+            browser_id=browser_id,
+            model_name=model_name,
+            model_api_key=api_key,
+            close_browser_on_exit=close_after,
+        )
+
+        # 2. 执行替换辅助邮箱操作
+        print("执行替换辅助邮箱操作...")
+        result = await engine.replace_recovery_email(new_email=new_email)
+
+        # 3. 处理结果
+        if result.success:
+            print(f"\n✅ 辅助邮箱替换成功!")
+            print(f"耗时: {result.duration_ms:.0f}ms")
+            return True, "辅助邮箱替换成功", None
+
+        # 任务失败
         print(f"\n❌ 辅助邮箱替换失败")
         print(f"原因: {result.message}")
-        if result.error_type:
-            print(f"错误类型: {result.error_type}")
-        if result.error_details:
-            print(f"详情: {result.error_details[:500]}")
+        if result.error:
+            print(f"详情: {result.error[:500]}")
 
-    return result.success, result.message, result.error_type
+        return False, result.message, result.error
+
+    except Exception as e:
+        traceback.print_exc()
+        return False, f"运行失败: {str(e)}", "exception"
+
+    finally:
+        # 清理资源
+        if engine:
+            try:
+                await engine.stop(close_browser=close_after)
+            except Exception:
+                pass
 
 
 # 测试入口

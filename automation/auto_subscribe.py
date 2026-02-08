@@ -1,30 +1,25 @@
 """
-一键全自动订阅 - 核心逻辑
+一键全自动订阅 - StagehandGoogleEngine 版
 
 整合三个步骤为一次完整操作：
-1. 获取 SheerID 链接 (AI Agent)
+1. 获取 SheerID 链接 (StagehandGoogleEngine)
 2. 批量验证 SheerID (API)
-3. 绑卡订阅 (AI Agent)
+3. 绑卡订阅 (StagehandGoogleEngine)
 
 支持断点续传：记录失败步骤，下次从失败处继续
-支持多 LLM 提供商 (Gemini/Anthropic)
 """
 
 import asyncio
+import traceback
 from enum import Enum
 from typing import Optional, Callable, Tuple, List, Dict, Any
 from dataclasses import dataclass
-import traceback
-
-from playwright.async_api import async_playwright
 
 from services.database import DBManager
 from services.ix_api import openBrowser, closeBrowser
-from services.ix_window import get_browser_info
 from services.sheerid_verifier import SheerIDVerifier
 from core.config_manager import ConfigManager
-from core.ai_browser_agent import AIBrowserAgent
-from core.ai_browser_agent.types import AgentState
+from core.stagehand_engine import StagehandGoogleEngine
 
 
 class SubscribeStep(Enum):
@@ -47,14 +42,11 @@ class SubscribeResult:
 
 class AutoSubscriber:
     """
-    自动订阅器
+    自动订阅器 (StagehandGoogleEngine 版)
 
     整合 SheerID 链接获取 + 验证 + 绑卡订阅的完整流程
     支持断点续传
     """
-
-    # Google One AI Student 页面 URL
-    GOOGLE_ONE_URL = "https://one.google.com/ai-student?g1_landing_page=75&utm_source=antigravity&utm_campaign=argon_limit_reached"
 
     def __init__(
         self,
@@ -75,7 +67,7 @@ class AutoSubscriber:
             ai_provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
             ai_base_url: AI API Base URL（用于第三方服务）
             ai_model: 使用的模型（默认从配置读取）
-            max_steps: AI Agent 最大步骤数
+            max_steps: AI Agent 最大步骤数（保留兼容）
             close_browser_after: 完成后是否关闭浏览器
         """
         self.sheerid_api_key = sheerid_api_key or ConfigManager.get_api_key()
@@ -147,6 +139,16 @@ class AutoSubscriber:
             # pending 或其他状态，从头开始
             return SubscribeStep.GET_LINK
 
+    def _build_model_name(self) -> Optional[str]:
+        """构建 Stagehand 模型名称"""
+        if self.ai_model:
+            if self.ai_provider:
+                provider_map = {"gemini": "google", "anthropic": "anthropic"}
+                stagehand_provider = provider_map.get(self.ai_provider, self.ai_provider)
+                return f"{stagehand_provider}/{self.ai_model}"
+            return self.ai_model
+        return None
+
     async def process_account(
         self,
         browser_id: str,
@@ -176,45 +178,22 @@ class AutoSubscriber:
             elif status == "ineligible":
                 return SubscribeResult(False, "ineligible", "无资格，跳过")
 
-        self._log(f"[{email}] 开始处理，起始步骤: {start_step.value}")
+        self._log(f"[{email}] 开始处理 (StagehandGoogleEngine)，起始步骤: {start_step.value}")
 
-        # 清除之前的失败记录（使用空字符串表示清除）
+        # 清除之前的失败记录
         DBManager.upsert_account(email, last_failed_step="", last_error="")
 
-        browser = None
-        playwright = None
-        page = None
+        engine = None
         current_step = start_step
 
         try:
-            # 打开浏览器
-            self._progress(email, "打开浏览器", "正在打开浏览器...")
-            result = openBrowser(browser_id)
-
-            if not result or "data" not in result:
-                return self._handle_failure(
-                    email, current_step, "无法打开浏览器窗口"
-                )
-
-            ws_endpoint = result["data"].get("ws", "")
-            if not ws_endpoint:
-                return self._handle_failure(
-                    email, current_step, "获取 WebSocket endpoint 失败"
-                )
-
-            # 连接 Playwright
-            playwright = await async_playwright().start()
-            browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-            context = browser.contexts[0] if browser.contexts else await browser.new_context()
-            page = context.pages[0] if context.pages else await context.new_page()
-
-            # 创建 AI Agent
-            agent = AIBrowserAgent(
-                api_key=self.ai_api_key,
-                base_url=self.ai_base_url,
-                model=self.ai_model,
-                provider=self.ai_provider,
-                screenshot_delay=2.5,
+            # 连接到 ixBrowser 窗口
+            self._progress(email, "连接浏览器", "正在连接浏览器...")
+            engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+                browser_id=browser_id,
+                model_name=self._build_model_name(),
+                model_api_key=self.ai_api_key,
+                close_browser_on_exit=self.close_browser_after,
             )
 
             # 执行流程
@@ -222,19 +201,17 @@ class AutoSubscriber:
 
             # Step 1: 获取 SheerID 链接（如果需要）
             if current_step == SubscribeStep.GET_LINK:
-                # 检查是否请求停止
                 if self._stop_requested:
                     return SubscribeResult(False, "error", "用户请求停止", failed_step=current_step.value)
 
                 self._progress(email, "获取链接", "正在获取 SheerID 链接...")
-                result = await self._step_get_link(agent, page, account)
+                result = await self._step_get_link(engine, account)
 
                 if not result.success:
-                    # 检查是否是特殊状态（已订阅、已验证、无资格）
+                    # 检查是否是特殊状态
                     if result.status in ("subscribed", "verified", "ineligible"):
                         DBManager.upsert_account(email, status=result.status)
                         if result.status == "verified":
-                            # 已验证，跳到绑卡步骤
                             current_step = SubscribeStep.BIND_CARD
                         else:
                             return result
@@ -242,17 +219,12 @@ class AutoSubscriber:
                         return self._handle_failure(email, current_step, result.message)
                 else:
                     # 成功获取链接
-                    verification_link = result.message  # message 存储的是链接
-                    DBManager.upsert_account(
-                        email,
-                        link=verification_link,
-                        status="link_ready"
-                    )
+                    verification_link = result.message
+                    DBManager.upsert_account(email, link=verification_link, status="link_ready")
                     current_step = SubscribeStep.VERIFY_SHEERID
 
             # Step 2: 验证 SheerID（如果需要）
             if current_step == SubscribeStep.VERIFY_SHEERID:
-                # 检查是否请求停止
                 if self._stop_requested:
                     return SubscribeResult(False, "error", "用户请求停止", failed_step=current_step.value)
 
@@ -260,27 +232,23 @@ class AutoSubscriber:
                     verification_link = account.get("verification_link", "")
 
                 if not verification_link:
-                    return self._handle_failure(
-                        email, current_step, "没有 SheerID 验证链接"
-                    )
+                    return self._handle_failure(email, current_step, "没有 SheerID 验证链接")
 
                 self._progress(email, "验证SheerID", "正在验证学生资格...")
                 result = await self._step_verify_sheerid(
-                    verification_link,
-                    email,
-                    agent=agent,
-                    page=page,
+                    verification_link=verification_link,
+                    email=email,
+                    engine=engine,
                     account=account,
                 )
 
                 if not result.success:
-                    # 检查是否是特殊状态（可能在重试时检测到）
                     if result.status == "ineligible":
                         DBManager.upsert_account(email, status="ineligible")
                         return result
                     return self._handle_failure(email, current_step, result.message)
 
-                # 验证成功（包括 verified 和 subscribed 状态）
+                # 验证成功
                 if result.status == "subscribed":
                     DBManager.upsert_account(email, status="subscribed")
                     return SubscribeResult(success=True, status="subscribed", message="账号已订阅")
@@ -290,22 +258,14 @@ class AutoSubscriber:
 
             # Step 3: 绑卡订阅（如果需要）
             if current_step == SubscribeStep.BIND_CARD:
-                # 检查是否请求停止
                 if self._stop_requested:
                     return SubscribeResult(False, "error", "用户请求停止", failed_step=current_step.value)
 
                 if not card_info:
-                    return self._handle_failure(
-                        email, current_step, "没有可用的卡片信息"
-                    )
+                    return self._handle_failure(email, current_step, "没有可用的卡片信息")
 
                 self._progress(email, "绑卡订阅", "正在绑卡订阅...")
-
-                # 刷新页面到 Google One 页面
-                await page.goto(self.GOOGLE_ONE_URL, wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(3)
-
-                result = await self._step_bind_card(agent, page, account, card_info)
+                result = await self._step_bind_card(engine, account, card_info)
 
                 if not result.success:
                     return self._handle_failure(email, current_step, result.message)
@@ -316,41 +276,27 @@ class AutoSubscriber:
                 # 记录绑卡历史
                 card_number = card_info.get("number", "")
                 if card_number:
-                    DBManager.add_bind_card_history(email, card_number[-4:] if len(card_number) >= 4 else card_number)
+                    DBManager.add_bind_card_history(
+                        email, card_number[-4:] if len(card_number) >= 4 else card_number
+                    )
 
-                return SubscribeResult(
-                    success=True,
-                    status="subscribed",
-                    message="订阅成功！"
-                )
+                return SubscribeResult(success=True, status="subscribed", message="订阅成功！")
 
-            return SubscribeResult(
-                success=False,
-                status="error",
-                message="未知流程状态"
-            )
+            return SubscribeResult(success=False, status="error", message="未知流程状态")
 
         except Exception as e:
             traceback.print_exc()
-            return self._handle_failure(
-                email, current_step, f"处理异常: {str(e)}"
-            )
+            return self._handle_failure(email, current_step, f"处理异常: {str(e)}")
 
         finally:
             # 清理资源
+            if engine:
+                try:
+                    await engine.stop(close_browser=self.close_browser_after)
+                except Exception:
+                    pass
+
             if self.close_browser_after:
-                try:
-                    if browser:
-                        await browser.close()
-                except Exception:
-                    pass
-
-                try:
-                    if playwright:
-                        await playwright.stop()
-                except Exception:
-                    pass
-
                 try:
                     closeBrowser(browser_id)
                 except Exception:
@@ -362,16 +308,14 @@ class AutoSubscriber:
         step: SubscribeStep,
         error: str
     ) -> SubscribeResult:
-        """
-        处理失败，记录断点信息
-        """
+        """处理失败，记录断点信息"""
         self._log(f"[{email}] ❌ 步骤 {step.value} 失败: {error}")
 
         # 保存失败信息到数据库（用于断点续传）
         DBManager.upsert_account(
             email,
             last_failed_step=step.value,
-            last_error=error[:500] if error else None,  # 限制错误信息长度
+            last_error=error[:500] if error else None,
             status="error"
         )
 
@@ -385,68 +329,29 @@ class AutoSubscriber:
 
     async def _step_get_link(
         self,
-        agent: AIBrowserAgent,
-        page,
+        engine: StagehandGoogleEngine,
         account: dict
     ) -> SubscribeResult:
-        """
-        步骤1：获取 SheerID 验证链接
-
-        使用 AI Agent 分析页面状态并提取链接
-        """
+        """步骤1：获取 SheerID 验证链接"""
         email = account.get("email", "")
-        password = account.get("password", "")
-        secret = account.get("secret_key", "") or account.get("secret", "")
 
         try:
-            result = await agent.execute_task(
-                page=page,
-                goal="检测账号状态并提取 SheerID 验证链接（如有）",
-                start_url=self.GOOGLE_ONE_URL,
-                account={
-                    "email": email,
-                    "password": password,
-                    "secret": secret,
-                },
-                params={},
-                task_type="get_sheerlink",
-                max_steps=self.max_steps,
-            )
+            result = await engine.get_sheerlink()
 
             if result.success:
-                # 检查返回的数据
-                data = result.data or {}
-                action_type = data.get("action_type", "")
-                result_status = data.get("result_status", "")
+                if result.sheerlink_url:
+                    return SubscribeResult(
+                        success=True,
+                        status="link_ready",
+                        message=result.sheerlink_url
+                    )
+                elif result.status == "subscribed":
+                    return SubscribeResult(False, "subscribed", "已订阅")
+                elif result.status == "verified":
+                    return SubscribeResult(False, "verified", "已验证未绑卡")
+                elif result.status == "ineligible":
+                    return SubscribeResult(False, "ineligible", "无资格")
 
-                if action_type == "extract_link":
-                    # 成功提取链接
-                    extracted_link = data.get("extracted_link", "")
-                    if extracted_link:
-                        return SubscribeResult(
-                            success=True,
-                            status="link_ready",
-                            message=extracted_link  # 将链接存在 message 中
-                        )
-
-                if action_type == "done":
-                    # AI 判断任务完成，检查状态
-                    if result_status == "subscribed":
-                        return SubscribeResult(False, "subscribed", "已订阅")
-                    elif result_status == "verified":
-                        return SubscribeResult(False, "verified", "已验证未绑卡")
-                    elif result_status == "ineligible":
-                        return SubscribeResult(False, "ineligible", "无资格")
-                    elif result_status == "link_ready":
-                        extracted_link = data.get("extracted_link", "")
-                        if extracted_link:
-                            return SubscribeResult(
-                                success=True,
-                                status="link_ready",
-                                message=extracted_link
-                            )
-
-            # 失败
             return SubscribeResult(
                 success=False,
                 status="error",
@@ -464,16 +369,10 @@ class AutoSubscriber:
         self,
         verification_link: str,
         email: str,
-        agent: AIBrowserAgent = None,
-        page = None,
+        engine: StagehandGoogleEngine = None,
         account: dict = None,
     ) -> SubscribeResult:
-        """
-        步骤2：验证 SheerID
-
-        调用 SheerID API 进行学生资格验证
-        验证失败时会自动重新获取链接并重试一次
-        """
+        """步骤2：验证 SheerID"""
         if not self.sheerid_api_key:
             return SubscribeResult(
                 success=False,
@@ -481,7 +380,6 @@ class AutoSubscriber:
                 message="未配置 SheerID API 密钥"
             )
 
-        # 内部验证函数
         async def do_verify(link: str) -> tuple:
             """执行验证，返回 (success, status, message, result)"""
             try:
@@ -529,32 +427,25 @@ class AutoSubscriber:
             # 首次验证失败，尝试重新获取链接并重试
             self._log(f"[{email}] 首次验证失败: {message}，尝试重新获取链接...")
 
-            # 检查是否有重试所需的参数
-            if not agent or not page or not account:
+            if not engine or not account:
                 self._log(f"[{email}] 缺少重试参数，跳过重试")
                 return SubscribeResult(success=False, status=status, message=message)
 
-            # 检查是否请求停止
             if self._stop_requested:
                 return SubscribeResult(success=False, status="error", message="用户请求停止")
 
             # 重新获取链接
             self._progress(email, "重试获取链接", "验证失败，正在重新获取链接...")
-
-            retry_result = await self._step_get_link(agent, page, account)
+            retry_result = await self._step_get_link(engine, account)
 
             if not retry_result.success:
-                # 检查是否是特殊状态
                 if retry_result.status == "verified":
-                    # 重新获取链接时发现账号已验证，说明之前验证其实成功了
                     self._log(f"[{email}] 重新获取链接时发现账号已验证")
                     return SubscribeResult(success=True, status="verified", message="账号已验证")
                 elif retry_result.status == "subscribed":
-                    # 已订阅
                     self._log(f"[{email}] 重新获取链接时发现账号已订阅")
                     return SubscribeResult(success=True, status="subscribed", message="账号已订阅")
                 elif retry_result.status == "ineligible":
-                    # 无资格
                     return SubscribeResult(success=False, status="ineligible", message="账号无资格")
                 self._log(f"[{email}] 重新获取链接失败: {retry_result.message}")
                 return SubscribeResult(
@@ -564,13 +455,12 @@ class AutoSubscriber:
                 )
 
             # 获取到新链接
-            new_link = retry_result.message  # message 存储的是链接
+            new_link = retry_result.message
             self._log(f"[{email}] 获取到新链接，正在重试验证...")
 
             # 更新数据库中的链接
             DBManager.upsert_account(email, link=new_link, status="link_ready")
 
-            # 检查是否请求停止
             if self._stop_requested:
                 return SubscribeResult(success=False, status="error", message="用户请求停止")
 
@@ -596,41 +486,23 @@ class AutoSubscriber:
 
     async def _step_bind_card(
         self,
-        agent: AIBrowserAgent,
-        page,
+        engine: StagehandGoogleEngine,
         account: dict,
         card_info: dict
     ) -> SubscribeResult:
-        """
-        步骤3：绑卡订阅
-
-        使用 AI Agent 完成绑卡和订阅流程
-        """
-        email = account.get("email", "")
-        password = account.get("password", "")
-        secret = account.get("secret_key", "") or account.get("secret", "")
-
+        """步骤3：绑卡订阅"""
         try:
-            result = await agent.execute_task(
-                page=page,
-                goal="完成 Google One AI Student 订阅",
-                start_url=self.GOOGLE_ONE_URL,
-                account={
-                    "email": email,
-                    "password": password,
-                    "secret": secret,
-                },
-                params={
-                    "card_number": card_info.get("number", ""),
-                    "card_exp_month": card_info.get("exp_month", ""),
-                    "card_exp_year": card_info.get("exp_year", ""),
-                    "card_cvv": card_info.get("cvv", ""),
-                    "card_name": card_info.get("name", "John Smith"),
-                    "card_zip_code": card_info.get("zip_code", "10001"),
-                },
-                task_type="bind_card",
-                max_steps=self.max_steps,
-                navigate_first=False,  # 已经在页面上了
+            # 构建过期日期
+            exp_month = card_info.get("exp_month", "")
+            exp_year = card_info.get("exp_year", "")
+            card_exp = f"{exp_month}/{exp_year}" if exp_month and exp_year else ""
+
+            result = await engine.bind_card(
+                card_number=card_info.get("number", ""),
+                card_exp=card_exp,
+                card_cvv=card_info.get("cvv", ""),
+                card_name=card_info.get("name", "John Smith"),
+                zip_code=card_info.get("zip_code", "10001"),
             )
 
             if result.success:
@@ -741,9 +613,7 @@ async def process_accounts_batch(
             return email, result
 
     # 准备任务列表
-    # 使用数据库持久化的卡片使用计数，确保跨多次调用时正确分配卡片
-    # 同时维护本批次的临时计数，避免同一批次中多个账号分配到同一张卡
-    usage_counts = DBManager.get_card_usage_counts()  # 从数据库获取历史使用次数
+    usage_counts = DBManager.get_card_usage_counts()
 
     tasks = []
     for account in accounts:
@@ -753,19 +623,16 @@ async def process_accounts_batch(
             card_number = card.get('number', '')
             card_suffix = card_number[-4:] if len(card_number) >= 4 else card_number
 
-            # 当前使用次数 = 数据库记录 + 本批次已分配次数
             current_usage = usage_counts.get(card_suffix, 0)
 
             if current_usage < cards_per_account:
                 current_card = card
-                # 更新本批次的使用计数（内存中临时记录）
                 usage_counts[card_suffix] = current_usage + 1
                 if on_log:
                     on_log(f"[卡片分配] ****{card_suffix} (已使用 {current_usage + 1}/{cards_per_account})")
                 break
 
         if current_card is None and cards:
-            # 所有卡都已达到上限，打印警告但继续处理（用 None 作为卡片）
             if on_log:
                 on_log(f"⚠️ 所有卡片都已达到使用上限 ({cards_per_account})")
 

@@ -5,7 +5,7 @@
 from automation.auto_google_login import (
     auto_google_login,
     LoginResult,
-    check_login_status,
+    check_login_status_quick,
 )
 
 # Antigravity OAuth 自动化
@@ -26,7 +26,7 @@ __all__ = [
     # Google Login
     "auto_google_login",
     "LoginResult",
-    "check_login_status",
+    "check_login_status_quick",
     # OAuth
     "auto_antigravity_oauth",
     "OAuthResult",

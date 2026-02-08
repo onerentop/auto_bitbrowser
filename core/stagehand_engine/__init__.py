@@ -8,30 +8,26 @@ Stagehand Google Engine
 - Google 账号登录 (支持 TOTP 2FA)
 - Pro 订阅状态检测
 - 家庭组状态检测和管理
+- 连接到现有的 ixBrowser 窗口 (CDP 模式)
 
 使用示例:
     ```python
     from core.stagehand_engine import StagehandGoogleEngine
 
-    async with StagehandGoogleEngine(
-        model_name="google/gemini-2.0-flash",
-        model_api_key="your-api-key",
-    ) as engine:
-        # 登录
+    # 方式1: 连接到 ixBrowser 窗口（推荐）
+    async with await StagehandGoogleEngine.connect_to_ixbrowser("browser_id") as engine:
         result = await engine.login(
             email="user@gmail.com",
             password="password",
             totp_secret="BASE32SECRET"
         )
 
-        if result.success:
-            # 检测 Pro 状态
-            pro_status = await engine.detect_pro_status()
-            print(f"Pro 会员: {pro_status.is_pro}")
-
-            # 检测家庭组状态
-            family_status = await engine.detect_family_status()
-            print(f"有家庭组: {family_status.has_family}")
+    # 方式2: 启动本地浏览器
+    async with StagehandGoogleEngine(
+        model_name="google/gemini-2.0-flash",
+        model_api_key="your-api-key",
+    ) as engine:
+        result = await engine.login(...)
     ```
 
 依赖:
@@ -44,7 +40,23 @@ Stagehand Google Engine
     - CHROME_PATH: Chrome 可执行文件路径 (可选)
 """
 
-from .engine import StagehandGoogleEngine, create_engine, create_engine_from_config, get_available_providers
+from .engine import (
+    StagehandGoogleEngine,
+    create_engine,
+    create_engine_from_config,
+    get_available_providers,
+    STAGEHAND_AVAILABLE,
+    IXBROWSER_API_AVAILABLE,
+)
+from .config import (
+    StagehandModelConfig,
+    get_stagehand_config,
+    get_config_from_manager,
+    get_config_from_env,
+    get_enabled_providers,
+    is_config_available,
+    CONFIG_MANAGER_AVAILABLE,
+)
 from .types import (
     # 状态枚举
     OperationStatus,
@@ -52,7 +64,7 @@ from .types import (
     TwoFactorMethod,
     ProStatus,
     FamilyRole,
-    # 结果类型
+    # 基础结果类型
     LoginResult,
     ProStatusResult,
     FamilyStatusResult,
@@ -61,7 +73,22 @@ from .types import (
     ActionResult,
     ExtractResult,
     ObserveResult,
+    # 新增操作结果类型 (v1.1)
+    BaseOperationResult,
+    BindCardResult,
+    SheerlinkResult,
+    KickDevicesResult,
+    ModifyPhoneResult,
+    ModifyAuthenticatorResult,
+    ReplaceEmailResult,
+    ReplacePhoneResult,  # 别名 for ModifyPhoneResult
+    SubscribeResult,
+    UnlockResult,
+    JoinFamilyResult,
+    EnableSharingResult,
+    OAuthResult,
 )
+
 from .constants import GoogleURLs, Timeouts
 
 __all__ = [
@@ -70,13 +97,24 @@ __all__ = [
     "create_engine",
     "create_engine_from_config",
     "get_available_providers",
+    # 可用性标志
+    "STAGEHAND_AVAILABLE",
+    "IXBROWSER_API_AVAILABLE",
+    # 配置模块
+    "StagehandModelConfig",
+    "get_stagehand_config",
+    "get_config_from_manager",
+    "get_config_from_env",
+    "get_enabled_providers",
+    "is_config_available",
+    "CONFIG_MANAGER_AVAILABLE",
     # 状态枚举
     "OperationStatus",
     "LoginState",
     "TwoFactorMethod",
     "ProStatus",
     "FamilyRole",
-    # 结果类型
+    # 基础结果类型
     "LoginResult",
     "ProStatusResult",
     "FamilyStatusResult",
@@ -85,9 +123,23 @@ __all__ = [
     "ActionResult",
     "ExtractResult",
     "ObserveResult",
+    # 新增操作结果类型 (v1.1)
+    "BaseOperationResult",
+    "BindCardResult",
+    "SheerlinkResult",
+    "KickDevicesResult",
+    "ModifyPhoneResult",
+    "ModifyAuthenticatorResult",
+    "ReplaceEmailResult",
+    "ReplacePhoneResult",  # 别名 for ModifyPhoneResult
+    "SubscribeResult",
+    "UnlockResult",
+    "JoinFamilyResult",
+    "EnableSharingResult",
+    "OAuthResult",
     # 常量
     "GoogleURLs",
     "Timeouts",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"  # 新增 CDP 连接支持

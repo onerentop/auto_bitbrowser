@@ -1,7 +1,7 @@
 """
-自动获取 Google One AI Student SheerID 验证链接 (AI Agent 版)
+自动获取 Google One AI Student SheerID 验证链接 - StagehandGoogleEngine 版
 
-使用多 LLM 提供商 (Gemini/Anthropic) Vision AI Agent 自动检测账号状态并提取 SheerID 链接
+使用 StagehandGoogleEngine 自动检测账号状态并提取 SheerID 链接
 支持状态检测: subscribed, verified, link_ready, ineligible
 """
 
@@ -9,12 +9,8 @@ import asyncio
 import traceback
 from typing import Optional, Tuple
 
-from core.ai_browser_agent import AIBrowserAgent, TaskResult
-from core.ai_browser_agent.types import AgentState
+from core.stagehand_engine import StagehandGoogleEngine
 from services.database import DBManager
-
-# 目标 URL - Google One 学生订阅页面
-SHEERLINK_URL = "https://goo.gle/freepro"
 
 
 async def auto_get_sheerlink_ai(
@@ -35,11 +31,11 @@ async def auto_get_sheerlink_ai(
         browser_id: ixBrowser 窗口 ID
         account_info: 账号信息 {'email', 'password', 'secret'}
         close_after: 完成后是否关闭浏览器
-        max_steps: 最大执行步骤数
+        max_steps: 最大执行步骤数（保留兼容）
         api_key: API Key（可选，默认从配置读取）
         base_url: API Base URL（可选，用于第三方服务）
         model: 使用的模型（可选，默认从配置读取）
-        provider: LLM 提供商 (gemini, anthropic)，默认从配置读取
+        provider: LLM 提供商（已废弃）
         save_to_file: 是否保存到对应状态文件
 
     Returns:
@@ -48,91 +44,50 @@ async def auto_get_sheerlink_ai(
         - message: 结果消息
         - status: 账号状态 (subscribed/verified/link_ready/ineligible/error)
         - link: SheerID 验证链接（status=link_ready 时返回）
-
-    Status Types:
-        - subscribed: 已订阅/已绑卡
-        - verified: 已验证未绑卡，可直接领取优惠
-        - link_ready: 有资格待验证，返回 SheerID 链接
-        - ineligible: 无资格，无法使用优惠
-        - error: 检测失败
-
-    Environment Variables:
-        GEMINI_API_KEY: Gemini API 密钥
-        ANTHROPIC_API_KEY: Anthropic API 密钥
     """
     email = account_info.get("email", "Unknown")
     print(f"\n{'='*50}")
-    print(f"获取 SheerID 验证链接 (AI Agent)")
+    print(f"获取 SheerID 验证链接 (StagehandGoogleEngine)")
     print(f"账号: {email}")
     print(f"{'='*50}")
 
-    # 导入 ixBrowser API
-    try:
-        from services.ix_api import openBrowser, closeBrowser
-    except ImportError:
-        return False, "无法导入 ix_api 模块", "error", None
-
-    browser = None
-    playwright = None
+    engine = None
     extracted_status = None
     extracted_link = None
 
     try:
-        from playwright.async_api import async_playwright
-
-        # 1. 打开 ixBrowser 窗口
-        print(f"打开浏览器窗口: {browser_id}")
-        result = openBrowser(browser_id)
-
-        if not result or "data" not in result:
-            return False, "无法打开浏览器窗口", "error", None
-
-        ws_endpoint = result["data"].get("ws", "")
-        if not ws_endpoint:
-            return False, "获取 WebSocket endpoint 失败", "error", None
-
-        # 2. 连接 Playwright
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
-
-        # 获取页面
-        context = browser.contexts[0] if browser.contexts else await browser.new_context()
-        page = context.pages[0] if context.pages else await context.new_page()
-
-        # 3. 创建并运行 Agent
-        agent = AIBrowserAgent(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            provider=provider,
-        )
-
-        task_result = await agent.execute_task(
-            page=page,
-            goal=f"检测 Google 账号 {email} 的学生资格状态并提取 SheerID 验证链接",
-            start_url=SHEERLINK_URL,
-            account=account_info,
-            params={},
-            task_type="get_sheerlink",
-            max_steps=max_steps,
-            navigate_first=True,
-        )
-
-        # 处理结果
-        if task_result.success:
-            action_type = task_result.data.get("action_type", "")
-
-            # 检查是否是链接提取动作
-            if action_type == "extract_link":
-                extracted_link = task_result.data.get("extracted_link", "")
-                extracted_status = task_result.data.get("result_status", "link_ready")
-                print(f"\n🔗 提取到链接: {extracted_link[:50]}..." if extracted_link else "")
-                print(f"📋 账号状态: {extracted_status}")
+        # 构建模型名称
+        model_name = None
+        if model:
+            if provider:
+                provider_map = {"gemini": "google", "anthropic": "anthropic"}
+                stagehand_provider = provider_map.get(provider, provider)
+                model_name = f"{stagehand_provider}/{model}"
             else:
-                # done 动作 - 直接从 data 中获取 result_status
-                extracted_link = None
-                extracted_status = task_result.data.get("result_status", "unknown")
-                print(f"📋 账号状态: {extracted_status}")
+                model_name = model
+
+        # 1. 连接到 ixBrowser 窗口
+        print(f"连接 ixBrowser 窗口: {browser_id}")
+        engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+            browser_id=browser_id,
+            model_name=model_name,
+            model_api_key=api_key,
+            close_browser_on_exit=close_after,
+        )
+
+        # 2. 执行获取 SheerID 链接操作
+        print("检测账号状态并获取 SheerID 链接...")
+        result = await engine.get_sheerlink(
+            navigate_if_needed=True,
+        )
+
+        # 3. 处理结果
+        if result.success:
+            extracted_status = result.status or "unknown"
+            extracted_link = result.sheerlink
+
+            print(f"\n🔗 提取到链接: {extracted_link[:50]}..." if extracted_link else "")
+            print(f"📋 账号状态: {extracted_status}")
 
             # 保存到对应状态文件
             if save_to_file:
@@ -142,16 +97,16 @@ async def auto_get_sheerlink_ai(
                     secret=account_info.get("secret", ""),
                     status=extracted_status,
                     link=extracted_link,
-                    total_steps=task_result.total_steps,
+                    duration_ms=result.duration_ms,
                 )
 
             return True, f"检测成功 ({extracted_status})", extracted_status, extracted_link
 
         # 任务失败
         print(f"\n❌ 检测失败")
-        print(f"原因: {task_result.message}")
-        if task_result.error_details:
-            print(f"详情: {task_result.error_details[:500]}")
+        print(f"原因: {result.message}")
+        if result.error:
+            print(f"详情: {result.error[:500]}")
 
         # 失败也保存到错误文件
         if save_to_file:
@@ -161,11 +116,11 @@ async def auto_get_sheerlink_ai(
                 secret=account_info.get("secret", ""),
                 status="error",
                 link=None,
-                error_msg=task_result.message,
-                total_steps=task_result.total_steps,
+                error_msg=result.message,
+                duration_ms=result.duration_ms,
             )
 
-        return False, task_result.message, "error", None
+        return False, result.message, "error", None
 
     except Exception as e:
         traceback.print_exc()
@@ -173,22 +128,9 @@ async def auto_get_sheerlink_ai(
 
     finally:
         # 清理资源
-        if close_after:
+        if engine:
             try:
-                if browser:
-                    await browser.close()
-            except Exception:
-                pass
-
-            try:
-                if playwright:
-                    await playwright.stop()
-            except Exception:
-                pass
-
-            try:
-                closeBrowser(browser_id)
-                print("浏览器已关闭")
+                await engine.stop(close_browser=close_after)
             except Exception:
                 pass
 
@@ -200,19 +142,10 @@ def _save_result(
     status: str,
     link: Optional[str] = None,
     error_msg: Optional[str] = None,
-    total_steps: int = 0,
+    duration_ms: float = 0,
 ):
     """
     根据状态保存结果到对应文件和数据库
-
-    Args:
-        email: 邮箱
-        password: 密码
-        secret: 2FA 密钥
-        status: 账号状态
-        link: SheerID 链接（可选）
-        error_msg: 错误信息（可选）
-        total_steps: AI 执行的总步骤数
     """
     try:
         # 根据状态更新数据库
@@ -226,22 +159,18 @@ def _save_result(
         db_status = status_mapping.get(status, "error")
 
         # 更新数据库 - 只更新必要字段，不覆盖 recovery_email
-        # 注意：这里不传 recovery_email，保留数据库中原有的值
         DBManager.upsert_account(
             email=email,
             password=password,
-            secret_key=secret,  # 只更新 secret_key
-            # recovery_email 不传，保留原值
+            secret_key=secret,
             link=link,
             status=db_status,
             message=error_msg or status,
-            sheerid_steps=total_steps,
+            sheerid_steps=int(duration_ms / 1000) if duration_ms else 0,
         )
-        print(f"✅ 数据库已更新: {email} -> {db_status} (步骤: {total_steps})")
+        print(f"✅ 数据库已更新: {email} -> {db_status}")
 
-        # 注意：不再调用 AccountManager.move_to_xxx() 方法
-        # 因为那些方法会解析 account_line 并可能覆盖 recovery_email
-        # 数据库已经更新，文件导出由 DBManager.export_to_files() 统一处理
+        # 统一导出
         DBManager.export_to_files()
 
         # 记录保存位置（仅用于日志）

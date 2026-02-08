@@ -4,60 +4,84 @@
 
 ## Overview
 
-AI Agent automation scripts module. Contains high-level automation workflows that combine ixBrowser window management, AI browser agent (supporting Gemini and Anthropic/Claude), and database operations.
+AI Agent automation scripts module. Contains high-level automation workflows that combine ixBrowser window management, **StagehandGoogleEngine** (AI browser agent), and database operations.
 
 ## Module Structure
 
 ```
 automation/
-├── __init__.py                  # Module initialization
-├── auto_bind_card_ai.py         # AI-powered card binding
-├── auto_get_sheerlink_ai.py     # AI-powered SheerID link retrieval
-├── auto_modify_2sv_phone.py     # Modify 2-Step Verification phone
-├── auto_modify_authenticator.py # Modify Google Authenticator
-├── auto_replace_email.py        # Replace recovery email
-├── auto_replace_phone.py        # Replace recovery phone
-├── auto_kick_devices.py         # Remove logged-in devices
-└── auto_subscribe.py            # Auto subscribe to Google One
+├── __init__.py                    # Module initialization
+├── auto_bind_card_ai.py           # Card binding (StagehandGoogleEngine)
+├── auto_get_sheerlink_ai.py       # SheerID link retrieval (StagehandGoogleEngine)
+├── auto_modify_2sv_phone.py       # Modify 2-Step Verification phone (StagehandGoogleEngine)
+├── auto_modify_authenticator.py   # Modify Google Authenticator (StagehandGoogleEngine)
+├── auto_replace_recovery_email.py # Replace recovery email (StagehandGoogleEngine)
+├── auto_replace_recovery_phone.py # Replace recovery phone (StagehandGoogleEngine)
+├── auto_kick_devices.py           # Remove logged-in devices (StagehandGoogleEngine)
+├── auto_subscribe.py              # Auto subscribe to Google One (StagehandGoogleEngine)
+├── auto_unlock_403.py             # Unlock 403 with SMS verification (StagehandGoogleEngine)
+├── auto_google_login.py           # Google login (StagehandGoogleEngine)
+├── auto_antigravity_oauth.py      # Antigravity OAuth (StagehandGoogleEngine)
+├── auto_join_family.py            # Join family group (StagehandGoogleEngine)
+├── auto_enable_family_sharing.py  # Enable family sharing (StagehandGoogleEngine)
+├── batch_account_processor.py     # Batch processing (orchestrator)
+└── pro_status_detector.py         # Pro status detection (shared utility)
 ```
 
 ## Components
 
-### Script Pattern
+### Script Pattern (StagehandGoogleEngine)
 
-All automation scripts follow a consistent pattern:
+Scripts using StagehandGoogleEngine follow this pattern:
 
 ```python
+from core.stagehand_engine import StagehandGoogleEngine
+
 async def auto_xxx(
     browser_id: str,
-    account: dict,       # {'email', 'password', 'secret', 'recovery_email'}
-    params: dict = None, # Task-specific parameters
-    callback: Callable = None,  # Progress callback
-    api_key: str = None,       # API key (default from config)
-    base_url: str = None,      # Base URL (for third-party services)
-    model: str = None,         # Model name (default from config)
-    provider: str = None,      # LLM provider (gemini/anthropic)
-) -> TaskResult:
+    account_info: dict,  # {'email', 'password', 'secret'}
+    close_after: bool = False,
+    api_key: str = None,
+    model: str = None,
+    provider: str = None,
+) -> Tuple[bool, str]:
     """
     Execute automation task.
 
     Returns:
-        TaskResult with success/failure status and data
+        (success: bool, message: str)
     """
+    engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+        browser_id=browser_id,
+        model_name=model_name,
+        model_api_key=api_key,
+        close_browser_on_exit=close_after,
+    )
+
+    try:
+        result = await engine.xxx_operation()
+        return result.success, result.message
+    finally:
+        await engine.stop(close_browser=close_after)
 ```
 
 ### Available Scripts
 
-| Script | Description | Task Type |
-|--------|-------------|-----------|
-| `auto_bind_card_ai.py` | Bind payment card to Google One | `bind_card` |
-| `auto_get_sheerlink_ai.py` | Get SheerID verification link | `get_sheerlink` |
-| `auto_modify_2sv_phone.py` | Modify 2SV phone number | `modify_2sv_phone` |
-| `auto_modify_authenticator.py` | Add/replace Google Authenticator | `modify_authenticator` |
-| `auto_replace_email.py` | Replace recovery email | `replace_recovery_email` |
-| `auto_replace_phone.py` | Replace recovery phone | `replace_recovery_phone` |
-| `auto_kick_devices.py` | Remove all logged-in devices | `kick_devices` |
-| `auto_subscribe.py` | Subscribe to Google One plan | `subscribe` |
+| Script | Description | Engine |
+|--------|-------------|--------|
+| `auto_bind_card_ai.py` | Bind payment card to Google One | StagehandGoogleEngine |
+| `auto_get_sheerlink_ai.py` | Get SheerID verification link | StagehandGoogleEngine |
+| `auto_modify_2sv_phone.py` | Modify 2SV phone number | StagehandGoogleEngine |
+| `auto_modify_authenticator.py` | Add/replace Google Authenticator | StagehandGoogleEngine |
+| `auto_replace_recovery_email.py` | Replace recovery email | StagehandGoogleEngine |
+| `auto_replace_recovery_phone.py` | Replace recovery phone | StagehandGoogleEngine |
+| `auto_kick_devices.py` | Remove all logged-in devices | StagehandGoogleEngine |
+| `auto_subscribe.py` | Subscribe to Google One plan | StagehandGoogleEngine |
+| `auto_unlock_403.py` | Unlock 403 with SMS verification | StagehandGoogleEngine |
+| `auto_google_login.py` | Google account login | StagehandGoogleEngine |
+| `auto_antigravity_oauth.py` | Antigravity OAuth authorization | StagehandGoogleEngine |
+| `auto_join_family.py` | Join family group | StagehandGoogleEngine |
+| `auto_enable_family_sharing.py` | Enable family sharing | StagehandGoogleEngine |
 
 ## Usage Example
 
@@ -66,30 +90,28 @@ import asyncio
 from automation.auto_bind_card_ai import auto_bind_card_ai
 
 async def main():
-    result = await auto_bind_card_ai(
+    success, message = await auto_bind_card_ai(
         browser_id="12345",
-        account={
+        account_info={
             "email": "user@gmail.com",
             "password": "password123",
             "secret": "2FA_SECRET_KEY",
         },
-        params={
-            "card": {
-                "number": "4111111111111111",
-                "exp_month": "12",
-                "exp_year": "2028",
-                "cvv": "123",
-                "name": "John Doe",
-                "zip_code": "10001"
-            }
+        card_info={
+            "number": "4111111111111111",
+            "exp_month": "12",
+            "exp_year": "2028",
+            "cvv": "123",
+            "name": "John Doe",
+            "zip_code": "10001"
         },
-        callback=lambda msg: print(msg)
+        close_after=True,
     )
 
-    if result.success:
+    if success:
         print("Card bound successfully!")
     else:
-        print(f"Failed: {result.message}")
+        print(f"Failed: {message}")
 
 asyncio.run(main())
 ```
@@ -97,29 +119,36 @@ asyncio.run(main())
 ## Dependencies
 
 - **Internal**:
-  - `core/ai_browser_agent/` - AI vision and action execution
+  - `core/stagehand_engine/` - StagehandGoogleEngine (AI browser automation)
   - `services/ix_api.py` - ixBrowser window management
   - `services/database.py` - Data persistence
   - `core/config_manager.py` - Configuration
-- **External**: playwright, asyncio
+  - `services/sheerid_verifier.py` - SheerID API (for auto_subscribe)
+  - `services/sms_bus_client.py` - SMS-Bus (for auto_unlock_403)
+- **External**: stagehand, playwright, asyncio
 
 ## Error Handling
 
-All scripts return `TaskResult` objects with:
+Scripts return operation-specific result types from `core.stagehand_engine.types`:
+- `BindCardResult`, `SheerlinkResult`, `KickDevicesResult`
+- `ModifyPhoneResult`, `ModifyAuthenticatorResult`
+- `ReplaceEmailResult`, `ReplacePhoneResult`
+- `SubscribeResult`, `UnlockResult`
+- `LoginResult`, `OAuthResult`, `JoinFamilyResult`, `EnableSharingResult`
+
+Common fields:
 - `success: bool` - Whether the task completed successfully
 - `message: str` - Human-readable result description
-- `state: AgentState` - Final agent state
-- `total_steps: int` - Number of steps executed
-- `data: dict` - Task-specific result data
-- `error_type: ErrorType` - Type of error (if failed)
+- `duration_ms: float` - Execution time in milliseconds
+- `error: Optional[str]` - Error details (if failed)
 
 ## Best Practices
 
-1. **Always use callback for progress**: GUI needs real-time feedback
-2. **Handle TaskResult properly**: Check `result.success` before proceeding
-3. **Respect rate limits**: Add delays between operations
+1. **Always handle engine cleanup**: Use try/finally to call `engine.stop()`
+2. **Check result.success**: Before proceeding to next steps
+3. **Use callback for progress**: GUI needs real-time feedback
 4. **Update database on completion**: Call DBManager methods after success
 
 ---
 
-*Generated: 2026-02-02*
+*Updated: 2026-02-04 - Migrated to StagehandGoogleEngine*
