@@ -83,6 +83,7 @@
 - [x] `AccountTaskOrchestrator` 改造为优先依赖 `AutomationEngineAdapter`
 - [x] 兼容保留原 GUI 行为与结果结构，确保迁移可回滚
 - [x] 旧版 `account_manager_gui.py` 的主批处理线程改为复用统一 orchestrator 执行链路
+- [x] 旧版 `account_manager_gui.py` 的检测403/单个加入家庭组/批量加入家庭组执行循环改为复用统一 orchestrator
 
 ### Phase 5：测试与可观测性（持续）
 

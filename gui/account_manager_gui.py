@@ -4,7 +4,6 @@
 提供账号状态管理、批量登录、批量 OAuth 功能的图形界面。
 """
 
-import asyncio
 from typing import List, Optional
 from datetime import datetime
 
@@ -18,7 +17,6 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt6.QtGui import QColor, QAction
 
 from services.database import DBManager
-from services.sub2api_client import Sub2APIClient
 from services.ix_api import get_profile_list
 from core.config_manager import ConfigManager
 from application.account_task_orchestrator import AccountTaskOrchestrator
@@ -90,6 +88,10 @@ class AccountManagerDialog(QDialog):
         self.setMinimumSize(1000, 700)
 
         self.worker_thread: Optional[AccountWorkerThread] = None
+        self._detect_403_thread = None
+        self._detect_403_stop_flag = False
+        self._detect_403_results = AccountTaskOrchestrator.create_detect_403_results(0)
+        self._detect_403_error = ""
         self._init_ui()
         self._load_data()
 
@@ -799,34 +801,24 @@ class AccountManagerDialog(QDialog):
             )
 
         def run_async_join():
-            import asyncio
-            from automation.auto_join_family import auto_join_family
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
             try:
-                result = loop.run_until_complete(
-                    auto_join_family(
-                        inviter_account=inviter_account,
-                        invitee_account=invitee_account,
-                        inviter_browser_id=inviter_browser_id,
-                        invitee_browser_id=invitee_browser_id,
-                        callback=safe_log,
-                    )
+                result = AccountTaskOrchestrator.execute_single_join_family(
+                    inviter_account=inviter_account,
+                    invitee_account=invitee_account,
+                    inviter_browser_id=inviter_browser_id,
+                    invitee_browser_id=invitee_browser_id,
+                    log_callback=safe_log,
                 )
 
-                if result.success:
+                if result.get("success"):
                     safe_log(f"✅ {invitee_email} 成功加入 {inviter_account.get('email', '')} 的家庭组")
                     # 刷新表格
                     QTimer.singleShot(0, self._load_data)
                 else:
-                    safe_log(f"❌ 加入家庭组失败: {result.message}")
+                    safe_log(f"❌ 加入家庭组失败: {result.get('message', '')}")
 
             except Exception as e:
                 safe_log(f"❌ 加入家庭组异常: {e}")
-            finally:
-                loop.close()
 
         thread = Thread(target=run_async_join, daemon=True)
         thread.start()
@@ -1053,82 +1045,67 @@ class AccountManagerDialog(QDialog):
         self.log("正在检测需要解锁的账号...")
 
         try:
-            import asyncio
+            linked_accounts = DBManager.get_accounts_by_sub2api_status("linked")
+            self._detect_403_results = AccountTaskOrchestrator.create_detect_403_results(len(linked_accounts))
+            self._detect_403_error = ""
+            self._detect_403_stop_flag = False
 
-            async def detect_403_accounts():
-                """异步检测 403 账号"""
-                async with Sub2APIClient() as client:
-                    # 获取已关联 Sub2API 的账号
-                    linked_accounts = DBManager.get_accounts_by_sub2api_status("linked")
-                    if not linked_accounts:
-                        return {"total": 0, "needs_unlock": 0, "accounts": []}
+            from threading import Thread
+            from PyQt6.QtCore import QMetaObject, Q_ARG, Qt as QtCore_Qt
 
-                    needs_unlock = []
-                    for account in linked_accounts:
-                        email = account.get("email", "")
-                        account_id = account.get("sub2api_account_id")
-
-                        # 如果没有 account_id，尝试从 Sub2API 查询
-                        if not account_id:
-                            self.log(f"[{email}] 缺少 account_id，正在查询...")
-                            account_id = await client.check_account_exists(email)
-                            if account_id:
-                                # 更新到数据库
-                                DBManager.update_sub2api_status(email, "linked", account_id=account_id)
-                                self.log(f"[{email}] 已获取 account_id: {account_id}")
-                            else:
-                                # 账号在 Sub2API 中不存在，修正状态
-                                self.log(f"[{email}] ⚠️ 在 Sub2API 中未找到，修正状态为未关联")
-                                DBManager.update_sub2api_status(email, "not_linked")
-                                continue
-
-                        self.log(f"[{email}] 检测中...")
-                        response = await client.test_account_connection(account_id)
-
-                        if not response.success:
-                            data = response.data or {}
-                            if data.get("needs_unlock"):
-                                validation_url = data.get("validation_url", "")
-                                DBManager.update_unlock_status(email, "needs_unlock", validation_url)
-                                needs_unlock.append(email)
-                                self.log(f"[{email}] ⚠️ 需要解锁")
-                            else:
-                                self.log(f"[{email}] ❌ 检测失败: {response.error}")
-                        else:
-                            self.log(f"[{email}] ✅ 正常")
-
-                    return {
-                        "total": len(linked_accounts),
-                        "needs_unlock": len(needs_unlock),
-                        "accounts": needs_unlock,
-                    }
-
-            # 运行异步任务
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(detect_403_accounts())
-            finally:
-                loop.close()
-
-            self.log(f"检测完成: 共 {result['total']} 个账号，{result['needs_unlock']} 个需要解锁")
-
-            if result['needs_unlock'] > 0:
-                QMessageBox.information(
-                    self, "检测完成",
-                    f"共检测 {result['total']} 个已关联账号\n"
-                    f"发现 {result['needs_unlock']} 个需要解锁\n\n"
-                    f"账号: {', '.join(result['accounts'][:5])}"
-                    + (f"\n...等 {result['needs_unlock']} 个" if result['needs_unlock'] > 5 else "")
+            def safe_log(msg: str):
+                QMetaObject.invokeMethod(
+                    self.log_text,
+                    "append",
+                    QtCore_Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
                 )
-            else:
-                QMessageBox.information(self, "检测完成", f"共检测 {result['total']} 个账号，无需解锁")
 
-            self._load_data()
+            def run_detect_403():
+                try:
+                    self._detect_403_results = AccountTaskOrchestrator.execute_detect_403(
+                        accounts=linked_accounts,
+                        should_stop=lambda: self._detect_403_stop_flag,
+                        log_callback=safe_log,
+                        progress_callback=lambda _: None,
+                    )
+                except Exception as error:
+                    self._detect_403_error = str(error)
+                finally:
+                    QTimer.singleShot(0, self._on_detect_403_thread_completed)
+
+            self._detect_403_thread = Thread(target=run_detect_403, daemon=True)
+            self._detect_403_thread.start()
 
         except Exception as e:
             self.log(f"❌ 检测失败: {e}")
             QMessageBox.critical(self, "错误", f"检测失败:\n{e}")
+
+    def _on_detect_403_thread_completed(self):
+        """检测403线程结束回调"""
+        if self._detect_403_error:
+            self.log(f"❌ 检测失败: {self._detect_403_error}")
+            QMessageBox.critical(self, "错误", f"检测失败:\n{self._detect_403_error}")
+            self._detect_403_thread = None
+            return
+
+        result = self._detect_403_results
+        self._detect_403_thread = None
+
+        self.log(f"检测完成: 共 {result['total']} 个账号，{result['needs_unlock']} 个需要解锁")
+
+        if result['needs_unlock'] > 0:
+            QMessageBox.information(
+                self, "检测完成",
+                f"共检测 {result['total']} 个已关联账号\n"
+                f"发现 {result['needs_unlock']} 个需要解锁\n\n"
+                f"账号: {', '.join(result['accounts'][:5])}"
+                + (f"\n...等 {result['needs_unlock']} 个" if result['needs_unlock'] > 5 else "")
+            )
+        else:
+            QMessageBox.information(self, "检测完成", f"共检测 {result['total']} 个账号，无需解锁")
+
+        self._load_data()
 
     def on_batch_unlock_403(self):
         """批量解锁 403 账号 - 支持选择特定账号或处理全部"""
@@ -1275,6 +1252,10 @@ class AccountManagerDialog(QDialog):
         if self.worker_thread and self.worker_thread.isRunning():
             self.log("正在停止...")
             self.worker_thread.stop()
+
+        if hasattr(self, '_detect_403_thread') and self._detect_403_thread and self._detect_403_thread.is_alive():
+            self.log("正在停止 403 检测...")
+            self._detect_403_stop_flag = True
 
         # 停止批量加入家庭组任务
         if hasattr(self, '_batch_join_thread') and self._batch_join_thread.is_alive():
@@ -1805,13 +1786,7 @@ class AccountManagerDialog(QDialog):
 
         # 保存分配信息用于线程
         self._batch_join_assignments = assignments
-        self._batch_join_results = {
-            "total": len(assignments),
-            "success_count": 0,
-            "failed_count": 0,
-            "failed_list": [],
-            "pro_usage": {},
-        }
+        self._batch_join_results = AccountTaskOrchestrator.create_batch_join_results(len(assignments))
         self._batch_join_stop_flag = False
 
         # 使用单独线程执行
@@ -1837,64 +1812,14 @@ class AccountManagerDialog(QDialog):
             )
 
         def run_batch_join():
-            import asyncio
-            from automation.auto_join_family import auto_join_family
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
             try:
-                for i, (invitee, pro) in enumerate(self._batch_join_assignments):
-                    if self._batch_join_stop_flag:
-                        safe_log("⏹️ 用户停止任务")
-                        break
-
-                    invitee_email = invitee.get("email", "")
-                    pro_email = pro.get("email", "")
-                    invitee_browser_id = invitee.get("browser_profile_id", "")
-                    pro_browser_id = pro.get("browser_profile_id", "")
-
-                    safe_log(f"[{i+1}/{len(self._batch_join_assignments)}] {invitee_email} → {pro_email}")
-
-                    try:
-                        result = loop.run_until_complete(
-                            auto_join_family(
-                                inviter_account=pro,
-                                invitee_account=invitee,
-                                inviter_browser_id=pro_browser_id,
-                                invitee_browser_id=invitee_browser_id,
-                                callback=safe_log,
-                                close_browser_on_success=False,  # 批量模式不关闭窗口
-                            )
-                        )
-
-                        if result.success:
-                            self._batch_join_results["success_count"] += 1
-                            # 更新 Pro 使用量统计
-                            self._batch_join_results["pro_usage"][pro_email] = \
-                                self._batch_join_results["pro_usage"].get(pro_email, 0) + 1
-                            safe_log(f"✅ {invitee_email} 成功加入 {pro_email} 的家庭组")
-                        else:
-                            self._batch_join_results["failed_count"] += 1
-                            self._batch_join_results["failed_list"].append({
-                                "email": invitee_email,
-                                "error": result.message or "未知错误"
-                            })
-                            safe_log(f"❌ {invitee_email} 加入失败: {result.message}")
-
-                    except Exception as e:
-                        self._batch_join_results["failed_count"] += 1
-                        self._batch_join_results["failed_list"].append({
-                            "email": invitee_email,
-                            "error": str(e)
-                        })
-                        safe_log(f"❌ {invitee_email} 异常: {e}")
-
-                    # 更新进度
-                    update_progress(i + 1)
-
+                self._batch_join_results = AccountTaskOrchestrator.execute_batch_join_family(
+                    assignments=self._batch_join_assignments,
+                    should_stop=lambda: self._batch_join_stop_flag,
+                    log_callback=safe_log,
+                    progress_callback=update_progress,
+                )
             finally:
-                loop.close()
                 # 完成后在主线程更新 UI
                 QTimer.singleShot(0, self._on_batch_join_family_finished)
 
