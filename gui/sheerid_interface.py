@@ -2,7 +2,6 @@
 SheerID 验证界面 - Fluent Design 版本
 批量验证 Google One 学生资格
 """
-import asyncio
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QWidget, QHeaderView,
@@ -22,9 +21,7 @@ from gui.base_interface import BaseDialogInterface
 from gui.fluent_utils import show_success, show_error, show_warning
 
 from services.sheerid_verifier import SheerIDVerifier
-from services.database import DBManager
-from core.config_manager import ConfigManager
-from services.ix_window import find_browser_by_email
+from application.sheerid_service import SheerIDService
 
 
 class VerifyWorkerFluent(QThread):
@@ -100,17 +97,7 @@ class VerifyWorkerFluent(QThread):
 
     def _handleSuccess(self, email: str, vid: str, msg: str):
         try:
-            DBManager.upsert_account(
-                email=email,
-                status="verified",
-                message="SheerID 验证成功",
-            )
-            DBManager.add_sheerid_verification(
-                email=email,
-                verification_id=vid,
-                verification_result="success",
-                message="验证成功"
-            )
+            SheerIDService.mark_verified_success(email=email, verification_id=vid)
             msg = "验证成功，已更新状态"
         except Exception as e:
             msg += f" (数据库更新失败: {e})"
@@ -150,7 +137,7 @@ class SheerIDInterface(BaseDialogInterface):
         self.apiKeyInput.setPlaceholderText("请输入 SheerID API Key")
         self.apiKeyInput.setFixedWidth(350)
         # 加载保存的 API Key
-        saved_key = ConfigManager.get_api_key()
+        saved_key = SheerIDService.get_api_key()
         if saved_key:
             self.apiKeyInput.setText(saved_key)
         apiKeyLayout.addWidget(self.apiKeyInput)
@@ -244,17 +231,14 @@ class SheerIDInterface(BaseDialogInterface):
                 show_warning(self, "提示", "请至少选择一个状态筛选条件")
                 return
 
-            # 获取账号数据
-            all_accounts = []
-            for status in statuses:
-                accounts = DBManager.get_accounts_by_status(status) or []
-                all_accounts.extend(accounts)
+            # 获取账号数据（通过应用服务层）
+            all_accounts = SheerIDService.load_accounts_by_statuses(statuses)
 
             # 填充表格
             for acc in all_accounts:
-                email = acc.get('email', '')
-                vid = acc.get('verification_id') or acc.get('vid', '')
-                link = acc.get('sheer_link') or acc.get('link', '')
+                email = acc.email
+                vid = acc.vid
+                link = acc.link
 
                 if not email:
                     continue
@@ -297,7 +281,7 @@ class SheerIDInterface(BaseDialogInterface):
             return
 
         # 保存 API Key
-        ConfigManager.set_api_key(api_key)
+        SheerIDService.set_api_key(api_key)
 
         # 获取选中的账号
         selected = []

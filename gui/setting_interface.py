@@ -17,6 +17,7 @@ from qfluentwidgets import (
     setTheme, Theme, InfoBar, InfoBarPosition, MessageBox,
 )
 from core.config_manager import ConfigManager
+from application.settings_service import SettingsService, SettingsSnapshot
 
 # 尝试导入 AI Agent 模块
 try:
@@ -525,69 +526,62 @@ class ConfigTab(ScrollArea):
     def _loadConfig(self):
         """从配置加载到 UI"""
         try:
-            ConfigManager.load()
+            snapshot = SettingsService.load_settings_snapshot()
 
             # SheerID API Key
-            self.sheeridApiKeyInput.setText(
-                ConfigManager.get_api_key())
+            self.sheeridApiKeyInput.setText(snapshot.sheerid_api_key)
 
             # AI Agent 配置 - 默认提供商
-            default_provider = ConfigManager.get_ai_default_provider()
-            idx = self.aiProviderCombo.findText(default_provider)
+            idx = self.aiProviderCombo.findText(snapshot.ai_default_provider)
             if idx >= 0:
                 self.aiProviderCombo.setCurrentIndex(idx)
 
             # Gemini 配置
-            self.geminiApiKeyInput.setText(ConfigManager.get_ai_provider_api_key("gemini"))
-            self.geminiBaseUrlInput.setText(ConfigManager.get_ai_provider_base_url("gemini"))
-            gemini_model = ConfigManager.get_ai_provider_model("gemini")
-            if gemini_model:
-                self.geminiModelCombo.setCurrentText(gemini_model)
+            self.geminiApiKeyInput.setText(snapshot.gemini_api_key)
+            self.geminiBaseUrlInput.setText(snapshot.gemini_base_url)
+            if snapshot.gemini_model:
+                self.geminiModelCombo.setCurrentText(snapshot.gemini_model)
 
             # Anthropic 配置
-            self.anthropicApiKeyInput.setText(ConfigManager.get_ai_provider_api_key("anthropic"))
-            self.anthropicBaseUrlInput.setText(ConfigManager.get_ai_provider_base_url("anthropic"))
-            anthropic_model = ConfigManager.get_ai_provider_model("anthropic")
-            if anthropic_model:
-                self.anthropicModelCombo.setCurrentText(anthropic_model)
+            self.anthropicApiKeyInput.setText(snapshot.anthropic_api_key)
+            self.anthropicBaseUrlInput.setText(snapshot.anthropic_base_url)
+            if snapshot.anthropic_model:
+                self.anthropicModelCombo.setCurrentText(snapshot.anthropic_model)
 
             # 通用配置
-            self.maxStepsSpin.setValue(ConfigManager.get_ai_max_steps())
+            self.maxStepsSpin.setValue(snapshot.ai_max_steps)
 
             # Gmail IMAP
-            self.gmailEmailInput.setText(ConfigManager.get("gmail_imap_email", ""))
-            self.gmailPasswordInput.setText(ConfigManager.get_gmail_imap_password())
+            self.gmailEmailInput.setText(snapshot.gmail_imap_email)
+            self.gmailPasswordInput.setText(snapshot.gmail_imap_password)
 
             # 超时设置
-            self.pageLoadSpin.setValue(ConfigManager.get("timeouts.page_load", 30))
-            self.statusCheckSpin.setValue(ConfigManager.get("timeouts.status_check", 20))
-            self.iframeWaitSpin.setValue(ConfigManager.get("timeouts.iframe_wait", 15))
+            self.pageLoadSpin.setValue(snapshot.timeout_page_load)
+            self.statusCheckSpin.setValue(snapshot.timeout_status_check)
+            self.iframeWaitSpin.setValue(snapshot.timeout_iframe_wait)
 
             # 延迟设置
-            self.delayLoginSpin.setValue(ConfigManager.get("delays.after_login", 3))
-            self.delayOfferSpin.setValue(ConfigManager.get("delays.after_offer", 8))
-            self.delayAddCardSpin.setValue(ConfigManager.get("delays.after_add_card", 10))
-            self.delaySaveSpin.setValue(ConfigManager.get("delays.after_save", 18))
+            self.delayLoginSpin.setValue(snapshot.delay_after_login)
+            self.delayOfferSpin.setValue(snapshot.delay_after_offer)
+            self.delayAddCardSpin.setValue(snapshot.delay_after_add_card)
+            self.delaySaveSpin.setValue(snapshot.delay_after_save)
 
             # 代理设置
-            self.proxyMaxWindowsSpin.setValue(ConfigManager.get("proxy.max_windows_per_ip", 3))
+            self.proxyMaxWindowsSpin.setValue(snapshot.proxy_max_windows_per_ip)
 
             # 其他设置
-            self.threadCountSpin.setValue(ConfigManager.get("default_thread_count", 3))
+            self.threadCountSpin.setValue(snapshot.default_thread_count)
 
             # 主题
             theme_map = {"auto": 0, "light": 1, "dark": 2}
-            current_theme = ConfigManager.get("theme", "auto")
-            self.themeCombo.setCurrentIndex(theme_map.get(current_theme, 0))
+            self.themeCombo.setCurrentIndex(theme_map.get(snapshot.theme, 0))
 
             # 数据目录
-            data_dir = ConfigManager.get("data_dir", "")
-            if data_dir:
-                self.dataDirLabel.setText(data_dir)
+            if snapshot.data_dir:
+                self.dataDirLabel.setText(snapshot.data_dir)
 
             # 分隔符
-            self.separatorInput.setText(
-                ConfigManager.get("data_separator", "----"))
+            self.separatorInput.setText(snapshot.data_separator)
 
         except Exception as e:
             print(f"[Config] 加载配置失败: {e}")
@@ -595,58 +589,34 @@ class ConfigTab(ScrollArea):
     def _saveConfig(self):
         """保存配置"""
         try:
-            # SheerID API Key
-            ConfigManager.set_api_key(self.sheeridApiKeyInput.text().strip())
-
-            # AI Agent 配置 - 默认提供商
-            ConfigManager.set_ai_default_provider(self.aiProviderCombo.currentText())
-
-            # Gemini 配置
-            gemini_api_key = self.geminiApiKeyInput.text().strip()
-            if gemini_api_key:
-                ConfigManager.set_ai_provider_api_key("gemini", gemini_api_key)
-            ConfigManager.set_ai_provider_base_url("gemini", self.geminiBaseUrlInput.text().strip())
-            ConfigManager.set_ai_provider_model("gemini", self.geminiModelCombo.currentText().strip())
-
-            # Anthropic 配置
-            anthropic_api_key = self.anthropicApiKeyInput.text().strip()
-            if anthropic_api_key:
-                ConfigManager.set_ai_provider_api_key("anthropic", anthropic_api_key)
-            ConfigManager.set_ai_provider_base_url("anthropic", self.anthropicBaseUrlInput.text().strip())
-            ConfigManager.set_ai_provider_model("anthropic", self.anthropicModelCombo.currentText().strip())
-
-            # 通用配置
-            ConfigManager.set_ai_max_steps(self.maxStepsSpin.value())
-
-            # Gmail IMAP
-            ConfigManager.set("gmail_imap_email", self.gmailEmailInput.text().strip())
-            ConfigManager.set_gmail_imap_password(self.gmailPasswordInput.text())
-
-            # 超时设置
-            ConfigManager.set("timeouts.page_load", self.pageLoadSpin.value())
-            ConfigManager.set("timeouts.status_check", self.statusCheckSpin.value())
-            ConfigManager.set("timeouts.iframe_wait", self.iframeWaitSpin.value())
-
-            # 延迟设置
-            ConfigManager.set("delays.after_login", self.delayLoginSpin.value())
-            ConfigManager.set("delays.after_offer", self.delayOfferSpin.value())
-            ConfigManager.set("delays.after_add_card", self.delayAddCardSpin.value())
-            ConfigManager.set("delays.after_save", self.delaySaveSpin.value())
-
-            # 代理设置
-            ConfigManager.set("proxy.max_windows_per_ip", self.proxyMaxWindowsSpin.value())
-
-            # 其他设置
-            ConfigManager.set("default_thread_count", self.threadCountSpin.value())
-
-            # 主题
             theme_values = ["auto", "light", "dark"]
-            ConfigManager.set("theme", theme_values[self.themeCombo.currentIndex()])
 
-            # 分隔符
-            ConfigManager.set("data_separator", self.separatorInput.text().strip())
-
-            ConfigManager.save()
+            snapshot = SettingsSnapshot(
+                sheerid_api_key=self.sheeridApiKeyInput.text().strip(),
+                ai_default_provider=self.aiProviderCombo.currentText(),
+                gemini_api_key=self.geminiApiKeyInput.text().strip(),
+                gemini_base_url=self.geminiBaseUrlInput.text().strip(),
+                gemini_model=self.geminiModelCombo.currentText().strip(),
+                anthropic_api_key=self.anthropicApiKeyInput.text().strip(),
+                anthropic_base_url=self.anthropicBaseUrlInput.text().strip(),
+                anthropic_model=self.anthropicModelCombo.currentText().strip(),
+                ai_max_steps=self.maxStepsSpin.value(),
+                gmail_imap_email=self.gmailEmailInput.text().strip(),
+                gmail_imap_password=self.gmailPasswordInput.text(),
+                timeout_page_load=self.pageLoadSpin.value(),
+                timeout_status_check=self.statusCheckSpin.value(),
+                timeout_iframe_wait=self.iframeWaitSpin.value(),
+                delay_after_login=self.delayLoginSpin.value(),
+                delay_after_offer=self.delayOfferSpin.value(),
+                delay_after_add_card=self.delayAddCardSpin.value(),
+                delay_after_save=self.delaySaveSpin.value(),
+                proxy_max_windows_per_ip=self.proxyMaxWindowsSpin.value(),
+                default_thread_count=self.threadCountSpin.value(),
+                theme=theme_values[self.themeCombo.currentIndex()],
+                data_dir=self.dataDirLabel.text().strip(),
+                data_separator=self.separatorInput.text().strip(),
+            )
+            SettingsService.save_settings_snapshot(snapshot)
 
             InfoBar.success(
                 title="保存成功",
@@ -742,7 +712,7 @@ class ConfigTab(ScrollArea):
         folder = QFileDialog.getExistingDirectory(self, "选择数据目录")
         if folder:
             self.dataDirLabel.setText(folder)
-            ConfigManager.set("data_dir", folder)
+            SettingsService.set_data_dir(folder)
             InfoBar.success(
                 title="已设置",
                 content=f"数据目录: {folder}",
