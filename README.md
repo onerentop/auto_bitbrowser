@@ -51,6 +51,12 @@
   * **自动启动**: GUI 启动时自动在后台启动 Web 服务。
 * **批量操作**: 支持批量打开、关闭、删除窗口。
 
+## 🧭 架构改造计划
+
+架构改造执行计划已保存至：`docs/architecture_refactor_plan.md`
+
+当前已进入 Phase 4，正在逐步统一自动化适配层并持续收敛 GUI 业务逻辑到应用服务层（`application/`）。
+
 ## 🛠️ 安装与使用 (Installation & Usage)
 
 ### 方式一：直接运行 (推荐)

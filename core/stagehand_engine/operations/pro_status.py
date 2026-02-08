@@ -113,15 +113,35 @@ class ProStatusOperation:
             # 3. 使用关键词检测 (快速方法)
             keyword_result = await self._detect_by_keywords()
             if keyword_result.status != ProStatus.UNKNOWN:
+                logger.info(f"关键词检测成功: {keyword_result.status.value}")
                 return keyword_result
 
-            # 4. 使用 AI 提取 (更准确)
-            extract_result = await self._detect_by_extraction()
+            # 4. 尝试使用 AI 提取 (更准确) - 如果失败则使用关键词结果作为降级
+            try:
+                extract_result = await self._detect_by_extraction()
+
+                if extract_result.status != ProStatus.UNKNOWN:
+                    duration_ms = (time.time() - start_time) * 1000
+                    logger.info(f"Pro 状态检测完成 (AI 提取): {extract_result.status.value}")
+                    return extract_result
+                else:
+                    # AI 提取返回 UNKNOWN，使用关键词结果
+                    logger.warning("AI 提取返回未知状态，使用关键词检测结果")
+                    if keyword_result.confidence > 0:
+                        return keyword_result
+            except Exception as extract_error:
+                # AI 提取失败，记录错误但继续
+                logger.warning(f"AI 提取失败，降级使用关键词检测: {extract_error}")
+                # 如果关键词检测有任何结果（即使是 UNKNOWN），也返回它
+                if keyword_result.confidence > 0:
+                    keyword_result.method_used = f"keyword_fallback (AI error: {str(extract_error)[:50]})"
+                    return keyword_result
 
             duration_ms = (time.time() - start_time) * 1000
-            logger.info(f"Pro 状态检测完成: {extract_result.status.value}")
+            logger.info(f"Pro 状态检测完成: {keyword_result.status.value}")
 
-            return extract_result
+            # 返回关键词结果（即使是 UNKNOWN）
+            return keyword_result
 
         except Exception as e:
             logger.error(f"Pro 状态检测失败: {e}")
@@ -237,43 +257,14 @@ class ProStatusOperation:
         """使用 AI 提取检测 Pro 状态"""
         try:
             # 使用 Stagehand extract 提取结构化数据
+            # 传入 ProStatusSchema 以生成 JSON Schema，帮助 AI 返回结构化数据
             extract_result = await self.engine.extract(
-                instruction="""
-                分析当前 Google One 页面，判断用户的会员订阅状态。
-
-                **重要判断规则：**
-
-                1. 首先检查是否有"Upgrade"或"升级"按钮：
-                   - 如果有 → is_subscribed = false
-
-                2. 如果是会员，判断是独立订阅还是家庭组成员：
-
-                   **家庭组成员特征（is_family_member=true）：**
-                   - 看到"Shared with you"、"与您共享"
-                   - 看到"Leave family"、"退出家庭"选项
-                   - 没有看到"Next payment"、"下次付款"信息
-                   - 没有付款/取消选项
-
-                   **独立订阅者特征（is_family_member=false, has_payment_options=true）：**
-                   - 看到"Next payment"、"下次付款"信息
-                   - 看到"Cancel membership"、"取消会员"
-                   - 看到"Payment method"、"付款方式"
-                   - 看到"Share Google One with family"开关
-
-                请提取：
-                - is_subscribed: 是否有 Google One 订阅
-                - is_family_member: 是否是家庭组成员（通过别人的订阅获得）
-                - has_payment_options: 是否有付款相关选项
-                - plan_name: 订阅计划名称（如 100 GB, 200 GB, 2 TB, AI Premium）
-                - storage_used: 已使用存储空间
-                - storage_total: 总存储空间
-                - is_trial: 是否是试用期
-                - expiry_date: 到期日期
-                """,
+                instruction="Extract Google One subscription info: is_subscribed (false if 'Upgrade'/'Get started' buttons visible), is_family_member, plan_name, has_payment_options (true if 'Cancel membership' visible), storage info, is_trial.",
                 schema=ProStatusSchema,
             )
 
             if not extract_result.success or not extract_result.data:
+                logger.warning("AI 提取失败，返回未知状态")
                 return ProStatusResult(
                     status=ProStatus.UNKNOWN,
                     is_pro=False,
