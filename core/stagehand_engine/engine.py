@@ -835,6 +835,98 @@ class StagehandGoogleEngine:
                 duration_ms=duration_ms,
             )
 
+    async def agent_execute(
+        self,
+        instruction: str,
+        max_steps: int = 25,
+        mode: str = "dom",
+        timeout: float = Timeouts.OPERATION,
+    ) -> ActionResult:
+        """
+        使用 Stagehand Agent 模式执行多步骤任务。
+
+        Args:
+            instruction: 自然语言任务描述
+            max_steps: Agent 最大执行步数
+            mode: Agent 工具模式 (dom/hybrid/cua)
+            timeout: 超时时间（毫秒）
+
+        Returns:
+            ActionResult
+        """
+        self._ensure_initialized()
+        start_time = time.time()
+
+        if mode not in {"dom", "hybrid", "cua"}:
+            return ActionResult(
+                success=False,
+                error=f"不支持的 agent mode: {mode}",
+                duration_ms=(time.time() - start_time) * 1000,
+            )
+
+        if not self._is_page_valid():
+            reason = self._get_page_invalid_reason()
+            logger.warning(f"agent_execute 跳过: 页面无效 - {reason}")
+            return ActionResult(
+                success=False,
+                error=f"页面状态无效，无法执行 agent_execute: {reason}",
+                duration_ms=(time.time() - start_time) * 1000,
+            )
+
+        try:
+            model_options = self._get_model_options()
+            model_config = model_options.get("model", {"model_name": self.model_name})
+
+            response = await self._session.execute(
+                agent_config={
+                    "mode": mode,
+                    "model": model_config,
+                },
+                execute_options={
+                    "instruction": instruction,
+                    "max_steps": max_steps,
+                },
+                timeout=(timeout / 1000) if timeout else None,
+            )
+
+            duration_ms = (time.time() - start_time) * 1000
+
+            result = getattr(getattr(response, "data", None), "result", None)
+            message = ""
+            if result is not None:
+                message = getattr(result, "message", "") or ""
+
+            response_ok = bool(getattr(response, "success", False))
+            result_ok = bool(getattr(result, "success", False)) if result is not None else False
+            completed = bool(getattr(result, "completed", False)) if result is not None else False
+            is_success = response_ok and result_ok and completed
+
+            if is_success:
+                return ActionResult(
+                    success=True,
+                    message=message or "Agent 执行成功",
+                    method=f"agent_execute:{mode}",
+                    duration_ms=duration_ms,
+                )
+
+            error_text = message or "Agent 执行失败"
+            return ActionResult(
+                success=False,
+                error=error_text,
+                method=f"agent_execute:{mode}",
+                duration_ms=duration_ms,
+            )
+
+        except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(f"Agent 执行失败: {instruction} - {e}")
+            return ActionResult(
+                success=False,
+                error=str(e),
+                method=f"agent_execute:{mode}",
+                duration_ms=duration_ms,
+            )
+
     async def observe(
         self,
         instruction: str,

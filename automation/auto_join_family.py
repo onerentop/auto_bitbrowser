@@ -223,18 +223,31 @@ async def auto_join_family(
                 total_steps=total_steps,
             )
 
-        # 发送邀请
-        log(f"[{inviter_email}] 输入被邀请人邮箱: {invitee_email}")
-        await inviter_engine.act(f"在邮箱输入框中输入 '{invitee_email}'")
-        await inviter_engine.wait(1000)
+        # 发送邀请（Stagehand Agent 模式）
+        log(f"[{inviter_email}] 使用 Agent 模式发送家庭邀请...")
+        agent_result = await inviter_engine.agent_execute(
+            instruction=(
+                f"在当前家庭邀请页面，将邮箱 {invitee_email} 添加到邀请输入框中，"
+                "如果出现候选项请选择正确邮箱，然后点击 Send/发送 完成邀请。"
+                "若页面显示家庭组已满、无法继续邀请，请停止并返回失败信息。"
+            ),
+            max_steps=20,
+            mode="dom",
+        )
 
-        # 选择邮箱建议并发送
-        await inviter_engine.act("按下方向键选择邮箱建议，然后按回车确认")
-        await inviter_engine.wait(1000)
+        if not agent_result.success:
+            # 兼容兜底：当 Agent 执行失败时回退到旧 act 模式，避免流程中断
+            log(f"[{inviter_email}] Agent 发送失败，回退到 act 模式: {agent_result.error}")
+            log(f"[{inviter_email}] 输入被邀请人邮箱: {invitee_email}")
+            await inviter_engine.act(f"在邮箱输入框中输入 '{invitee_email}'")
+            await inviter_engine.wait(1000)
 
-        # 点击发送按钮
-        log(f"[{inviter_email}] 点击发送邀请按钮...")
-        await inviter_engine.act("点击 'Send' 或 '发送' 按钮")
+            await inviter_engine.act("按下方向键选择邮箱建议，然后按回车确认")
+            await inviter_engine.wait(1000)
+
+            log(f"[{inviter_email}] 点击发送邀请按钮...")
+            await inviter_engine.act("点击 'Send' 或 '发送' 按钮")
+
         await inviter_engine.wait(3000)
         total_steps += 1
 
