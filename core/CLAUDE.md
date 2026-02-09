@@ -4,7 +4,7 @@
 
 ## Overview
 
-Core utilities module. Provides configuration management, intelligent retry framework, unified data parsing, **StagehandGoogleEngine** (AI browser agent), and legacy AI Browser Agent (deprecated).
+Core utilities module. Provides configuration management, intelligent retry framework, unified data parsing, **StagehandGoogleEngine** (AI browser agent for Google operations), **BrowserUseEngine** (general AI browser agent), and legacy AI Browser Agent (deprecated).
 
 ## Module Structure
 
@@ -14,7 +14,7 @@ core/
 ├── config_manager.py     # Configuration manager (singleton)
 ├── data_parser.py        # Unified data parser
 ├── retry_helper.py       # Intelligent retry framework
-├── stagehand_engine/     # StagehandGoogleEngine (RECOMMENDED)
+├── stagehand_engine/     # StagehandGoogleEngine (Google operations)
 │   ├── __init__.py       # Module exports
 │   ├── engine.py         # Main StagehandGoogleEngine class
 │   ├── types.py          # Operation result types
@@ -34,6 +34,15 @@ core/
 │       ├── join_family.py    # Join family group
 │       ├── enable_sharing.py # Enable family sharing
 │       └── oauth.py          # OAuth authorization
+├── browseruse_engine/    # BrowserUseEngine (general AI browser control)
+│   ├── __init__.py       # Module exports
+│   ├── protocol.py       # EngineProtocol interface
+│   ├── types.py          # Data models
+│   ├── engine.py         # Main BrowserUseEngine class
+│   ├── llm/              # LLM adapters (OpenAI, Anthropic, Google)
+│   ├── dom/              # DOM extraction service
+│   ├── tools/            # Action system (registry, executor)
+│   └── agent/            # Agent core (service, prompts)
 ├── ai_browser_agent/     # [DEPRECATED] Legacy AI Browser Agent
 │   └── CLAUDE.md         # Submodule documentation
 └── totp_extractor/       # TOTP secret extraction
@@ -46,11 +55,60 @@ core/
 
 | Submodule | Description | Status |
 |-----------|-------------|--------|
-| stagehand_engine | Stagehand-based Google account automation engine | ✅ RECOMMENDED |
+| stagehand_engine | Stagehand-based Google account automation engine | ✅ RECOMMENDED for Google |
+| browseruse_engine | Browser-use based general AI browser control | ✅ NEW - General tasks |
 | ai_browser_agent | Multi-LLM Vision-based browser agent | ⚠️ DEPRECATED |
 | totp_extractor | Extract TOTP secrets from Google Authenticator QR codes | ✅ Active |
 
-## StagehandGoogleEngine (Recommended)
+## Engine Comparison
+
+| Feature | StagehandGoogleEngine | BrowserUseEngine |
+|---------|----------------------|------------------|
+| Architecture | Stagehand SDK wrapper | Agent loop with DOM extraction |
+| Best For | Google account operations | General web automation |
+| Protocol | Implements EngineProtocol | Implements EngineProtocol |
+| Interchangeable | ✅ Yes | ✅ Yes |
+
+## BrowserUseEngine (New)
+
+General-purpose AI browser automation engine based on browser-use architecture.
+
+### Quick Start
+
+```python
+from core.browseruse_engine import BrowserUseEngine
+
+async def example():
+    # Connect to existing ixBrowser window
+    engine = await BrowserUseEngine.connect_to_ixbrowser(
+        browser_id="12345",
+        llm_provider="google",
+        llm_model="gemini-2.0-flash",
+        llm_api_key="your-api-key",
+    )
+
+    try:
+        # Execute multi-step task
+        result = await engine.run(
+            task="Open Google and search for Python tutorials",
+            max_steps=20,
+        )
+        print(f"Success: {result.success}")
+    finally:
+        await engine.stop()
+```
+
+### EngineProtocol Methods
+
+| Method | Description | Returns |
+|--------|-------------|---------|
+| `navigate(url)` | Navigate to URL | `NavigationResult` |
+| `act(instruction)` | Execute single-step instruction | `ActionResult` |
+| `extract(instruction)` | Extract data from page | `ExtractResult` |
+| `observe(instruction)` | Observe page elements | `ObserveResult` |
+| `run(task, max_steps)` | Execute multi-step Agent task | `AgentResult` |
+
+## StagehandGoogleEngine (Google Operations)
 
 The primary AI browser automation engine for Google account operations.
 
@@ -203,7 +261,7 @@ from core import (
     parse_account_line, build_account_line,
 )
 
-# StagehandGoogleEngine (recommended import)
+# StagehandGoogleEngine (recommended import for Google operations)
 from core.stagehand_engine import (
     StagehandGoogleEngine,
     # Result types
@@ -214,14 +272,23 @@ from core.stagehand_engine import (
     SubscribeResult, UnlockResult, JoinFamilyResult,
     EnableSharingResult, OAuthResult,
 )
+
+# BrowserUseEngine (recommended import for general tasks)
+from core.browseruse_engine import (
+    BrowserUseEngine,
+    EngineProtocol,
+    # Result types
+    NavigationResult, ActionResult, ExtractResult,
+    ObserveResult, AgentResult,
+)
 ```
 
 ## Dependencies
 
 - **Internal dependencies**: None (pure infrastructure module)
 - **External usage**: Used by `automation/*`, `gui/*`, `services/*`
-- **External packages**: stagehand, playwright
+- **External packages**: stagehand, playwright, openai, anthropic, google-generativeai
 
 ---
 
-*Updated: 2026-02-04 - Added StagehandGoogleEngine, deprecated ai_browser_agent*
+*Updated: 2026-02-04 - Added BrowserUseEngine, StagehandGoogleEngine, deprecated ai_browser_agent*

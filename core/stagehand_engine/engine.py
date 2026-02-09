@@ -345,6 +345,7 @@ class StagehandGoogleEngine:
                 server="local",
                 model_api_key=self.model_api_key,
                 local_ready_timeout_s=30.0,
+                max_retries=0,
             )
 
             # 进入上下文
@@ -414,6 +415,7 @@ class StagehandGoogleEngine:
                 local_headless=self.headless,
                 local_chrome_path=self.chrome_path,
                 local_ready_timeout_s=30.0,
+                max_retries=0,
             )
 
             # 进入上下文
@@ -877,6 +879,26 @@ class StagehandGoogleEngine:
             model_options = self._get_model_options()
             model_config = model_options.get("model", {"model_name": self.model_name})
 
+            def _is_third_party_anthropic_gateway(cfg: Dict[str, Any]) -> bool:
+                model_name_lower = (cfg.get("model_name") or self.model_name or "").lower()
+                base_url_lower = (cfg.get("base_url") or self.model_base_url or "").lower()
+
+                if not model_name_lower.startswith("anthropic/"):
+                    return False
+                if not base_url_lower:
+                    return False
+                return "anthropic.com" not in base_url_lower
+
+            def _is_invalid_request_message(text: str) -> bool:
+                text_lower = (text or "").lower()
+                return (
+                    "invalid request" in text_lower
+                    or "request validation failed" in text_lower
+                    or "invalid input" in text_lower
+                )
+
+            third_party_anthropic = _is_third_party_anthropic_gateway(model_config)
+
             def _parse_execute_response(exec_response: Any) -> tuple[bool, str, Any]:
                 exec_result = getattr(getattr(exec_response, "data", None), "result", None)
                 exec_message = ""
@@ -905,54 +927,67 @@ class StagehandGoogleEngine:
             is_success, message, result = _parse_execute_response(response)
 
             # 兼容重试：部分 Stagehand/SEA 版本在 agentExecute 上对 model 字段格式要求不同
-            # 若出现 Invalid request，回退到旧字段格式 (name/apiKey/baseURL) 再试一次
-            if not is_success and "invalid request" in (message or "").lower():
-                try:
-                    logger.warning("agentExecute 返回 Invalid request，尝试 legacy payload 重试")
-                    legacy_model = {
-                        "name": model_config.get("model_name") or self.model_name,
-                    }
-                    if model_config.get("api_key"):
-                        legacy_model["apiKey"] = model_config.get("api_key")
-                    if model_config.get("base_url"):
-                        legacy_model["baseURL"] = model_config.get("base_url")
-                    if model_config.get("provider"):
-                        legacy_model["provider"] = model_config.get("provider")
-
-                    legacy_agent_config: Dict[str, Any] = {
-                        "model": legacy_model,
-                    }
-                    if mode == "cua":
-                        legacy_agent_config["cua"] = True
-                    elif mode in {"dom", "hybrid"}:
-                        legacy_agent_config["mode"] = mode
-
-                    legacy_response = await self._client.post(
-                        f"/v1/sessions/{self._session_id}/agentExecute",
-                        cast_to=type(response),
-                        body={
-                            "agentConfig": legacy_agent_config,
-                            "executeOptions": {
-                                "instruction": instruction,
-                                "maxSteps": max_steps,
-                            },
-                            "streamResponse": False,
-                        },
-                        options={
-                            "timeout": (timeout / 1000) if timeout else None,
-                        },
+            # 若出现 Invalid request，回退到旧字段格式 (modelName/apiKey/baseURL) 再试一次
+            if not is_success and _is_invalid_request_message(message):
+                if third_party_anthropic:
+                    logger.warning(
+                        f"agentExecute 返回 Invalid request，检测到第三方 Anthropic 网关，跳过 legacy 重试 "
+                        f"(mode={mode}, max_steps={max_steps})"
                     )
-
-                    is_success, message, result = _parse_execute_response(legacy_response)
-                    if is_success:
-                        return ActionResult(
-                            success=True,
-                            message=message or "Agent 执行成功",
-                            method=f"agent_execute:{mode}:legacy",
-                            duration_ms=(time.time() - start_time) * 1000,
+                else:
+                    try:
+                        logger.warning(
+                            f"agentExecute 返回 Invalid request，尝试 legacy payload 重试 (mode={mode}, max_steps={max_steps})"
                         )
-                except Exception as legacy_error:
-                    logger.warning(f"agentExecute legacy payload 重试失败: {legacy_error}")
+                        legacy_model = {
+                            "modelName": model_config.get("model_name") or self.model_name,
+                        }
+                        if model_config.get("api_key"):
+                            legacy_model["apiKey"] = model_config.get("api_key")
+                        if model_config.get("base_url"):
+                            legacy_model["baseURL"] = model_config.get("base_url")
+                        if model_config.get("provider"):
+                            legacy_model["provider"] = model_config.get("provider")
+
+                        legacy_agent_config: Dict[str, Any] = {
+                            "model": legacy_model,
+                            "mode": mode,
+                        }
+
+                        raw_client = getattr(self, "_async_stagehand", None)
+                        if raw_client is None:
+                            raw_client = getattr(self._session, "_client", None)
+                        if raw_client is None or not callable(getattr(raw_client, "post", None)):
+                            raise RuntimeError("Stagehand client unavailable for legacy retry")
+
+                        legacy_timeout_s = min((timeout / 1000) if timeout else 15, 15)
+
+                        legacy_response = await raw_client.post(
+                            f"/v1/sessions/{self._session_id}/agentExecute",
+                            cast_to=type(response),
+                            body={
+                                "agentConfig": legacy_agent_config,
+                                "executeOptions": {
+                                    "instruction": instruction,
+                                    "maxSteps": max_steps,
+                                },
+                                "streamResponse": False,
+                            },
+                            options={
+                                "timeout": legacy_timeout_s,
+                            },
+                        )
+
+                        is_success, message, result = _parse_execute_response(legacy_response)
+                        if is_success:
+                            return ActionResult(
+                                success=True,
+                                message=message or "Agent 执行成功",
+                                method=f"agent_execute:{mode}:legacy",
+                                duration_ms=(time.time() - start_time) * 1000,
+                            )
+                    except Exception as legacy_error:
+                        logger.warning(f"agentExecute legacy payload 重试失败: {legacy_error}")
 
             if is_success:
                 return ActionResult(

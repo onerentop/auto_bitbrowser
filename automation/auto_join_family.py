@@ -1,12 +1,12 @@
 """
 自动加入家庭组
 
-使用 StagehandGoogleEngine 自动完成家庭组加入流程：
+使用 BrowserUseEngine 自动完成家庭组加入流程：
 1. 在普通 Pro 账户窗口发送家庭邀请
 2. 在被邀请账户窗口接受邀请（通过 Gmail）
 3. 更新数据库状态
 
-技术栈：StagehandGoogleEngine (统一的 AI 浏览器自动化引擎)
+技术栈：BrowserUseEngine (统一的 AI 浏览器自动化引擎)
 """
 
 import asyncio
@@ -17,15 +17,14 @@ from services.database import DBManager
 from services.ix_api import closeBrowser
 from services.invite_lock import invite_lock_manager
 
-# 导入 StagehandGoogleEngine
+# 导入 BrowserUseEngine
 try:
-    from core.stagehand_engine import StagehandGoogleEngine
-    from core.stagehand_engine.constants import GoogleURLs
-    STAGEHAND_ENGINE_AVAILABLE = True
+    from core.browseruse_engine import BrowserUseEngine, JoinFamilyResult as EngineJoinFamilyResult
+    BROWSERUSE_ENGINE_AVAILABLE = True
 except ImportError:
-    STAGEHAND_ENGINE_AVAILABLE = False
-    StagehandGoogleEngine = None
-    GoogleURLs = None
+    BROWSERUSE_ENGINE_AVAILABLE = False
+    BrowserUseEngine = None
+    EngineJoinFamilyResult = None
 
 
 @dataclass
@@ -39,7 +38,7 @@ class JoinFamilyResult:
     total_steps: int = 0
 
 
-# ==================== 家庭组已满检测关键词 ====================
+# ==================== 错误分类辅助函数 ====================
 
 FAMILY_FULL_KEYWORDS = [
     # 英文
@@ -62,6 +61,15 @@ def _is_family_full_error(error_msg: str) -> bool:
     return any(keyword.lower() in error_lower for keyword in FAMILY_FULL_KEYWORDS)
 
 
+def _classify_agent_invite_error(error_msg: str, page_content: str = "") -> str:
+    """分类 Agent 邀请失败类型"""
+    if _is_family_full_error(page_content) or _is_family_full_error(error_msg):
+        return "family_full"
+    if error_msg and "timeout" in error_msg.lower():
+        return "timeout"
+    return "invite_failed"
+
+
 async def auto_join_family(
     inviter_account: dict,
     invitee_account: dict,
@@ -77,7 +85,7 @@ async def auto_join_family(
     """
     执行家庭组加入流程
 
-    使用 StagehandGoogleEngine 执行家庭组邀请和接受操作。
+    使用 BrowserUseEngine 执行家庭组邀请和接受操作。
 
     流程：
     1. 邀请人发送家庭邀请
@@ -135,16 +143,16 @@ async def auto_join_family(
             error_type="concurrent_operation",
         )
 
-    # 检查 StagehandGoogleEngine 是否可用
-    if not STAGEHAND_ENGINE_AVAILABLE:
+    # 检查 BrowserUseEngine 是否可用
+    if not BROWSERUSE_ENGINE_AVAILABLE:
         invite_lock_manager.unlock(invitee_email)
-        log("❌ StagehandGoogleEngine 不可用")
+        log("❌ BrowserUseEngine 不可用")
         return JoinFamilyResult(
             success=False,
-            message="StagehandGoogleEngine 不可用",
+            message="BrowserUseEngine 不可用",
             inviter_email=inviter_email,
             invitee_email=invitee_email,
-            error_type="stagehand_unavailable",
+            error_type="engine_unavailable",
         )
 
     inviter_engine = None
@@ -158,119 +166,46 @@ async def auto_join_family(
         log("=" * 50)
 
         # 连接到邀请人的浏览器
-        inviter_engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+        inviter_engine = await BrowserUseEngine.connect_to_ixbrowser(
             browser_id=inviter_browser_id,
-            use_config=True,
             close_browser_on_exit=False,
         )
 
         log(f"[{inviter_email}] 已连接到 ixBrowser")
 
-        # 首先检查是否需要创建家庭组
-        log(f"[{inviter_email}] 检查家庭组状态...")
+        # 使用 send_family_invite 方法发送邀请
+        log(f"[{inviter_email}] 正在发送家庭邀请给 {invitee_email}...")
 
-        # 导航到家庭邀请页面
-        await inviter_engine.navigate(GoogleURLs.FAMILY_INVITE_MEMBERS)
-        await inviter_engine.wait(2000)
+        invite_result = await inviter_engine.send_family_invite(invitee_email)
+        total_steps += 1
 
-        # 使用 AI 检测页面状态
-        page_content = await inviter_engine.get_page_content()
-        page_lower = page_content.lower()
+        if not invite_result.success:
+            error_msg = invite_result.error or invite_result.message or "发送邀请失败"
+            log(f"[{inviter_email}] ❌ {error_msg}")
 
-        # 检测是否需要先创建家庭组
-        needs_create_family = any(kw in page_lower for kw in [
-            "get started", "开始使用", "create a family", "创建家庭",
-            "start a family", "开始使用家庭",
-        ])
-
-        if needs_create_family:
-            log(f"[{inviter_email}] 需要先创建家庭组...")
-
-            # 使用 enable_family_sharing 方法创建家庭组
-            sharing_result = await inviter_engine.enable_family_sharing()
-
-            if sharing_result.success:
-                log(f"[{inviter_email}] ✅ 家庭组创建成功")
-                if sharing_result.family_created:
-                    DBManager.update_family_member_count(inviter_email, 1)
-            else:
-                error_msg = sharing_result.error or sharing_result.message or "创建家庭组失败"
-                log(f"[{inviter_email}] ❌ {error_msg}")
+            # 检测家庭组已满
+            if _is_family_full_error(error_msg) or invite_result.error_type == "family_full":
+                DBManager.update_family_member_count(inviter_email, 6)
                 return JoinFamilyResult(
                     success=False,
-                    message=f"创建家庭组失败: {error_msg}",
+                    message="家庭组已满",
                     inviter_email=inviter_email,
                     invitee_email=invitee_email,
-                    error_type="create_family_failed",
+                    error_type="family_full",
                     total_steps=total_steps,
                 )
 
-            # 重新导航到邀请页面
-            await inviter_engine.navigate(GoogleURLs.FAMILY_INVITE_MEMBERS)
-            await inviter_engine.wait(2000)
-
-        # 检测家庭组是否已满
-        page_content = await inviter_engine.get_page_content()
-        if _is_family_full_error(page_content):
-            log(f"[{inviter_email}] ⚠️ 家庭组已满")
-            DBManager.update_family_member_count(inviter_email, 6)
+            error_type = _classify_agent_invite_error(error_msg)
             return JoinFamilyResult(
                 success=False,
-                message="家庭组已满",
+                message=f"发送邀请失败: {error_msg}",
                 inviter_email=inviter_email,
                 invitee_email=invitee_email,
-                error_type="family_full",
+                error_type=error_type,
                 total_steps=total_steps,
             )
 
-        # 发送邀请（Stagehand Agent 模式）
-        log(f"[{inviter_email}] 使用 Agent 模式发送家庭邀请...")
-        agent_result = await inviter_engine.agent_execute(
-            instruction=(
-                f"在当前家庭邀请页面，将邮箱 {invitee_email} 添加到邀请输入框中，"
-                "如果出现候选项请选择正确邮箱，然后点击 Send/发送 完成邀请。"
-                "若页面显示家庭组已满、无法继续邀请，请停止并返回失败信息。"
-            ),
-            max_steps=20,
-            mode="dom",
-        )
-
-        if not agent_result.success:
-            # 兼容兜底：当 Agent 执行失败时回退到旧 act 模式，避免流程中断
-            log(f"[{inviter_email}] Agent 发送失败，回退到 act 模式: {agent_result.error}")
-            log(f"[{inviter_email}] 输入被邀请人邮箱: {invitee_email}")
-            await inviter_engine.act(f"在邮箱输入框中输入 '{invitee_email}'")
-            await inviter_engine.wait(1000)
-
-            await inviter_engine.act("按下方向键选择邮箱建议，然后按回车确认")
-            await inviter_engine.wait(1000)
-
-            log(f"[{inviter_email}] 点击发送邀请按钮...")
-            await inviter_engine.act("点击 'Send' 或 '发送' 按钮")
-
-        await inviter_engine.wait(3000)
-        total_steps += 1
-
-        # 验证邀请是否发送成功
-        page_content = await inviter_engine.get_page_content()
-        page_lower = page_content.lower()
-
-        if _is_family_full_error(page_content):
-            log(f"[{inviter_email}] ⚠️ 邀请失败：家庭组已满")
-            DBManager.update_family_member_count(inviter_email, 6)
-            return JoinFamilyResult(
-                success=False,
-                message="家庭组已满",
-                inviter_email=inviter_email,
-                invitee_email=invitee_email,
-                error_type="family_full",
-                total_steps=total_steps,
-            )
-
-        if any(kw in page_lower for kw in ["sent", "发送成功", "invitation sent", "邀请已发送"]):
-            log(f"[{inviter_email}] ✅ 邀请发送成功")
-        else:
-            log(f"[{inviter_email}] ⚠️ 邀请状态不确定，继续尝试...")
+        log(f"[{inviter_email}] ✅ 邀请发送成功")
 
         # 关闭邀请人引擎
         await inviter_engine.stop(close_browser=False)
@@ -285,9 +220,8 @@ async def auto_join_family(
         log("=" * 50)
 
         # 连接到被邀请人的浏览器
-        invitee_engine = await StagehandGoogleEngine.connect_to_ixbrowser(
+        invitee_engine = await BrowserUseEngine.connect_to_ixbrowser(
             browser_id=invitee_browser_id,
-            use_config=True,
             close_browser_on_exit=False,
         )
 
@@ -392,7 +326,7 @@ async def auto_join_family(
 
 if __name__ == "__main__":
     async def main():
-        print("家庭组加入测试 (StagehandGoogleEngine)")
+        print("家庭组加入测试 (BrowserUseEngine)")
         print("=" * 50)
 
         # 测试账号（需要替换为真实账号）
