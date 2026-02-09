@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..types import (
     OperationStatus,
+    FamilyRole,
     ProStatus,
     ProStatusResult,
 )
@@ -312,10 +313,11 @@ class ProStatusOperation:
                 elif has_manage_family_settings:
                     is_family_member = False
 
-            # 二次校验：针对“已订阅但无法确认付费入口”的场景，额外走一次家庭组状态检测
+            # 二次校验（强制）：只要是 Pro 用户，就额外走一次家庭组状态检测
             # Why:
-            # - 部分页面语言/布局下，AI 容易漏判 is_family_member，导致家庭组 Pro 误判为普通 Pro。
-            if is_subscribed and not has_payment_options:
+            # - 业务规则要求：先判断是否 Pro，再判断是否家庭 Pro。
+            # - 仅依赖一次 extract 的 is_family_member 在不同语言/布局下容易误判。
+            if is_subscribed:
                 try:
                     family_status = await self.engine.detect_family_status(navigate_if_needed=True)
                     if family_status.has_family:
@@ -325,8 +327,20 @@ class ProStatusOperation:
                         else:
                             is_family_member = True
                             method_used = "ai_extraction+family_check(member)"
+                            if not family_manager_email:
+                                manager_email = next(
+                                    (
+                                        member.email
+                                        for member in family_status.members
+                                        if member.role == FamilyRole.MANAGER and member.email
+                                    ),
+                                    None,
+                                )
+                                family_manager_email = manager_email
                     else:
-                        method_used = "ai_extraction+family_check(none)"
+                        # 已订阅但未开通家庭组 => 普通 Pro
+                        is_family_member = False
+                        method_used = "ai_extraction+family_check(no_family)"
                 except Exception as family_error:
                     logger.warning(f"家庭组二次校验失败，保留 AI 提取结果: {family_error}")
 

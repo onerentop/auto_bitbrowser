@@ -247,10 +247,11 @@ class FamilyKeywords:
 
     # 管理员标识
     MANAGER = [
-        "family manager",
-        "家庭群组管理员",
         "you manage this family",
+        "you are the family manager",
         "manage members",
+        "you can manage family settings",
+        "管理成员",
     ]
 
     # 家庭组成员标识（被邀请加入的，非管理员）

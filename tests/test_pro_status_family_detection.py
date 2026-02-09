@@ -91,5 +91,5 @@ async def test_should_skip_secondary_family_check_when_payment_options_exist():
     assert result.status == ProStatus.ACTIVE
     assert result.is_pro is True
     assert result.is_family_member is False
-    assert result.method_used == "ai_extraction"
-    engine.detect_family_status.assert_not_awaited()
+    assert result.method_used == "ai_extraction+family_check(no_family)"
+    engine.detect_family_status.assert_awaited_once_with(navigate_if_needed=True)
