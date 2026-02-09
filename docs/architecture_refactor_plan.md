@@ -93,6 +93,7 @@
 - [x] `gui/sheerid_interface.py` 改为通过 `SheerIDService` 读写 API Key，移除界面层直接依赖
 - [x] `gui/setting_interface.py` 的提供商连接测试配置解析改为通过 `SettingsService`
 - [x] `AutomationEngineAdapter` 收敛为 Fluent 在用入口，移除旧版 GUI 兼容入口
+- [x] 移除已停用核心引擎目录 `core/ai_browser_agent/`，收敛到 `core/stagehand_engine/` 单引擎路线
 
 ### Phase 5：测试与可观测性（持续）
 
@@ -107,6 +108,7 @@
 - [x] 新增 `tests/test_sheerid_service.py` 覆盖 SheerIDService 基础分支
 - [x] 扩展 `tests/test_settings_service.py` 覆盖提供商运行时配置解析分支
 - [x] 持续执行 compileall + python 烟测（pytest 环境缺失时的兜底验证）
+- [x] 清理与已移除引擎耦合的历史测试文件，避免失效回归项干扰
 
 ---
 
