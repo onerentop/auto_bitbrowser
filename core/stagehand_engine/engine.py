@@ -877,6 +877,17 @@ class StagehandGoogleEngine:
             model_options = self._get_model_options()
             model_config = model_options.get("model", {"model_name": self.model_name})
 
+            def _parse_execute_response(exec_response: Any) -> tuple[bool, str, Any]:
+                exec_result = getattr(getattr(exec_response, "data", None), "result", None)
+                exec_message = ""
+                if exec_result is not None:
+                    exec_message = getattr(exec_result, "message", "") or ""
+
+                exec_response_ok = bool(getattr(exec_response, "success", False))
+                exec_result_ok = bool(getattr(exec_result, "success", False)) if exec_result is not None else False
+                exec_completed = bool(getattr(exec_result, "completed", False)) if exec_result is not None else False
+                return exec_response_ok and exec_result_ok and exec_completed, exec_message, exec_result
+
             response = await self._session.execute(
                 agent_config={
                     "mode": mode,
@@ -891,15 +902,57 @@ class StagehandGoogleEngine:
 
             duration_ms = (time.time() - start_time) * 1000
 
-            result = getattr(getattr(response, "data", None), "result", None)
-            message = ""
-            if result is not None:
-                message = getattr(result, "message", "") or ""
+            is_success, message, result = _parse_execute_response(response)
 
-            response_ok = bool(getattr(response, "success", False))
-            result_ok = bool(getattr(result, "success", False)) if result is not None else False
-            completed = bool(getattr(result, "completed", False)) if result is not None else False
-            is_success = response_ok and result_ok and completed
+            # 兼容重试：部分 Stagehand/SEA 版本在 agentExecute 上对 model 字段格式要求不同
+            # 若出现 Invalid request，回退到旧字段格式 (name/apiKey/baseURL) 再试一次
+            if not is_success and "invalid request" in (message or "").lower():
+                try:
+                    logger.warning("agentExecute 返回 Invalid request，尝试 legacy payload 重试")
+                    legacy_model = {
+                        "name": model_config.get("model_name") or self.model_name,
+                    }
+                    if model_config.get("api_key"):
+                        legacy_model["apiKey"] = model_config.get("api_key")
+                    if model_config.get("base_url"):
+                        legacy_model["baseURL"] = model_config.get("base_url")
+                    if model_config.get("provider"):
+                        legacy_model["provider"] = model_config.get("provider")
+
+                    legacy_agent_config: Dict[str, Any] = {
+                        "model": legacy_model,
+                    }
+                    if mode == "cua":
+                        legacy_agent_config["cua"] = True
+                    elif mode in {"dom", "hybrid"}:
+                        legacy_agent_config["mode"] = mode
+
+                    legacy_response = await self._client.post(
+                        f"/v1/sessions/{self._session_id}/agentExecute",
+                        cast_to=type(response),
+                        body={
+                            "agentConfig": legacy_agent_config,
+                            "executeOptions": {
+                                "instruction": instruction,
+                                "maxSteps": max_steps,
+                            },
+                            "streamResponse": False,
+                        },
+                        options={
+                            "timeout": (timeout / 1000) if timeout else None,
+                        },
+                    )
+
+                    is_success, message, result = _parse_execute_response(legacy_response)
+                    if is_success:
+                        return ActionResult(
+                            success=True,
+                            message=message or "Agent 执行成功",
+                            method=f"agent_execute:{mode}:legacy",
+                            duration_ms=(time.time() - start_time) * 1000,
+                        )
+                except Exception as legacy_error:
+                    logger.warning(f"agentExecute legacy payload 重试失败: {legacy_error}")
 
             if is_success:
                 return ActionResult(
@@ -910,6 +963,13 @@ class StagehandGoogleEngine:
                 )
 
             error_text = message or "Agent 执行失败"
+            if result is not None:
+                actions = getattr(result, "actions", None) or []
+                if actions:
+                    last_action = actions[-1]
+                    last_reasoning = getattr(last_action, "reasoning", "") or ""
+                    if last_reasoning:
+                        error_text = f"{error_text}; last_reasoning={last_reasoning}"
             return ActionResult(
                 success=False,
                 error=error_text,
