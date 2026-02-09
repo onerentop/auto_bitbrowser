@@ -94,6 +94,8 @@
 - [x] `gui/setting_interface.py` 的提供商连接测试配置解析改为通过 `SettingsService`
 - [x] `AutomationEngineAdapter` 收敛为 Fluent 在用入口，移除旧版 GUI 兼容入口
 - [x] 移除已停用核心引擎目录 `core/ai_browser_agent/`，收敛到 `core/stagehand_engine/` 单引擎路线
+- [x] 移除无引用旧引擎目录 `core/google_browser_agent/`、`core/google_engine/`、`core/hybrid_browser_controller/`
+- [x] 移除无引用工具文件 `core/totp_helper.py`，收敛 `core/__init__.py` 导出项
 
 ### Phase 5：测试与可观测性（持续）
 
