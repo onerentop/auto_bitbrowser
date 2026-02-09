@@ -126,6 +126,31 @@ class ProStatusOperation:
             # 3. 使用关键词检测 (快速方法)
             keyword_result = await self._detect_by_keywords()
             if keyword_result.status != ProStatus.UNKNOWN:
+                if keyword_result.is_pro:
+                    try:
+                        family_status = await self.engine.detect_family_status(navigate_if_needed=True)
+                        if family_status.has_family:
+                            if family_status.is_manager:
+                                keyword_result.is_family_member = False
+                                keyword_result.method_used = f"{keyword_result.method_used}+family_check(manager)"
+                            else:
+                                keyword_result.is_family_member = True
+                                keyword_result.method_used = f"{keyword_result.method_used}+family_check(member)"
+                                if not keyword_result.family_manager_email:
+                                    manager_email = next(
+                                        (
+                                            member.email
+                                            for member in family_status.members
+                                            if member.role == FamilyRole.MANAGER and member.email
+                                        ),
+                                        None,
+                                    )
+                                    keyword_result.family_manager_email = manager_email
+                        else:
+                            keyword_result.is_family_member = False
+                            keyword_result.method_used = f"{keyword_result.method_used}+family_check(no_family)"
+                    except Exception as family_error:
+                        logger.warning(f"关键词路径家庭组校验失败，保留关键词结果: {family_error}")
                 logger.info(f"关键词检测成功: {keyword_result.status.value}")
                 return keyword_result
 
