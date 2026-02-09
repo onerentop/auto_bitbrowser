@@ -57,6 +57,18 @@ class ProStatusSchema(BaseModel):
         default=False,
         description="页面是否有付款相关选项（Change payment method, Cancel membership等）"
     )
+    has_manage_family_settings: bool = Field(
+        default=False,
+        description="是否出现 Manage family settings / 管理家庭设置 等家庭管理入口"
+    )
+    has_leave_family_button: bool = Field(
+        default=False,
+        description="是否出现 Leave family / 退出家庭 等成员侧按钮"
+    )
+    family_manager_email: Optional[str] = Field(
+        default=None,
+        description="若是家庭组共享订阅，提取管理员邮箱（如果页面可见）"
+    )
 
 
 class ProStatusOperation:
@@ -259,7 +271,14 @@ class ProStatusOperation:
             # 使用 Stagehand extract 提取结构化数据
             # 传入 ProStatusSchema 以生成 JSON Schema，帮助 AI 返回结构化数据
             extract_result = await self.engine.extract(
-                instruction="Extract Google One subscription info: is_subscribed (false if 'Upgrade'/'Get started' buttons visible), is_family_member, plan_name, has_payment_options (true if 'Cancel membership' visible), storage info, is_trial.",
+                instruction=(
+                    "Extract Google One subscription info with high accuracy. "
+                    "Return is_subscribed (false if 'Upgrade'/'Get started' buttons are visible), "
+                    "is_family_member, plan_name, has_payment_options "
+                    "(true when billing-owner actions like 'Cancel membership' or "
+                    "'Change payment method' are visible), storage info, is_trial, "
+                    "has_manage_family_settings, has_leave_family_button, family_manager_email."
+                ),
                 schema=ProStatusSchema,
             )
 
@@ -278,10 +297,38 @@ class ProStatusOperation:
             is_trial = data.get("is_trial", False)
             is_family_member = data.get("is_family_member", False)
             has_payment_options = data.get("has_payment_options", False)
+            has_manage_family_settings = data.get("has_manage_family_settings", False)
+            has_leave_family_button = data.get("has_leave_family_button", False)
+            family_manager_email = data.get("family_manager_email")
+            method_used = "ai_extraction"
 
             # 如果有付款选项，则不是家庭组成员
             if has_payment_options:
                 is_family_member = False
+            else:
+                # 无付款入口时，结合家庭特征信号进行第一轮修正
+                if has_leave_family_button:
+                    is_family_member = True
+                elif has_manage_family_settings:
+                    is_family_member = False
+
+            # 二次校验：针对“已订阅但无法确认付费入口”的场景，额外走一次家庭组状态检测
+            # Why:
+            # - 部分页面语言/布局下，AI 容易漏判 is_family_member，导致家庭组 Pro 误判为普通 Pro。
+            if is_subscribed and not has_payment_options:
+                try:
+                    family_status = await self.engine.detect_family_status(navigate_if_needed=True)
+                    if family_status.has_family:
+                        if family_status.is_manager:
+                            is_family_member = False
+                            method_used = "ai_extraction+family_check(manager)"
+                        else:
+                            is_family_member = True
+                            method_used = "ai_extraction+family_check(member)"
+                    else:
+                        method_used = "ai_extraction+family_check(none)"
+                except Exception as family_error:
+                    logger.warning(f"家庭组二次校验失败，保留 AI 提取结果: {family_error}")
 
             if is_subscribed:
                 if is_trial:
@@ -295,12 +342,13 @@ class ProStatusOperation:
                 status=status,
                 is_pro=is_subscribed,
                 is_family_member=is_family_member,
+                family_manager_email=family_manager_email,
                 plan_name=data.get("plan_name"),
                 storage_used=data.get("storage_used"),
                 storage_total=data.get("storage_total"),
                 expiry_date=data.get("expiry_date"),
                 confidence=0.95,
-                method_used="ai_extraction",
+                method_used=method_used,
             )
 
         except Exception as e:
