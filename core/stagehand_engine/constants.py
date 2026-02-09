@@ -230,6 +230,9 @@ class FamilyKeywords:
     # 有家庭组
     HAS_FAMILY = [
         "your family group",
+        "your family on google",
+        "your family",
+        "with a family group",
         "您的家庭群组",
         "family members",
         "家庭成员",
@@ -239,6 +242,9 @@ class FamilyKeywords:
     # 无家庭组
     NO_FAMILY = [
         "create a family",
+        "create a family group",
+        "you can create a family group",
+        "get started",
         "创建家庭群组",
         "start a family group",
         "set up a family",
@@ -249,7 +255,7 @@ class FamilyKeywords:
     MANAGER = [
         "you manage this family",
         "you are the family manager",
-        "manage members",
+        "you are family manager",
         "you can manage family settings",
         "管理成员",
     ]

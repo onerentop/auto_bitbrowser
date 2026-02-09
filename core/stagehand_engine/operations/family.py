@@ -110,21 +110,24 @@ class FamilyOperation:
 
             # 3. 使用关键词检测 (快速方法)
             keyword_result = await self._detect_by_keywords()
+            extract_result = await self._detect_by_extraction()
 
             # 如果明确没有家庭组，直接返回
-            if not keyword_result.has_family and keyword_result.role == FamilyRole.NONE:
-                return keyword_result
+            if extract_result.has_family:
+                return extract_result
 
             # 4. 使用 AI 提取详细信息
             if keyword_result.has_family:
-                extract_result = await self._detect_by_extraction()
-                if extract_result.has_family:
-                    return extract_result
+                return keyword_result
 
             duration_ms = (time.time() - start_time) * 1000
             logger.info(f"家庭组状态检测完成: has_family={keyword_result.has_family}")
 
-            return keyword_result
+            return FamilyStatusResult(
+                has_family=False,
+                role=FamilyRole.NONE,
+                is_manager=False,
+            )
 
         except Exception as e:
             logger.error(f"家庭组状态检测失败: {e}")
@@ -145,20 +148,15 @@ class FamilyOperation:
             page_lower = page_content.lower()
 
             # 检测无家庭组
-            for kw in FamilyKeywords.NO_FAMILY:
-                if kw.lower() in page_lower:
-                    return FamilyStatusResult(
-                        has_family=False,
-                        role=FamilyRole.NONE,
-                        is_manager=False,
-                    )
+            matched_no_family = [
+                kw for kw in FamilyKeywords.NO_FAMILY if kw.lower() in page_lower
+            ]
 
             # 检测有家庭组
-            has_family = False
-            for kw in FamilyKeywords.HAS_FAMILY:
-                if kw.lower() in page_lower:
-                    has_family = True
-                    break
+            matched_has_family = [
+                kw for kw in FamilyKeywords.HAS_FAMILY if kw.lower() in page_lower
+            ]
+            has_family = len(matched_has_family) > len(matched_no_family)
 
             if not has_family:
                 return FamilyStatusResult(
