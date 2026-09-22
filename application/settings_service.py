@@ -16,7 +16,6 @@ from core.config_manager import ConfigManager
 class SettingsSnapshot:
     """设置快照（用于 GUI <-> 配置层传递）"""
 
-    sheerid_api_key: str
     ai_default_provider: str
 
     gemini_api_key: str
@@ -38,7 +37,6 @@ class SettingsSnapshot:
 
     delay_after_login: int
     delay_after_offer: int
-    delay_after_add_card: int
     delay_after_save: int
 
     proxy_max_windows_per_ip: int
@@ -71,7 +69,6 @@ class SettingsService:
         ConfigManager.load()
 
         return SettingsSnapshot(
-            sheerid_api_key=ConfigManager.get_api_key(),
             ai_default_provider=ConfigManager.get_ai_default_provider(),
             gemini_api_key=ConfigManager.get_ai_provider_api_key("gemini"),
             gemini_base_url=ConfigManager.get_ai_provider_base_url("gemini"),
@@ -87,7 +84,6 @@ class SettingsService:
             timeout_iframe_wait=ConfigManager.get("timeouts.iframe_wait", 15),
             delay_after_login=ConfigManager.get("delays.after_login", 3),
             delay_after_offer=ConfigManager.get("delays.after_offer", 8),
-            delay_after_add_card=ConfigManager.get("delays.after_add_card", 10),
             delay_after_save=ConfigManager.get("delays.after_save", 18),
             proxy_max_windows_per_ip=ConfigManager.get("proxy.max_windows_per_ip", 3),
             default_thread_count=ConfigManager.get("default_thread_count", 3),
@@ -99,8 +95,6 @@ class SettingsService:
     @staticmethod
     def save_settings_snapshot(snapshot: SettingsSnapshot) -> None:
         """保存设置快照"""
-        ConfigManager.set_api_key(snapshot.sheerid_api_key)
-
         ConfigManager.set_ai_default_provider(snapshot.ai_default_provider)
 
         # 保持兼容行为：输入为空时不覆盖已保存 API Key
@@ -125,7 +119,6 @@ class SettingsService:
 
         ConfigManager.set("delays.after_login", snapshot.delay_after_login)
         ConfigManager.set("delays.after_offer", snapshot.delay_after_offer)
-        ConfigManager.set("delays.after_add_card", snapshot.delay_after_add_card)
         ConfigManager.set("delays.after_save", snapshot.delay_after_save)
 
         ConfigManager.set("proxy.max_windows_per_ip", snapshot.proxy_max_windows_per_ip)

@@ -49,13 +49,10 @@ from .types import (
     ExtractResult,
     ObserveResult,
     # 新增操作结果类型
-    BindCardResult,
-    SheerlinkResult,
     KickDevicesResult,
     ModifyPhoneResult,
     ModifyAuthenticatorResult,
     ReplaceEmailResult,
-    SubscribeResult,
     UnlockResult,
     JoinFamilyResult,
     EnableSharingResult,
@@ -1399,70 +1396,6 @@ class StagehandGoogleEngine:
     # ==================== 新增操作 (待实现) ====================
     # 以下方法将在 Phase 2 中实现具体逻辑
 
-    async def bind_card(
-        self,
-        card_number: str,
-        card_exp: str,
-        card_cvv: str,
-        card_name: str,
-        zip_code: Optional[str] = None,
-        timeout: float = Timeouts.OPERATION,
-    ) -> BindCardResult:
-        """
-        绑定支付卡并订阅
-
-        Args:
-            card_number: 卡号
-            card_exp: 有效期 (MM/YY 格式)
-            card_cvv: CVV 安全码
-            card_name: 持卡人姓名
-            zip_code: 邮编 (某些地区需要)
-            timeout: 超时时间（毫秒）
-
-        Returns:
-            BindCardResult
-        """
-        self._ensure_initialized()
-
-        # 延迟导入操作模块
-        from .operations.bind_card import BindCardOperation
-        bind_op = BindCardOperation(self)
-
-        return await bind_op.execute(
-            card_number=card_number,
-            card_exp=card_exp,
-            card_cvv=card_cvv,
-            card_name=card_name,
-            zip_code=zip_code,
-            timeout=timeout,
-        )
-
-    async def get_sheerlink(
-        self,
-        navigate_if_needed: bool = True,
-        timeout: float = Timeouts.OPERATION,
-    ) -> SheerlinkResult:
-        """
-        获取 SheerID 学生验证链接
-
-        Args:
-            navigate_if_needed: 是否自动导航
-            timeout: 超时时间（毫秒）
-
-        Returns:
-            SheerlinkResult
-        """
-        self._ensure_initialized()
-
-        # 延迟导入操作模块
-        from .operations.sheerlink import SheerlinkOperation
-        sheerlink_op = SheerlinkOperation(self)
-
-        return await sheerlink_op.execute(
-            navigate_if_needed=navigate_if_needed,
-            timeout=timeout,
-        )
-
     async def kick_devices(
         self,
         keep_current: bool = True,
@@ -1596,32 +1529,6 @@ class StagehandGoogleEngine:
         return await replace_op.execute(
             new_phone=new_phone,
             sms_service=sms_service,
-            timeout=timeout,
-        )
-
-    async def subscribe(
-        self,
-        plan: str = "student",
-        timeout: float = Timeouts.OPERATION,
-    ) -> SubscribeResult:
-        """
-        订阅 Google One
-
-        Args:
-            plan: 订阅计划 ("student", "regular", "trial")
-            timeout: 超时时间（毫秒）
-
-        Returns:
-            SubscribeResult
-        """
-        self._ensure_initialized()
-
-        # 延迟导入操作模块
-        from .operations.subscribe import SubscribeOperation
-        subscribe_op = SubscribeOperation(self)
-
-        return await subscribe_op.execute(
-            plan=plan,
             timeout=timeout,
         )
 

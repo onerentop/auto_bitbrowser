@@ -13,7 +13,7 @@ from qfluentwidgets import (
 from qfluentwidgets import TableItemDelegate
 
 from services.database import DBManager
-from services.data_store import get_data_store, CardInfo, ProxyInfo
+from services.data_store import get_data_store, ProxyInfo
 
 
 class BatchImportDialog(MessageBoxBase):
@@ -227,72 +227,6 @@ class AccountBatchImportDialog(BatchImportDialog):
                 secret_key=data.get('secret_key'),
                 status='pending'
             )
-        return True
-
-
-class CardBatchImportDialog(BatchImportDialog):
-    """卡片批量导入对话框"""
-
-    def __init__(self, parent=None):
-        self.data_store = get_data_store()
-        super().__init__(
-            parent,
-            title="批量导入卡片",
-            format_hint="卡号----月份----年份----CVV----姓名----邮编 （后两项可选）",
-            columns=["卡号", "有效期", "CVV", "姓名", "邮编"]
-        )
-
-    def parse_line(self, line: str) -> tuple[bool, dict, str]:
-        parts = line.split('----')
-        if len(parts) < 4:
-            return False, {}, "格式错误：至少需要 卡号----月份----年份----CVV"
-
-        number = parts[0].strip()
-        exp_month = parts[1].strip()
-        exp_year = parts[2].strip()
-        cvv = parts[3].strip()
-        name = parts[4].strip() if len(parts) > 4 else "John Smith"
-        zip_code = parts[5].strip() if len(parts) > 5 else "10001"
-
-        if not number.isdigit() or not (13 <= len(number) <= 19):
-            return False, {}, "卡号格式无效"
-
-        if not exp_month.isdigit() or not (1 <= int(exp_month) <= 12):
-            return False, {}, "月份无效"
-
-        if not exp_year.isdigit() or len(exp_year) not in (2, 4):
-            return False, {}, "年份无效"
-
-        if not cvv.isdigit() or len(cvv) not in (3, 4):
-            return False, {}, "CVV无效"
-
-        if len(exp_month) == 1:
-            exp_month = f"0{exp_month}"
-        if len(exp_year) == 4:
-            exp_year = exp_year[-2:]
-
-        return True, {
-            'number': number,
-            'exp_month': exp_month,
-            'exp_year': exp_year,
-            'cvv': cvv,
-            'name': name,
-            'zip_code': zip_code
-        }, ""
-
-    def format_preview_row(self, data: dict) -> list[str]:
-        number = data.get('number', '')
-        masked = f"**** **** **** {number[-4:]}" if len(number) >= 4 else "****"
-        return [
-            masked,
-            f"{data.get('exp_month', '')}/{data.get('exp_year', '')}",
-            "***",
-            data.get('name', ''),
-            data.get('zip_code', '')
-        ]
-
-    def save_record(self, data: dict) -> bool:
-        self.data_store.add_card(CardInfo(**data))
         return True
 
 

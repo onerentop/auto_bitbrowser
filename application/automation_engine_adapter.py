@@ -13,8 +13,6 @@ from typing import Callable, Sequence
 class AutomationEngineAdapter:
     """自动化任务适配器。"""
 
-    _bind_card_cursor: int = 0
-
     @staticmethod
     def create_sub2api_client():
         """创建 Sub2API 客户端。"""
@@ -151,46 +149,6 @@ class AutomationEngineAdapter:
         )
 
     @staticmethod
-    async def run_bind_card(
-        profile_id: str,
-        account_info: dict,
-        cards: Sequence[dict],
-        config: dict | None = None,
-    ) -> dict:
-        """执行 AI 绑卡自动化。"""
-        from automation.auto_bind_card_ai import auto_bind_card_ai
-
-        config = config or {}
-        cards_list = list(cards)
-        if not cards_list:
-            return {"success": False, "message": "无可用卡片"}
-
-        rotate_card = bool(config.get("rotate_card", True))
-        if rotate_card:
-            index = AutomationEngineAdapter._bind_card_cursor % len(cards_list)
-            AutomationEngineAdapter._bind_card_cursor += 1
-            card_info = cards_list[index]
-        else:
-            card_info = cards_list[0]
-
-        success, message = await auto_bind_card_ai(
-            browser_id=str(profile_id),
-            account_info=account_info,
-            card_info=card_info,
-            close_after=bool(config.get("close_after", False)),
-            max_steps=int(config.get("max_steps", 40)),
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
-            model=config.get("model"),
-            provider=config.get("provider"),
-        )
-
-        return {
-            "success": bool(success),
-            "message": message,
-        }
-
-    @staticmethod
     async def run_kick_devices(profile_id: str, account_info: dict) -> dict:
         """执行踢出设备自动化。"""
         from automation.auto_kick_devices import auto_kick_devices
@@ -278,31 +236,4 @@ class AutomationEngineAdapter:
             account_info=account_info,
             new_phone=new_phone,
             close_after=close_after,
-        )
-
-    @staticmethod
-    async def run_get_sheerlink(
-        browser_id: str,
-        account_info: dict,
-        close_after: bool,
-        api_key: str,
-        base_url: str | None,
-        model: str | None,
-        provider: str,
-        max_steps: int = 20,
-        save_to_file: bool = True,
-    ) -> tuple[bool, str, str, str]:
-        """执行获取 SheerLink 自动化。"""
-        from automation.auto_get_sheerlink_ai import auto_get_sheerlink_ai
-
-        return await auto_get_sheerlink_ai(
-            browser_id=browser_id,
-            account_info=account_info,
-            close_after=close_after,
-            max_steps=max_steps,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            provider=provider,
-            save_to_file=save_to_file,
         )

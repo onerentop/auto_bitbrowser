@@ -160,20 +160,6 @@ class ConfigTab(ScrollArea):
 
         from PyQt6.QtWidgets import QLineEdit as QLE
 
-        # ===== SheerID API 配置 =====
-        apiGroup = self._createGroupBox("API 设置")
-        apiLayout = QFormLayout()
-        apiLayout.setSpacing(12)
-        apiLayout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-
-        self.sheeridApiKeyInput = LineEdit()
-        self.sheeridApiKeyInput.setPlaceholderText("SheerID API Key")
-        self.sheeridApiKeyInput.setEchoMode(QLE.EchoMode.Password)
-        apiLayout.addRow(self._createLabel("SheerID API Key:"), self.sheeridApiKeyInput)
-
-        apiGroup.layout().addLayout(apiLayout)
-        self.vBoxLayout.addWidget(apiGroup)
-
         # ===== AI Agent 配置 (多提供商) =====
         aiGroup = self._createGroupBox("🤖 AI Agent 配置 (多提供商)")
         aiMainLayout = QVBoxLayout()
@@ -364,11 +350,6 @@ class ConfigTab(ScrollArea):
         self.delayOfferSpin.setRange(1, 30)
         self.delayOfferSpin.setValue(8)
         delayLayout.addRow(self._createLabel("Offer 后:"), self.delayOfferSpin)
-
-        self.delayAddCardSpin = SpinBox()
-        self.delayAddCardSpin.setRange(1, 30)
-        self.delayAddCardSpin.setValue(10)
-        delayLayout.addRow(self._createLabel("添加卡后:"), self.delayAddCardSpin)
 
         self.delaySaveSpin = SpinBox()
         self.delaySaveSpin.setRange(1, 60)
@@ -576,9 +557,6 @@ class ConfigTab(ScrollArea):
         try:
             snapshot = SettingsService.load_settings_snapshot()
 
-            # SheerID API Key
-            self.sheeridApiKeyInput.setText(snapshot.sheerid_api_key)
-
             # AI Agent 配置 - 默认提供商
             idx = self.aiProviderCombo.findText(snapshot.ai_default_provider)
             if idx >= 0:
@@ -611,7 +589,6 @@ class ConfigTab(ScrollArea):
             # 延迟设置
             self.delayLoginSpin.setValue(snapshot.delay_after_login)
             self.delayOfferSpin.setValue(snapshot.delay_after_offer)
-            self.delayAddCardSpin.setValue(snapshot.delay_after_add_card)
             self.delaySaveSpin.setValue(snapshot.delay_after_save)
 
             # 代理设置
@@ -640,7 +617,6 @@ class ConfigTab(ScrollArea):
             theme_values = ["auto", "light", "dark"]
 
             snapshot = SettingsSnapshot(
-                sheerid_api_key=self.sheeridApiKeyInput.text().strip(),
                 ai_default_provider=self.aiProviderCombo.currentText(),
                 gemini_api_key=self.geminiApiKeyInput.text().strip(),
                 gemini_base_url=self.geminiBaseUrlInput.text().strip(),
@@ -656,7 +632,6 @@ class ConfigTab(ScrollArea):
                 timeout_iframe_wait=self.iframeWaitSpin.value(),
                 delay_after_login=self.delayLoginSpin.value(),
                 delay_after_offer=self.delayOfferSpin.value(),
-                delay_after_add_card=self.delayAddCardSpin.value(),
                 delay_after_save=self.delaySaveSpin.value(),
                 proxy_max_windows_per_ip=self.proxyMaxWindowsSpin.value(),
                 default_thread_count=self.threadCountSpin.value(),
@@ -694,9 +669,6 @@ class ConfigTab(ScrollArea):
             self
         )
         if w.exec():
-            # SheerID
-            self.sheeridApiKeyInput.setText("")
-
             # AI Agent - 默认提供商
             self.aiProviderCombo.setCurrentText("gemini")
 
@@ -725,7 +697,6 @@ class ConfigTab(ScrollArea):
             # 延迟
             self.delayLoginSpin.setValue(3)
             self.delayOfferSpin.setValue(8)
-            self.delayAddCardSpin.setValue(10)
             self.delaySaveSpin.setValue(18)
 
             # 代理
@@ -805,7 +776,6 @@ class SettingInterface(QWidget):
         """Pivot 标签页切换处理"""
         tabMap = {
             'accounts': self.accountsTab,
-            'cards': self.cardsTab,
             'proxies': self.proxiesTab,
             'config': self.configTab,
         }
@@ -823,16 +793,6 @@ class SettingInterface(QWidget):
             routeKey='accounts',
             text='账号管理',
             onClick=lambda: self._onPivotChanged('accounts')
-        )
-
-        # 卡片管理
-        from gui.data_management.cards_tab import CardsTab
-        self.cardsTab = CardsTab(self)
-        self.stackedWidget.addWidget(self.cardsTab)
-        self.pivot.addItem(
-            routeKey='cards',
-            text='卡片管理',
-            onClick=lambda: self._onPivotChanged('cards')
         )
 
         # 代理管理

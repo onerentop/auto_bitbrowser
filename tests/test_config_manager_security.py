@@ -14,20 +14,19 @@ def test_set_api_key_encrypts_on_disk_and_decrypts_on_read(tmp_path):
     _reset_config_manager(config_file)
 
     ConfigManager.load()
-    ConfigManager.set_api_key("sheerid-plain-key")
+    ConfigManager.set_gmail_imap_password("gmail-plain-key")
 
     with config_file.open("r", encoding="utf-8") as file:
         raw = json.load(file)
 
-    assert raw["sheerid_api_key"].startswith("ENC:")
-    assert ConfigManager.get_api_key() == "sheerid-plain-key"
-    assert ConfigManager.get("sheerid_api_key", "") == "sheerid-plain-key"
+    assert raw["gmail_imap_password"].startswith("ENC:")
+    assert ConfigManager.get_gmail_imap_password() == "gmail-plain-key"
+    assert ConfigManager.get("gmail_imap_password", "") == "gmail-plain-key"
 
 
 def test_plaintext_sensitive_fields_are_migrated_on_load(tmp_path):
     config_file = tmp_path / "config.json"
     legacy_config = {
-        "sheerid_api_key": "plain-sheerid-key",
         "gmail_imap_password": "plain-gmail-password",
         "sub2api": {
             "password": "plain-sub2-password",
@@ -56,7 +55,6 @@ def test_plaintext_sensitive_fields_are_migrated_on_load(tmp_path):
     with config_file.open("r", encoding="utf-8") as file:
         migrated = json.load(file)
 
-    assert migrated["sheerid_api_key"].startswith("ENC:")
     assert migrated["gmail_imap_password"].startswith("ENC:")
     assert migrated["sub2api"]["password"].startswith("ENC:")
     assert migrated["sub2api"]["admin_token"].startswith("ENC:")
@@ -64,7 +62,6 @@ def test_plaintext_sensitive_fields_are_migrated_on_load(tmp_path):
     assert migrated["ai_agent"]["api_key"].startswith("ENC:")
     assert migrated["ai_agent"]["providers"]["gemini"]["api_key"].startswith("ENC:")
 
-    assert ConfigManager.get_api_key() == "plain-sheerid-key"
     assert ConfigManager.get_gmail_imap_password() == "plain-gmail-password"
     assert ConfigManager.get_sub2api_password() == "plain-sub2-password"
     assert ConfigManager.get_sub2api_token() == "plain-sub2-token"

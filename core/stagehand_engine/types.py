@@ -216,58 +216,6 @@ class BaseOperationResult:
 
 
 @dataclass
-class BindCardResult(BaseOperationResult):
-    """绑卡操作结果"""
-    # 卡片信息
-    card_last_four: Optional[str] = None
-    card_masked: Optional[str] = None  # 掩码卡号 (如 **** 1234)
-    card_type: Optional[str] = None  # visa, mastercard, etc.
-
-    # 订阅信息
-    subscription_created: bool = False
-    already_subscribed: bool = False  # 是否已订阅（跳过绑卡）
-    subscription_plan: Optional[str] = None
-    next_billing_date: Optional[str] = None
-
-    # 错误详情
-    decline_reason: Optional[str] = None  # 拒绝原因
-
-
-@dataclass
-class SheerlinkResult(BaseOperationResult):
-    """获取 SheerID 链接操作结果"""
-    # 链接信息
-    sheerlink_url: Optional[str] = None
-    verification_status: Optional[str] = None  # pending, verified, rejected
-
-    # 操作状态 (用于 sheerlink.py 传参)
-    op_status: Optional["OperationStatus"] = None
-
-    # 额外信息
-    program_id: Optional[str] = None
-    program_name: Optional[str] = None
-
-    @property
-    def sheerlink(self) -> Optional[str]:
-        """向后兼容别名"""
-        return self.sheerlink_url
-
-    @property
-    def link(self) -> Optional[str]:
-        """向后兼容别名"""
-        return self.sheerlink_url
-
-    @property
-    def status(self) -> Optional[str]:
-        """向后兼容别名 - 返回 verification_status 或 op_status 的值"""
-        if self.verification_status:
-            return self.verification_status
-        if self.op_status:
-            return self.op_status.value
-        return None
-
-
-@dataclass
 class KickDevicesResult(BaseOperationResult):
     """踢出设备操作结果"""
     # 踢出统计
@@ -335,31 +283,6 @@ class ReplaceEmailResult(BaseOperationResult):
     # 验证信息
     verification_sent: bool = False
     verification_code_used: Optional[str] = None
-
-
-@dataclass
-class SubscribeResult(BaseOperationResult):
-    """订阅操作结果"""
-    # 订阅类型
-    plan_type: str = ""  # "student", "regular", "trial"
-    plan: str = ""  # 别名字段 (用于 subscribe.py 传参)
-
-    # 订阅信息
-    subscription_id: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    price: Optional[str] = None
-    already_subscribed: bool = False  # 是否已订阅（跳过订阅流程）
-
-    # 学生验证
-    student_verified: bool = False
-
-    def __post_init__(self):
-        # 同步 plan 和 plan_type
-        if self.plan and not self.plan_type:
-            self.plan_type = self.plan
-        elif self.plan_type and not self.plan:
-            self.plan = self.plan_type
 
 
 @dataclass

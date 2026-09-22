@@ -7,7 +7,6 @@ from core.data_parser import parse_account_line, build_account_line
 from services.repositories import (
     AccountIoRepository,
     AccountRepository,
-    CardRepository,
     HistoryRepository,
     ProxyRepository,
     RecoveryEmailRepository,
@@ -195,20 +194,6 @@ class DBManager:
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
-            # 创建卡片表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS cards (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    number TEXT NOT NULL,
-                    exp_month TEXT,
-                    exp_year TEXT,
-                    cvv TEXT,
-                    name TEXT DEFAULT 'John Smith',
-                    zip_code TEXT DEFAULT '10001',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
             # 创建代理表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS proxies (
@@ -378,28 +363,6 @@ class DBManager:
             connection_factory=DBManager.get_connection,
             db_lock=lock,
         )
-
-    # ==================== Cards CRUD ====================
-
-    @staticmethod
-    def get_all_cards():
-        """获取所有卡片"""
-        return CardRepository.get_all_cards(DBManager.get_connection, lock)
-
-    @staticmethod
-    def save_all_cards(cards: list):
-        """保存所有卡片（先清空再插入）"""
-        CardRepository.save_all_cards(cards, DBManager.get_connection, lock)
-
-    @staticmethod
-    def add_card(card: dict):
-        """添加单张卡片"""
-        CardRepository.add_card(card, DBManager.get_connection, lock)
-
-    @staticmethod
-    def delete_card(card_id: int):
-        """删除卡片"""
-        CardRepository.delete_card(card_id, DBManager.get_connection, lock)
 
     # ==================== Proxies CRUD ====================
 
@@ -690,87 +653,10 @@ class DBManager:
         DBManager.init_2sv_phone_modification_table()
         DBManager.init_authenticator_modification_table()
         DBManager.init_sheerid_verification_table()
-        DBManager.init_bind_card_history_table()
 
         return AccountIoRepository.get_comprehensive_account_data(
             connection_factory=DBManager.get_connection,
             db_lock=lock,
-        )
-
-    # ==================== Bind Card History ====================
-
-    @staticmethod
-    def init_bind_card_history_table():
-        """初始化绑卡历史表"""
-        HistoryRepository.init_bind_card_history_table(DBManager.get_connection, lock)
-
-    @staticmethod
-    def get_bind_card_history() -> dict:
-        """获取所有绑卡历史记录，返回 {email: {card_number, bound_at}}"""
-        try:
-            DBManager.init_bind_card_history_table()
-            return HistoryRepository.get_bind_card_history(DBManager.get_connection, lock)
-        except Exception as e:
-            print(f"[DB] get_bind_card_history 失败: {e}")
-            return {}
-
-    @staticmethod
-    def add_bind_card_history(email: str, card_number: str):
-        """添加或更新绑卡记录"""
-        try:
-            DBManager.init_bind_card_history_table()
-            HistoryRepository.add_bind_card_history(
-                email,
-                card_number,
-                DBManager.get_connection,
-                lock,
-            )
-        except Exception as e:
-            print(f"[DB ERROR] add_bind_card_history 失败: {e}")
-
-    @staticmethod
-    def clear_bind_card_history() -> int:
-        """清除所有绑卡历史记录"""
-        try:
-            DBManager.init_bind_card_history_table()
-            return HistoryRepository.clear_bind_card_history(DBManager.get_connection, lock)
-        except Exception as e:
-            print(f"[DB ERROR] clear_bind_card_history 失败: {e}")
-            return 0
-
-    @staticmethod
-    def get_card_usage_counts() -> dict:
-        """
-        获取每张卡的使用次数统计
-
-        Returns:
-            dict: {card_number后4位: 使用次数}
-        """
-        try:
-            DBManager.init_bind_card_history_table()
-            return CardRepository.get_card_usage_counts(DBManager.get_connection, lock)
-        except Exception as e:
-            print(f"[DB] get_card_usage_counts 失败: {e}")
-            return {}
-
-    @staticmethod
-    def get_next_available_card(cards: list, cards_per_account: int) -> tuple:
-        """
-        获取下一张可用的卡片
-
-        基于数据库中的绑卡历史，找到第一张未达到使用上限的卡片。
-
-        Args:
-            cards: 卡片列表，每个卡片是 dict，包含 'number' 字段
-            cards_per_account: 每张卡可绑定的账号数上限
-
-        Returns:
-            tuple: (card_dict, card_index) 或 (None, -1) 如果所有卡都已满
-        """
-        return CardRepository.get_next_available_card(
-            cards,
-            cards_per_account,
-            DBManager.get_card_usage_counts,
         )
 
     # ==================== Recovery Email Pool (辅助邮箱池) ====================

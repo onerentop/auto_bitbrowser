@@ -15,16 +15,11 @@ from qfluentwidgets import (
 from gui.fluent_utils import get_app_icon, setup_fluent_theme, setup_theme_color
 from gui.home_interface import HomeInterface
 from gui.setting_interface import SettingInterface
-from gui.sheerid_interface import SheerIDInterface
-from gui.bindcard_interface import BindCardInterface
-from gui.sheerlink_interface import GetSheerlinkInterface
 from gui.replacephone_interface import ReplacePhoneInterface
 from gui.replaceemail_interface import ReplaceEmailInterface
 from gui.modify2sv_interface import Modify2SVInterface
 from gui.modifyauth_interface import ModifyAuthInterface
 from gui.kickdevices_interface import KickDevicesInterface
-from gui.query_interface import QueryInterface
-from gui.placeholder_interface import PlaceholderInterface
 from gui.account_manager_interface import AccountManagerInterface
 from gui.import_totp_interface import ImportTOTPInterface
 
@@ -72,30 +67,18 @@ class MainFluentWindow(FluentWindow):
         # 首页
         self.homeInterface = HomeInterface(self)
 
-        # Google 专区子界面 - 全部已实现
-        self.sheeridInterface = SheerIDInterface(self)
-        self.bindCardInterface = BindCardInterface(self)
-        self.sheerlinkInterface = GetSheerlinkInterface(self)
+        # Google 专区子界面
         self.replacePhoneInterface = ReplacePhoneInterface(self)
         self.replaceEmailInterface = ReplaceEmailInterface(self)
         self.modify2svInterface = Modify2SVInterface(self)
         self.modifyAuthInterface = ModifyAuthInterface(self)
         self.kickDevicesInterface = KickDevicesInterface(self)
-        self.queryInterface = QueryInterface(self)
 
         # 账号管理 - 使用完整的账号管理界面
         self.accountInterface = AccountManagerInterface(self)
 
         # TOTP 密钥导入
         self.importTOTPInterface = ImportTOTPInterface(self)
-
-        # 全自动订阅 (占位界面)
-        self.subscribeInterface = PlaceholderInterface(
-            'subscribeInterface',
-            "全自动订阅",
-            "一键完成从验证到订阅的全流程",
-            self
-        )
 
         # 设置
         self.settingInterface = SettingInterface(self)
@@ -113,21 +96,6 @@ class MainFluentWindow(FluentWindow):
         self.navigationInterface.addSeparator()
 
         # Google 专区
-        self.addSubInterface(
-            self.sheeridInterface,
-            FIF.CERTIFICATE,
-            "SheerID 验证"
-        )
-        self.addSubInterface(
-            self.bindCardInterface,
-            FIF.SHOPPING_CART,
-            "绑卡订阅"
-        )
-        self.addSubInterface(
-            self.sheerlinkInterface,
-            FIF.LINK,
-            "获取 SheerLink"
-        )
         self.addSubInterface(
             self.replacePhoneInterface,
             FIF.PHONE,
@@ -153,11 +121,6 @@ class MainFluentWindow(FluentWindow):
             FIF.REMOVE_FROM,
             "踢出设备"
         )
-        self.addSubInterface(
-            self.queryInterface,
-            FIF.SEARCH,
-            "综合查询"
-        )
 
         # 分隔线
         self.navigationInterface.addSeparator()
@@ -176,12 +139,6 @@ class MainFluentWindow(FluentWindow):
             "导入 TOTP"
         )
 
-        # 全自动订阅
-        self.addSubInterface(
-            self.subscribeInterface,
-            FIF.PLAY,
-            "全自动订阅"
-        )
 
         # 底部项目
         self.addSubInterface(

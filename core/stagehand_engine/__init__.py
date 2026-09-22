@@ -75,14 +75,11 @@ from .types import (
     ObserveResult,
     # 新增操作结果类型 (v1.1)
     BaseOperationResult,
-    BindCardResult,
-    SheerlinkResult,
     KickDevicesResult,
     ModifyPhoneResult,
     ModifyAuthenticatorResult,
     ReplaceEmailResult,
     ReplacePhoneResult,  # 别名 for ModifyPhoneResult
-    SubscribeResult,
     UnlockResult,
     JoinFamilyResult,
     EnableSharingResult,
@@ -125,14 +122,11 @@ __all__ = [
     "ObserveResult",
     # 新增操作结果类型 (v1.1)
     "BaseOperationResult",
-    "BindCardResult",
-    "SheerlinkResult",
     "KickDevicesResult",
     "ModifyPhoneResult",
     "ModifyAuthenticatorResult",
     "ReplaceEmailResult",
     "ReplacePhoneResult",  # 别名 for ModifyPhoneResult
-    "SubscribeResult",
     "UnlockResult",
     "JoinFamilyResult",
     "EnableSharingResult",

@@ -143,15 +143,11 @@ def info_dialog(parent: QWidget, title: str, content: str, ok_text: str = "确�
 FEATURE_ICONS = {
     'home': FIF.HOME,
     'google': FIF.GLOBE,
-    'sheerid': FIF.CERTIFICATE,
-    'bind_card': FIF.SHOPPING_CART,  # 使用购物车图标代替支付卡
-    'sheerlink': FIF.LINK,
     'replace_phone': FIF.PHONE,
     'replace_email': FIF.MAIL,
     'modify_2sv': FIF.FINGERPRINT,
     'modify_auth': FIF.VPN,
     'kick_devices': FIF.REMOVE_FROM,
-    'query': FIF.SEARCH,
     'account': FIF.PEOPLE,
     'subscribe': FIF.PLAY,
     'import': FIF.DOWNLOAD,
@@ -173,7 +169,7 @@ def get_feature_icon(feature_key: str) -> FIF:
     获取功能图标
 
     Args:
-        feature_key: 功能键名，如 'home', 'google', 'sheerid' 等
+        feature_key: 功能键名，如 'home', 'google', 'account' 等
 
     Returns:
         FluentIcon 枚举值

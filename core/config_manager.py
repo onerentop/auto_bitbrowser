@@ -26,7 +26,6 @@ class ConfigManager:
 
     # 默认配置模板
     DEFAULT_CONFIG = {
-        "sheerid_api_key": "",
         "default_thread_count": 3,
         "timeouts": {
             "page_load": 30,
@@ -36,7 +35,6 @@ class ConfigManager:
         "delays": {
             "after_login": 3,
             "after_offer": 8,
-            "after_add_card": 10,
             "after_save": 18
         },
         "card_rotation_index": 0,
@@ -134,7 +132,6 @@ class ConfigManager:
 
     # 需要加密保存的敏感字段路径
     _SENSITIVE_CONFIG_PATHS = (
-        "sheerid_api_key",
         "gmail_imap_password",
         "sub2api.password",
         "sub2api.admin_token",
@@ -361,18 +358,6 @@ class ConfigManager:
             return original
         except Exception:
             return value
-
-    @classmethod
-    def get_api_key(cls) -> str:
-        """获取解密后的 API Key"""
-        encrypted = cls.get("sheerid_api_key", "")
-        return cls.decrypt_sensitive(encrypted)
-
-    @classmethod
-    def set_api_key(cls, api_key: str):
-        """加密保存 API Key"""
-        encrypted = cls.encrypt_sensitive(api_key)
-        cls.set("sheerid_api_key", encrypted)
 
     # ============ AI Agent 配置方法 ============
 
