@@ -34,6 +34,36 @@ function normalize(s) {
     .join("\n");
 }
 
+/**
+ * 把源码里的字符串字面量抽出来按顺序拼成一条文本流。
+ * 用于处理 TS 用 "a" + "b" 拼接长提示词的写法——
+ * 这种情况在原始源码里搜不到连续文本，但拼接后与 Python 侧一致。
+ */
+function literalStream(src) {
+  const lits = [];
+  // 三种字符串字面量都要提取：提示词可能写成 "..."、'...' 或 `...`
+  const patterns = [
+    /"((?:[^"\\\n]|\\.)*)"/g,   // 双引号
+    / '((?:[^'\\\n]|\\.)*)'/g,  // 单引号（前导空格避免匹配到缩写撇号）
+    /`((?:[^`\\]|\\.)*)`/g,     // 模板字符串
+  ];
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(src)) !== null) lits.push(m[1]);
+  }
+  return lits
+    .join(" ")
+    .replace(/\\(['"`])/g, "$1") // 还原转义的引号，使 \' 与 Python 的 ' 等价
+    .replace(/\\n/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 把多行文本压成单空格分隔，用于跨行比对 */
+function flatten(s) {
+  return s.replace(/\s+/g, " ").trim();
+}
+
 let totalPy = 0;
 let totalFound = 0;
 let totalMissing = 0;
@@ -51,6 +81,8 @@ for (const [pyFile, info] of Object.entries(spec)) {
 
   const tsSrc = fs.readFileSync(tsPath, "utf8");
   const normTs = normalize(tsSrc);
+  const flatTs = flatten(normTs);
+  const litTs = literalStream(tsSrc);
   const missing = [];
 
   for (const p of info.prompts) {
@@ -61,10 +93,15 @@ for (const [pyFile, info] of Object.entries(spec)) {
     // 含 f-string 变量的提示词，按前半段固定文本匹配
     const probe = p.fstring ? target.split("\n")[0].replace(/\{…\}.*$/, "").trim() : target;
 
-    if (probe && normTs.includes(probe)) {
+    const flatProbe = flatten(probe);
+    const matched =
+      (probe && normTs.includes(probe)) ||
+      (flatProbe && flatTs.includes(flatProbe)) ||
+      (flatProbe && litTs.includes(flatProbe));
+    if (matched) {
       totalFound += 1;
     } else {
-      missing.push(`[${p.call}] ${probe.slice(0, 90)}`);
+      missing.push(`[${p.call}] ${flatProbe.slice(0, 90)}`);
     }
   }
 

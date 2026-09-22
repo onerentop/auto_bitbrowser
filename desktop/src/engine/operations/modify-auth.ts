@@ -1,0 +1,226 @@
+/**
+ * 修改身份验证器（Node 重写）
+ * 对标 core/stagehand_engine/operations/modify_auth.py
+ *
+ * 流程：进验证器设置 → 开始设置 → 切到"手动输入密钥" → 提取密钥 →
+ *       用新密钥生成验证码自证 → 提交 → 验证。
+ *
+ * 密钥提取是本文件的核心资产：Google 页面上的密钥可能是
+ * "ABCD EFGH IJKL MNOP"（分组）或 "ABCDEFGHIJKLMNOP"（连续），
+ * 也可能混在其他文本里，所以先清洗再按两套正则找、最后做 Base32 校验。
+ */
+import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
+import { GoogleURLs, Timeouts } from "../constants.ts";
+import { generateTotp } from "../totp.ts";
+import {
+  createModifyAuthenticatorResult,
+  type ModifyAuthenticatorResult,
+} from "../types.ts";
+
+const BASE32_CHARS = new Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".split(""));
+
+/** 校验是否为合法 Base32 密钥（长度 16-32，字符集 A-Z2-7） */
+export function isValidBase32(s: string): boolean {
+  if (s.length < 16 || s.length > 32) return false;
+  for (const ch of s.toUpperCase()) {
+    if (!BASE32_CHARS.has(ch)) return false;
+  }
+  return true;
+}
+
+/**
+ * 从任意文本里解析 TOTP 密钥。
+ * 先去掉空格与连字符再匹配——Google 展示的分组密钥正是这种形态。
+ * 两套正则按顺序尝试，取第一个通过 Base32 校验的候选。
+ */
+export function parseSecret(text: string): string | null {
+  const cleaned = text.replace(/ /g, "").replace(/-/g, "").toUpperCase();
+
+  // 第一个无捕获组：findAll 返回完整匹配
+  const bare = cleaned.match(/[A-Z2-7]{16,32}/gi) ?? [];
+  for (const m of bare) {
+    const candidate = m.toUpperCase();
+    if (isValidBase32(candidate)) return candidate;
+  }
+
+  // 第二个带标签：只取捕获组内容
+  const labeled = /(?:key|secret|密钥)[:\s]*([A-Z2-7]{16,32})/gi;
+  let hit: RegExpExecArray | null;
+  while ((hit = labeled.exec(cleaned)) !== null) {
+    const candidate = (hit[1] ?? "").toUpperCase();
+    if (isValidBase32(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+interface StepOutcome {
+  success: boolean;
+  message?: string;
+  error?: string;
+  new_secret?: string | null;
+}
+
+export class ModifyAuthenticatorOperation {
+  private readonly engine: StagehandGoogleEngine;
+
+  constructor(engine: StagehandGoogleEngine) {
+    this.engine = engine;
+  }
+
+  async execute(): Promise<ModifyAuthenticatorResult> {
+    const start = Date.now();
+    const fail = (message: string, error?: string | null): ModifyAuthenticatorResult =>
+      createModifyAuthenticatorResult({
+        success: false,
+        message,
+        error,
+        duration_ms: Date.now() - start,
+      });
+
+    try {
+      const nav = await this.engine.navigate(GoogleURLs.AUTHENTICATOR, {
+        timeoutMs: Timeouts.NAVIGATION,
+      });
+      if (!nav.success) return fail("导航到身份验证器设置页面失败", nav.error);
+
+      await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+
+      const url = await this.engine.getCurrentUrl();
+      if (url.includes("accounts.google.com") && url.includes("signin")) {
+        return fail("需要先登录账号", "未登录");
+      }
+
+      const result = await this.performModify();
+      const durationMs = Date.now() - start;
+
+      if (result.success) {
+        return createModifyAuthenticatorResult({
+          success: true,
+          message: "身份验证器修改成功",
+          secret_key: result.new_secret ?? null,
+          duration_ms: durationMs,
+        });
+      }
+      return createModifyAuthenticatorResult({
+        success: false,
+        message: result.message ?? "修改失败",
+        error: result.error,
+        // 即使最终验证失败也把密钥带回——它已经生成，用户可能仍需留存
+        secret_key: result.new_secret ?? null,
+        duration_ms: durationMs,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return fail(`操作失败: ${msg}`, msg);
+    }
+  }
+
+  private async performModify(): Promise<StepOutcome> {
+    try {
+      // Step 1: 进入设置流程
+      await this.engine.act(
+        "点击 'Set up authenticator' 或 '设置身份验证器' 或 'Add authenticator' 或 'Change app' 按钮",
+      );
+      await this.engine.wait(Timeouts.AFTER_CLICK * 2);
+
+      // Step 2: 切到手动密钥模式（这样才拿得到密钥文本）
+      await this.engine.act(
+        '点击 "Can\'t scan it?" 或 \'无法扫描？\' 或 \'Enter a setup key\' 或 \'输入设置密钥\' 链接',
+      );
+      await this.engine.wait(Timeouts.AFTER_CLICK * 2);
+
+      // Step 3: 提取密钥
+      const newSecret = await this.extractSecret();
+      if (!newSecret) {
+        return { success: false, message: "无法提取密钥", error: "未找到 TOTP 密钥" };
+      }
+
+      // Step 4: 用新密钥生成验证码自证
+      try {
+        const code = generateTotp(newSecret);
+        await this.engine.act(`在验证码输入框中输入: ${code}`);
+        await this.engine.wait(Timeouts.AFTER_INPUT);
+        await this.engine.act("点击 'Verify' 或 '验证' 或 'Next' 或 '下一步' 或 'Done' 或 '完成' 按钮");
+        await this.engine.wait(3000);
+      } catch {
+        // 生成失败通常意味着密钥非法，把密钥带回供人工处理
+        return { success: false, message: "需要手动完成验证", new_secret: newSecret, error: "验证码生成失败" };
+      }
+
+      // Step 5: 验证设置
+      const verify = await this.verifySetup();
+      if (verify.success) return { success: true, new_secret: newSecret };
+
+      return {
+        success: false,
+        message: verify.message ?? "验证失败",
+        new_secret: newSecret,
+        error: verify.error,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: msg, error: msg };
+    }
+  }
+
+  /** 先试 extract 拿结构化结果，失败则回退到整页文本再解析 */
+  private async extractSecret(): Promise<string | null> {
+    try {
+      const extracted = await this.engine.extract(
+        `
+                在页面上查找 TOTP 设置密钥：
+                1. 通常是一串大写字母和数字的组合
+                2. 可能标记为 "Setup key", "Secret key", "密钥"
+                3. 格式类似于: ABCD EFGH IJKL MNOP 或 ABCDEFGHIJKLMNOP
+                4. 通常是 16-32 个字符
+
+                返回找到的密钥字符串（仅密钥，不含其他文本）。
+                `,
+      );
+
+      if (extracted.success && extracted.data) {
+        const secret = parseSecret(String(JSON.stringify(extracted.data)));
+        if (secret) return secret;
+      }
+
+      // 回退：整页文本里再找一遍
+      return parseSecret(await this.engine.getPageContent());
+    } catch {
+      return null;
+    }
+  }
+
+  private async verifySetup(): Promise<StepOutcome> {
+    try {
+      const extracted = await this.engine.extract(
+        `
+                检查页面是否显示身份验证器设置成功的标志：
+                1. "Authenticator app added" 或 "已添加身份验证器"
+                2. "Success" 或 "成功"
+                3. "Done" 或 "完成"
+                4. 显示已设置的验证器
+
+                也检查错误信息：
+                5. "Invalid code" 或 "验证码无效"
+                6. "Error" 或 "错误"
+                `,
+      );
+      if (!extracted.success) return { success: false, message: "无法验证设置结果" };
+
+      const text = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
+
+      const okWords = ["added", "已添加", "success", "成功", "done", "完成"];
+      if (okWords.some((k) => text.includes(k))) return { success: true };
+
+      const badWords = ["invalid", "无效", "error", "错误"];
+      if (badWords.some((k) => text.includes(k))) {
+        return { success: false, message: "验证码验证失败", error: "无效的验证码" };
+      }
+
+      return { success: false, message: "无法确定设置结果" };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+}
