@@ -11,7 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --experimental-strip-types --experimental-sqlite test/*.test.mjs",
     "probe:ix": "node --experimental-strip-types src/ixbrowser/probe.ts",
-    "probe:db": "node --experimental-strip-types --experimental-sqlite src/db/probe.ts"
+    "probe:db": "node --experimental-strip-types --experimental-sqlite src/db/probe.ts",
+    "verify:prompts": "node scripts/verify-prompts.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
