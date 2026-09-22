@@ -77,10 +77,10 @@ desktop.ini
 *.bak
 failed_tasks.json
 
-# Node.js (测试用)
+# Node.js（根目录的临时测试工程，desktop/ 下的前端工程需要入库）
 node_modules/
-package.json
-package-lock.json
+/package.json
+/package-lock.json
 
 # 工具目录
 .claude/

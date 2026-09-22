@@ -1,0 +1,20 @@
+{
+  "name": "@abb/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "auto_bitbrowser2 桌面端 —— services 层 Node 重写 POC",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.mjs",
+    "probe:ix": "node --experimental-strip-types src/ixbrowser/probe.ts",
+    "probe:db": "node --experimental-strip-types --experimental-sqlite src/db/probe.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "~5.9.0"
+  }
+}
