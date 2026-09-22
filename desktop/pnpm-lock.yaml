@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@browserbasehq/stagehand':
-        specifier: ^3.7.3
+        specifier: 3.7.3
         version: 3.7.3(zod@4.6.5)
       zod:
         specifier: ^4.6.5

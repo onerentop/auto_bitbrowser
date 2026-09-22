@@ -63,10 +63,17 @@ interface V3Like {
   };
 }
 
+interface LocatorLike {
+  fill(value: string): Promise<void>;
+  type(text: string): Promise<void>;
+}
+
 interface PageLike {
   goto(url: string, options?: { waitUntil?: string; timeout?: number }): Promise<unknown>;
   url(): string;
   content?(): Promise<string>;
+  locator?(selector: string): LocatorLike;
+  keyboard?: { type(text: string): Promise<void> };
 }
 
 export class StagehandGoogleEngine {
@@ -171,6 +178,48 @@ export class StagehandGoogleEngine {
     } catch {
       return "";
     }
+  }
+
+  /**
+   * 按选择器填充输入框。
+   * 对标 Python 的 engine.page.fill()——用于 act() 输入失败时的降级路径。
+   * 拿不到 locator 能力时返回 false，由调用方决定后续。
+   */
+  async fill(selector: string, value: string): Promise<boolean> {
+    const { page } = this.ensureReady();
+    if (typeof page.locator !== "function") return false;
+    try {
+      await page.locator(selector).fill(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 直接敲键盘输入文本。
+   * 对标 Python 的 engine.page.keyboard.type()——act() 与 fill() 都失败时的最后手段。
+   */
+  async typeText(text: string): Promise<boolean> {
+    const { page } = this.ensureReady();
+    if (page.keyboard && typeof page.keyboard.type === "function") {
+      try {
+        await page.keyboard.type(text);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    // 回退：尝试对当前焦点元素用 locator 输入
+    if (typeof page.locator === "function") {
+      try {
+        await page.locator("input:focus").type(text);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   /** 导航。失败不抛出，返回 success=false（与 Python 一致） */
