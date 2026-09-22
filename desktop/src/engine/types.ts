@@ -82,15 +82,19 @@ export interface ActionResult {
 
 /** 构造 ActionResult，默认值对齐 Python dataclass */
 export function createActionResult(overrides: Partial<ActionResult> = {}): ActionResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    selector: overrides.selector ?? null,
-    method: overrides.method ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    ...overrides,
-  } as ActionResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    selector: null,
+    method: null,
+    duration_ms: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ActionResult;
 }
 
 /** 操作结果基类 */
@@ -105,15 +109,19 @@ export interface BaseOperationResult {
 
 /** 构造 BaseOperationResult，默认值对齐 Python dataclass */
 export function createBaseOperationResult(overrides: Partial<BaseOperationResult> = {}): BaseOperationResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    ...overrides,
-  } as BaseOperationResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as BaseOperationResult;
 }
 
 /** 开启家庭共享操作结果 */
@@ -132,19 +140,23 @@ export interface EnableSharingResult {
 
 /** 构造 EnableSharingResult，默认值对齐 Python dataclass */
 export function createEnableSharingResult(overrides: Partial<EnableSharingResult> = {}): EnableSharingResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    was_already_enabled: overrides.was_already_enabled ?? false,
-    sharing_enabled: overrides.sharing_enabled ?? false,
-    family_created: overrides.family_created ?? false,
-    member_count: overrides.member_count ?? 0,
-    ...overrides,
-  } as EnableSharingResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    was_already_enabled: false,
+    sharing_enabled: false,
+    family_created: false,
+    member_count: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as EnableSharingResult;
 }
 
 /** 提取结果 */
@@ -157,13 +169,17 @@ export interface ExtractResult {
 
 /** 构造 ExtractResult，默认值对齐 Python dataclass */
 export function createExtractResult(overrides: Partial<ExtractResult> = {}): ExtractResult {
-  return {
-    success: overrides.success ?? false,
-    data: overrides.data ?? null,
-    error: overrides.error ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    ...overrides,
-  } as ExtractResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    data: null,
+    error: null,
+    duration_ms: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ExtractResult;
 }
 
 /** 家庭组成员 */
@@ -176,13 +192,16 @@ export interface FamilyMember {
 
 /** 构造 FamilyMember，默认值对齐 Python dataclass */
 export function createFamilyMember(overrides: Partial<FamilyMember> = {}): FamilyMember {
-  return {
-    email: overrides.email ?? "",
-    name: overrides.name ?? null,
-    role: overrides.role as FamilyRole,
-    avatar_url: overrides.avatar_url ?? null,
-    ...overrides,
-  } as FamilyMember;
+  const base: Record<string, unknown> = {
+    email: "",
+    name: null,
+    avatar_url: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as FamilyMember;
 }
 
 /** 家庭组状态检测结果 */
@@ -199,17 +218,20 @@ export interface FamilyStatusResult {
 
 /** 构造 FamilyStatusResult，默认值对齐 Python dataclass */
 export function createFamilyStatusResult(overrides: Partial<FamilyStatusResult> = {}): FamilyStatusResult {
-  return {
-    has_family: overrides.has_family ?? false,
-    role: overrides.role as FamilyRole,
-    is_manager: overrides.is_manager ?? false,
-    member_count: overrides.member_count ?? 0,
-    members: overrides.members ?? [],
-    sharing_enabled: overrides.sharing_enabled ?? false,
-    can_share_subscription: overrides.can_share_subscription ?? false,
-    family_name: overrides.family_name ?? null,
-    ...overrides,
-  } as FamilyStatusResult;
+  const base: Record<string, unknown> = {
+    has_family: false,
+    is_manager: false,
+    member_count: 0,
+    members: [],
+    sharing_enabled: false,
+    can_share_subscription: false,
+    family_name: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as FamilyStatusResult;
 }
 
 /** 加入家庭组操作结果 */
@@ -231,22 +253,25 @@ export interface JoinFamilyResult {
 
 /** 构造 JoinFamilyResult，默认值对齐 Python dataclass */
 export function createJoinFamilyResult(overrides: Partial<JoinFamilyResult> = {}): JoinFamilyResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    joined_as: overrides.joined_as as FamilyRole,
-    family_manager_email: overrides.family_manager_email ?? null,
-    inviter_email: overrides.inviter_email ?? null,
-    member_count_after: overrides.member_count_after ?? 0,
-    already_in_family: overrides.already_in_family ?? false,
-    invite_sent: overrides.invite_sent ?? false,
-    invite_accepted: overrides.invite_accepted ?? false,
-    ...overrides,
-  } as JoinFamilyResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    family_manager_email: null,
+    inviter_email: null,
+    member_count_after: 0,
+    already_in_family: false,
+    invite_sent: false,
+    invite_accepted: false,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as JoinFamilyResult;
 }
 
 /** 踢出设备操作结果 */
@@ -266,20 +291,24 @@ export interface KickDevicesResult {
 
 /** 构造 KickDevicesResult，默认值对齐 Python dataclass */
 export function createKickDevicesResult(overrides: Partial<KickDevicesResult> = {}): KickDevicesResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    devices_found: overrides.devices_found ?? 0,
-    devices_kicked: overrides.devices_kicked ?? 0,
-    devices_failed: overrides.devices_failed ?? 0,
-    kicked_devices: overrides.kicked_devices ?? [],
-    failed_devices: overrides.failed_devices ?? [],
-    ...overrides,
-  } as KickDevicesResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    devices_found: 0,
+    devices_kicked: 0,
+    devices_failed: 0,
+    kicked_devices: [],
+    failed_devices: [],
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as KickDevicesResult;
 }
 
 /** 登录操作结果 */
@@ -304,25 +333,27 @@ export interface LoginResult {
 
 /** 构造 LoginResult，默认值对齐 Python dataclass */
 export function createLoginResult(overrides: Partial<LoginResult> = {}): LoginResult {
-  return {
-    success: overrides.success ?? false,
-    status: overrides.status as OperationStatus,
-    login_state: overrides.login_state as LoginState,
-    message: overrides.message ?? "",
-    error: overrides.error ?? "",
-    error_type: overrides.error_type ?? null,
-    account_email: overrides.account_email ?? null,
-    need_2fa: overrides.need_2fa ?? false,
-    two_fa_method: overrides.two_fa_method ?? null,
-    challenge_type: overrides.challenge_type ?? null,
-    challenge_hint: overrides.challenge_hint ?? null,
-    can_retry: overrides.can_retry ?? false,
-    retry_delay_seconds: overrides.retry_delay_seconds ?? 0,
-    page_type: overrides.page_type ?? null,
-    matched_keywords: overrides.matched_keywords ?? [],
-    duration_ms: overrides.duration_ms ?? 0,
-    ...overrides,
-  } as LoginResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: "",
+    error_type: null,
+    account_email: null,
+    need_2fa: false,
+    two_fa_method: null,
+    challenge_type: null,
+    challenge_hint: null,
+    can_retry: false,
+    retry_delay_seconds: 0,
+    page_type: null,
+    matched_keywords: [],
+    duration_ms: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as LoginResult;
 }
 
 /** 修改验证器操作结果 */
@@ -342,20 +373,24 @@ export interface ModifyAuthenticatorResult {
 
 /** 构造 ModifyAuthenticatorResult，默认值对齐 Python dataclass */
 export function createModifyAuthenticatorResult(overrides: Partial<ModifyAuthenticatorResult> = {}): ModifyAuthenticatorResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    authenticator_name: overrides.authenticator_name ?? null,
-    secret_key: overrides.secret_key ?? null,
-    qr_code_url: overrides.qr_code_url ?? null,
-    operation: overrides.operation ?? "",
-    verified: overrides.verified ?? false,
-    ...overrides,
-  } as ModifyAuthenticatorResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    authenticator_name: null,
+    secret_key: null,
+    qr_code_url: null,
+    operation: "",
+    verified: false,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ModifyAuthenticatorResult;
 }
 
 /** 修改手机号操作结果 (2SV 或恢复手机) */
@@ -375,20 +410,24 @@ export interface ModifyPhoneResult {
 
 /** 构造 ModifyPhoneResult，默认值对齐 Python dataclass */
 export function createModifyPhoneResult(overrides: Partial<ModifyPhoneResult> = {}): ModifyPhoneResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    operation_type: overrides.operation_type ?? "",
-    old_phone: overrides.old_phone ?? null,
-    new_phone: overrides.new_phone ?? null,
-    verification_sent: overrides.verification_sent ?? false,
-    verification_code_used: overrides.verification_code_used ?? null,
-    ...overrides,
-  } as ModifyPhoneResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    operation_type: "",
+    old_phone: null,
+    new_phone: null,
+    verification_sent: false,
+    verification_code_used: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ModifyPhoneResult;
 }
 
 /** 导航结果 */
@@ -402,14 +441,18 @@ export interface NavigationResult {
 
 /** 构造 NavigationResult，默认值对齐 Python dataclass */
 export function createNavigationResult(overrides: Partial<NavigationResult> = {}): NavigationResult {
-  return {
-    success: overrides.success ?? false,
-    url: overrides.url ?? "",
-    final_url: overrides.final_url ?? null,
-    error_message: overrides.error_message ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    ...overrides,
-  } as NavigationResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    url: "",
+    final_url: null,
+    error_message: null,
+    duration_ms: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as NavigationResult;
 }
 
 /** OAuth 授权操作结果 */
@@ -433,24 +476,28 @@ export interface OAuthResult {
 
 /** 构造 OAuthResult，默认值对齐 Python dataclass */
 export function createOAuthResult(overrides: Partial<OAuthResult> = {}): OAuthResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    service_name: overrides.service_name ?? "",
-    service: overrides.service ?? "",
-    authorized: overrides.authorized ?? false,
-    redirect_url: overrides.redirect_url ?? null,
-    access_token: overrides.access_token ?? null,
-    refresh_token: overrides.refresh_token ?? null,
-    expires_in: overrides.expires_in ?? null,
-    oauth_email: overrides.oauth_email ?? null,
-    account_id: overrides.account_id ?? null,
-    ...overrides,
-  } as OAuthResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    service_name: "",
+    service: "",
+    authorized: false,
+    redirect_url: null,
+    access_token: null,
+    refresh_token: null,
+    expires_in: null,
+    oauth_email: null,
+    account_id: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as OAuthResult;
 }
 
 /** 观察结果 */
@@ -463,13 +510,17 @@ export interface ObserveResult {
 
 /** 构造 ObserveResult，默认值对齐 Python dataclass */
 export function createObserveResult(overrides: Partial<ObserveResult> = {}): ObserveResult {
-  return {
-    success: overrides.success ?? false,
-    actions: overrides.actions ?? [],
-    error: overrides.error ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    ...overrides,
-  } as ObserveResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    actions: [],
+    error: null,
+    duration_ms: 0,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ObserveResult;
 }
 
 /** Pro 状态检测结果 */
@@ -489,20 +540,23 @@ export interface ProStatusResult {
 
 /** 构造 ProStatusResult，默认值对齐 Python dataclass */
 export function createProStatusResult(overrides: Partial<ProStatusResult> = {}): ProStatusResult {
-  return {
-    status: overrides.status as ProStatus,
-    is_pro: overrides.is_pro ?? false,
-    is_family_member: overrides.is_family_member ?? false,
-    family_manager_email: overrides.family_manager_email ?? null,
-    plan_name: overrides.plan_name ?? null,
-    storage_used: overrides.storage_used ?? null,
-    storage_total: overrides.storage_total ?? null,
-    expiry_date: overrides.expiry_date ?? null,
-    confidence: overrides.confidence ?? 0,
-    method_used: overrides.method_used ?? "",
-    raw_keywords: overrides.raw_keywords ?? [],
-    ...overrides,
-  } as ProStatusResult;
+  const base: Record<string, unknown> = {
+    is_pro: false,
+    is_family_member: false,
+    family_manager_email: null,
+    plan_name: null,
+    storage_used: null,
+    storage_total: null,
+    expiry_date: null,
+    confidence: 0,
+    method_used: "",
+    raw_keywords: [],
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ProStatusResult;
 }
 
 /** 替换辅助邮箱操作结果 */
@@ -521,19 +575,23 @@ export interface ReplaceEmailResult {
 
 /** 构造 ReplaceEmailResult，默认值对齐 Python dataclass */
 export function createReplaceEmailResult(overrides: Partial<ReplaceEmailResult> = {}): ReplaceEmailResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    old_email: overrides.old_email ?? null,
-    new_email: overrides.new_email ?? null,
-    verification_sent: overrides.verification_sent ?? false,
-    verification_code_used: overrides.verification_code_used ?? null,
-    ...overrides,
-  } as ReplaceEmailResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    old_email: null,
+    new_email: null,
+    verification_sent: false,
+    verification_code_used: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ReplaceEmailResult;
 }
 
 /** 修改手机号操作结果 (2SV 或恢复手机) */
@@ -553,20 +611,24 @@ export interface ReplacePhoneResult {
 
 /** 构造 ReplacePhoneResult，默认值对齐 Python dataclass */
 export function createReplacePhoneResult(overrides: Partial<ReplacePhoneResult> = {}): ReplacePhoneResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    operation_type: overrides.operation_type ?? "",
-    old_phone: overrides.old_phone ?? null,
-    new_phone: overrides.new_phone ?? null,
-    verification_sent: overrides.verification_sent ?? false,
-    verification_code_used: overrides.verification_code_used ?? null,
-    ...overrides,
-  } as ReplacePhoneResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    operation_type: "",
+    old_phone: null,
+    new_phone: null,
+    verification_sent: false,
+    verification_code_used: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ReplacePhoneResult;
 }
 
 /** 解锁 403 操作结果 */
@@ -588,21 +650,25 @@ export interface UnlockResult {
 
 /** 构造 UnlockResult，默认值对齐 Python dataclass */
 export function createUnlockResult(overrides: Partial<UnlockResult> = {}): UnlockResult {
-  return {
-    success: overrides.success ?? false,
-    message: overrides.message ?? "",
-    error: overrides.error ?? null,
-    error_type: overrides.error_type ?? null,
-    duration_ms: overrides.duration_ms ?? 0,
-    can_retry: overrides.can_retry ?? false,
-    was_locked: overrides.was_locked ?? false,
-    unlocked: overrides.unlocked ?? false,
-    verification_url: overrides.verification_url ?? null,
-    phone_used: overrides.phone_used ?? null,
-    sms_code_used: overrides.sms_code_used ?? null,
-    needs_manual: overrides.needs_manual ?? false,
-    lock_reason: overrides.lock_reason ?? null,
-    ...overrides,
-  } as UnlockResult;
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    was_locked: false,
+    unlocked: false,
+    verification_url: null,
+    phone_used: null,
+    sms_code_used: null,
+    needs_manual: false,
+    lock_reason: null,
+  };
+  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as UnlockResult;
 }
 

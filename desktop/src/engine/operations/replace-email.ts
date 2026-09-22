@@ -7,19 +7,19 @@
  */
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { GoogleURLs, Timeouts } from "../constants.ts";
+import { createReplaceEmailResult, type ReplaceEmailResult } from "../types.ts";
 
 /** 邮箱验证码服务接口，对应 Python 传入的 email_service */
 export interface EmailCodeService {
   getCode(email: string): Promise<string | null>;
 }
 
-export interface ReplaceEmailResult {
+interface StepOutcome {
   success: boolean;
-  message: string;
+  message?: string;
   error?: string | null;
-  new_email?: string;
-  duration_ms: number;
 }
+
 
 export class ReplaceEmailOperation {
   private readonly engine: StagehandGoogleEngine;
@@ -38,53 +38,53 @@ export class ReplaceEmailOperation {
         timeoutMs: Timeouts.NAVIGATION,
       });
       if (!nav.success) {
-        return {
+        return createReplaceEmailResult({
           success: false,
           message: "导航到恢复邮箱设置页面失败",
           error: nav.error,
           duration_ms: Date.now() - start,
-        };
+        });
       }
 
       await this.engine.wait(Timeouts.AFTER_NAVIGATION);
 
       const url = await this.engine.getCurrentUrl();
       if (url.includes("accounts.google.com") && url.includes("signin")) {
-        return {
+        return createReplaceEmailResult({
           success: false,
           message: "需要先登录账号",
           error: "未登录",
           duration_ms: Date.now() - start,
-        };
+        });
       }
 
       const replaced = await this.performReplace(newEmail, emailService);
       const durationMs = Date.now() - start;
 
       if (replaced.success) {
-        return {
+        return createReplaceEmailResult({
           success: true,
           message: "辅助邮箱替换成功",
           new_email: newEmail,
           duration_ms: durationMs,
-        };
+        });
       }
-      return {
+      return createReplaceEmailResult({
         success: false,
         message: replaced.message ?? "替换失败",
         error: replaced.error,
         duration_ms: durationMs,
-      };
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `操作失败: ${msg}`, error: msg, duration_ms: Date.now() - start };
+      return createReplaceEmailResult({ success: false, message: `操作失败: ${msg}`, error: msg, duration_ms: Date.now() - start });
     }
   }
 
   private async performReplace(
     newEmail: string,
     emailService: EmailCodeService | null,
-  ): Promise<{ success: boolean; message?: string; error?: string | null }> {
+  ): Promise<StepOutcome> {
     try {
       // Step 1: 检查当前状态
       await this.engine.extract(
@@ -143,14 +143,14 @@ export class ReplaceEmailOperation {
                 await this.engine.wait(3000);
               }
             } catch {
-              return {
+              return createReplaceEmailResult({
                 success: false,
                 message: "需要手动输入验证码",
                 error: "邮箱验证码获取失败",
-              };
+              });
             }
           } else {
-            return { success: false, message: "需要手动输入验证码", error: "未提供邮件服务" };
+            return createReplaceEmailResult({ success: false, message: "需要手动输入验证码", error: "未提供邮件服务" });
           }
         }
       }
@@ -159,16 +159,12 @@ export class ReplaceEmailOperation {
       return await this.verifyReplacement(newEmail);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: msg, error: msg };
+      return createReplaceEmailResult({ success: false, message: msg, error: msg });
     }
   }
 
   /** 刷新页面后核对新邮箱是否生效 */
-  private async verifyReplacement(newEmail: string): Promise<{
-    success: boolean;
-    message?: string;
-    error?: string;
-  }> {
+  private async verifyReplacement(newEmail: string): Promise<StepOutcome> {
     try {
       await this.engine.navigate(GoogleURLs.RECOVERY_EMAIL, { timeoutMs: Timeouts.NAVIGATION });
       await this.engine.wait(Timeouts.AFTER_NAVIGATION);
@@ -187,24 +183,24 @@ export class ReplaceEmailOperation {
       );
 
       if (!extracted.success) {
-        return { success: false, message: "无法验证替换结果" };
+        return createReplaceEmailResult({ success: false, message: "无法验证替换结果" });
       }
 
       const resultText = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
 
-      if (resultText.includes(newEmail.toLowerCase())) return { success: true };
+      if (resultText.includes(newEmail.toLowerCase())) return createReplaceEmailResult({ success: true });
 
       const okWords = ["updated", "已更新", "success", "成功"];
-      if (okWords.some((k) => resultText.includes(k))) return { success: true };
+      if (okWords.some((k) => resultText.includes(k))) return createReplaceEmailResult({ success: true });
 
       const badWords = ["invalid", "无效", "error", "错误"];
       if (badWords.some((k) => resultText.includes(k))) {
-        return { success: false, message: "邮箱验证失败", error: "无效的邮箱" };
+        return createReplaceEmailResult({ success: false, message: "邮箱验证失败", error: "无效的邮箱" });
       }
 
-      return { success: false, message: "无法确定替换结果" };
+      return createReplaceEmailResult({ success: false, message: "无法确定替换结果" });
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return createReplaceEmailResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

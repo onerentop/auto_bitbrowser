@@ -8,19 +8,11 @@
  */
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { GoogleURLs, Timeouts } from "../constants.ts";
-
-export interface EnableSharingResult {
-  success: boolean;
-  message: string;
-  error?: string | null;
-  was_already_enabled?: boolean;
-  sharing_enabled?: boolean;
-  family_created?: boolean;
-  duration_ms: number;
-}
+import { createEnableSharingResult, type EnableSharingResult } from "../types.ts";
 
 type CheckOutcome = { already_enabled?: boolean; needs_create_family?: boolean };
 type StepOutcome = { success: boolean; message?: string; error?: string | null };
+
 
 export class EnableSharingOperation {
   private readonly engine: StagehandGoogleEngine;
@@ -36,65 +28,65 @@ export class EnableSharingOperation {
         timeoutMs: Timeouts.NAVIGATION,
       });
       if (!nav.success) {
-        return {
+        return createEnableSharingResult({
           success: false,
           message: "导航到设置页面失败",
           error: nav.error,
           duration_ms: Date.now() - start,
-        };
+        });
       }
 
       await this.engine.wait(Timeouts.AFTER_NAVIGATION);
 
       const url = await this.engine.getCurrentUrl();
       if (url.includes("accounts.google.com") && url.includes("signin")) {
-        return { success: false, message: "需要先登录账号", error: "未登录", duration_ms: Date.now() - start };
+        return createEnableSharingResult({ success: false, message: "需要先登录账号", error: "未登录", duration_ms: Date.now() - start });
       }
 
       const status = await this.checkSharingStatus();
 
       if (status.already_enabled) {
-        return {
+        return createEnableSharingResult({
           success: true,
           message: "家庭共享已开启",
           was_already_enabled: true,
           sharing_enabled: true,
           duration_ms: Date.now() - start,
-        };
+        });
       }
 
       if (status.needs_create_family) {
         const created = await this.createFamilyGroup();
         if (!created.success) {
-          return {
+          return createEnableSharingResult({
             success: false,
             message: "需要先创建家庭组",
             error: created.error ?? "创建家庭组失败",
             duration_ms: Date.now() - start,
-          };
+          });
         }
       }
 
       const enabled = await this.enableSharing();
       if (enabled.success) {
-        return {
+        return createEnableSharingResult({
           success: true,
           message: "成功开启家庭共享",
           sharing_enabled: true,
           family_created: Boolean(status.needs_create_family),
           duration_ms: Date.now() - start,
-        };
+        });
       }
 
-      return {
+      return createEnableSharingResult({
         success: false,
         message: enabled.message ?? "开启共享失败",
         error: enabled.error,
         duration_ms: Date.now() - start,
-      };
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: `操作失败: ${msg}`, error: msg, duration_ms: Date.now() - start };
+      return createEnableSharingResult({ success: false, message: `操作失败: ${msg}`, error: msg, duration_ms: Date.now() - start });
     }
   }
 
@@ -167,12 +159,12 @@ export class EnableSharingOperation {
       if (verify.success && verify.data) {
         const text = String(JSON.stringify(verify.data)).toLowerCase();
         const okWords = ["manage family", "管理家庭", "share"];
-        if (okWords.some((k) => text.includes(k))) return { success: true };
+        if (okWords.some((k) => text.includes(k))) return createEnableSharingResult({ success: true });
       }
 
-      return { success: false, error: "创建家庭组失败" };
+      return createEnableSharingResult({ success: false, error: "创建家庭组失败" });
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return createEnableSharingResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -203,12 +195,12 @@ export class EnableSharingOperation {
       if (verify.success && verify.data) {
         const text = String(JSON.stringify(verify.data)).toLowerCase();
         const okWords = ["enabled", "on", "已开启", "sharing", "共享"];
-        if (okWords.some((k) => text.includes(k))) return { success: true };
+        if (okWords.some((k) => text.includes(k))) return createEnableSharingResult({ success: true });
       }
 
-      return { success: false, message: "开关状态验证失败" };
+      return createEnableSharingResult({ success: false, message: "开关状态验证失败" });
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return createEnableSharingResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

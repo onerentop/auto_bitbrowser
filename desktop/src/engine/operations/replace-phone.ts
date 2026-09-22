@@ -7,20 +7,19 @@
  */
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { GoogleURLs, Timeouts } from "../constants.ts";
+import { createModifyPhoneResult, type ModifyPhoneResult } from "../types.ts";
 
 /** 短信验证码服务接口，对应 Python 传入的 sms_service */
 export interface SmsCodeService {
   getCode(phone: string): Promise<string | null>;
 }
 
-export interface ModifyPhoneResult {
+interface StepOutcome {
   success: boolean;
-  message: string;
+  message?: string;
   error?: string | null;
-  new_phone?: string;
-  operation_type: "recovery";
-  duration_ms: number;
 }
+
 
 export class ReplacePhoneOperation {
   private readonly engine: StagehandGoogleEngine;
@@ -34,7 +33,8 @@ export class ReplacePhoneOperation {
     smsService: SmsCodeService | null = null,
   ): Promise<ModifyPhoneResult> {
     const start = Date.now();
-    const fail = (message: string, error?: string | null): ModifyPhoneResult => ({
+    const fail = (message: string, error?: string | null): ModifyPhoneResult =>
+      createModifyPhoneResult({
       success: false,
       message,
       error,
@@ -59,21 +59,21 @@ export class ReplacePhoneOperation {
       const durationMs = Date.now() - start;
 
       if (replaced.success) {
-        return {
+        return createModifyPhoneResult({
           success: true,
           message: "恢复手机号替换成功",
           new_phone: newPhone,
           operation_type: "recovery",
           duration_ms: durationMs,
-        };
+        });
       }
-      return {
+      return createModifyPhoneResult({
         success: false,
         message: replaced.message ?? "替换失败",
         error: replaced.error,
         operation_type: "recovery",
         duration_ms: durationMs,
-      };
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return fail(`操作失败: ${msg}`, msg);
@@ -83,7 +83,7 @@ export class ReplacePhoneOperation {
   private async performReplace(
     newPhone: string,
     smsService: SmsCodeService | null,
-  ): Promise<{ success: boolean; message?: string; error?: string | null }> {
+  ): Promise<StepOutcome> {
     try {
       await this.engine.extract(
         `
@@ -138,14 +138,14 @@ export class ReplacePhoneOperation {
                 await this.engine.wait(3000);
               }
             } catch {
-              return {
+              return createModifyPhoneResult({
                 success: false,
                 message: "需要手动输入验证码",
                 error: "短信验证码获取失败",
-              };
+              });
             }
           } else {
-            return { success: false, message: "需要手动输入验证码", error: "未提供短信服务" };
+            return createModifyPhoneResult({ success: false, message: "需要手动输入验证码", error: "未提供短信服务" });
           }
         }
       }
@@ -153,16 +153,12 @@ export class ReplacePhoneOperation {
       return await this.verifyReplacement(newPhone);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { success: false, message: msg, error: msg };
+      return createModifyPhoneResult({ success: false, message: msg, error: msg });
     }
   }
 
   /** 刷新后核对：手机号后四位出现即视为成功（页面通常做脱敏显示） */
-  private async verifyReplacement(newPhone: string): Promise<{
-    success: boolean;
-    message?: string;
-    error?: string;
-  }> {
+  private async verifyReplacement(newPhone: string): Promise<StepOutcome> {
     try {
       await this.engine.navigate(GoogleURLs.RECOVERY_PHONE, { timeoutMs: Timeouts.NAVIGATION });
       await this.engine.wait(Timeouts.AFTER_NAVIGATION);
@@ -180,26 +176,26 @@ export class ReplacePhoneOperation {
                 `,
       );
 
-      if (!extracted.success) return { success: false, message: "无法验证替换结果" };
+      if (!extracted.success) return createModifyPhoneResult({ success: false, message: "无法验证替换结果" });
 
       const resultText = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
 
       if (newPhone.length >= 4) {
         const lastFour = newPhone.slice(-4);
-        if (resultText.includes(lastFour)) return { success: true };
+        if (resultText.includes(lastFour)) return createModifyPhoneResult({ success: true });
       }
 
       const okWords = ["updated", "已更新", "success", "成功"];
-      if (okWords.some((k) => resultText.includes(k))) return { success: true };
+      if (okWords.some((k) => resultText.includes(k))) return createModifyPhoneResult({ success: true });
 
       const badWords = ["invalid", "无效", "error", "错误"];
       if (badWords.some((k) => resultText.includes(k))) {
-        return { success: false, message: "手机号验证失败", error: "无效的手机号" };
+        return createModifyPhoneResult({ success: false, message: "手机号验证失败", error: "无效的手机号" });
       }
 
-      return { success: false, message: "无法确定替换结果" };
+      return createModifyPhoneResult({ success: false, message: "无法确定替换结果" });
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      return createModifyPhoneResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

@@ -7,18 +7,7 @@
 import { z } from "zod";
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { GoogleURLs, Timeouts } from "../constants.ts";
-
-export interface KickDevicesResult {
-  success: boolean;
-  message: string;
-  error?: string;
-  devices_found: number;
-  devices_kicked: number;
-  devices_failed: number;
-  kicked_devices: string[];
-  failed_devices: string[];
-  duration_ms: number;
-}
+import { createKickDevicesResult, type KickDevicesResult } from "../types.ts";
 
 /**
  * 当前设备的标识关键词（多语言）。
@@ -59,15 +48,13 @@ export class KickDevicesOperation {
     const kicked: string[] = [];
     const failed: string[] = [];
 
-    const done = (r: Partial<KickDevicesResult> & { success: boolean; message: string }): KickDevicesResult => ({
-      devices_found: 0,
-      devices_kicked: 0,
-      devices_failed: 0,
-      kicked_devices: kicked,
-      failed_devices: failed,
-      duration_ms: Date.now() - start,
-      ...r,
-    });
+    const done = (r: Partial<KickDevicesResult> & { success: boolean; message: string }): KickDevicesResult =>
+      createKickDevicesResult({
+        kicked_devices: kicked,
+        failed_devices: failed,
+        duration_ms: Date.now() - start,
+        ...r,
+      });
 
     try {
       // 1. 导航到设备管理页

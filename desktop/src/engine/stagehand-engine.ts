@@ -40,6 +40,8 @@ export interface EngineOptions {
   /** 日志详细程度 0-2，对齐 Python 的 verbose */
   verbose?: 0 | 1 | 2;
   ixClient?: IxBrowserClient;
+  /** 引擎关闭时是否一并关掉 ixBrowser 窗口，对齐 Python 的 close_browser_on_exit */
+  closeBrowserOnExit?: boolean;
 }
 
 /** 统一的原语返回结构，对标 Python 的 ActionResult / ExtractResult 等 */
@@ -134,6 +136,14 @@ export class StagehandGoogleEngine {
     await sh.init();
     this.sh = sh;
     this.page = await sh.context.awaitActivePage(15_000);
+  }
+
+  /**
+   * 关闭引擎，对齐 Python 的 engine.stop(close_browser=...)。
+   * 不传参数时沿用构造时的 closeBrowserOnExit 设定。
+   */
+  async stop(closeBrowser?: boolean): Promise<void> {
+    return this.close(closeBrowser ?? this.options.closeBrowserOnExit ?? false);
   }
 
   /** 关闭 Stagehand 并按需关闭 ixBrowser 窗口 */
@@ -306,5 +316,95 @@ export class StagehandGoogleEngine {
         durationMs: Date.now() - start,
       };
     }
+  }
+  // ==================== operation 门面 ====================
+  // 对标 Python engine.py 上同名方法。用动态 import 避免
+  // engine ↔ operations 的循环依赖（operations 需要 engine 类型）。
+  // 每个方法只做一件事：构造对应 Operation 并委托执行。
+
+  async login(options: {
+    email: string;
+    password: string;
+    totpSecret?: string | null;
+    recoveryEmail?: string | null;
+  }): Promise<import("./types.ts").LoginResult> {
+    const { LoginOperation } = await import("./operations/login.ts");
+    return new LoginOperation(this).execute(options);
+  }
+
+  async detectProStatus(
+    options: { navigateIfNeeded?: boolean } = {},
+  ): Promise<import("./types.ts").ProStatusResult> {
+    const { ProStatusOperation } = await import("./operations/pro-status.ts");
+    return new ProStatusOperation(this as never).execute(options);
+  }
+
+  async detectFamilyStatus(
+    options: { navigateIfNeeded?: boolean } = {},
+  ): Promise<import("./types.ts").FamilyStatusResult> {
+    const { FamilyOperation } = await import("./operations/family.ts");
+    return new FamilyOperation(this).execute(options);
+  }
+
+  async kickDevices(
+    options: { keepCurrent?: boolean } = {},
+  ): Promise<import("./types.ts").KickDevicesResult> {
+    const { KickDevicesOperation } = await import("./operations/kick-devices.ts");
+    return new KickDevicesOperation(this).execute(options);
+  }
+
+  async modify2svPhone(
+    newPhone: string,
+    smsService: import("./operations/modify-2sv.ts").SmsCodeService | null = null,
+  ): Promise<import("./types.ts").ModifyPhoneResult> {
+    const { Modify2SVOperation } = await import("./operations/modify-2sv.ts");
+    return new Modify2SVOperation(this).execute(newPhone, smsService);
+  }
+
+  async modifyAuthenticator(): Promise<import("./types.ts").ModifyAuthenticatorResult> {
+    const { ModifyAuthenticatorOperation } = await import("./operations/modify-auth.ts");
+    return new ModifyAuthenticatorOperation(this).execute();
+  }
+
+  async replaceRecoveryEmail(
+    newEmail: string,
+    emailService: import("./operations/replace-email.ts").EmailCodeService | null = null,
+  ): Promise<import("./types.ts").ReplaceEmailResult> {
+    const { ReplaceEmailOperation } = await import("./operations/replace-email.ts");
+    return new ReplaceEmailOperation(this).execute(newEmail, emailService);
+  }
+
+  async replaceRecoveryPhone(
+    newPhone: string,
+    smsService: import("./operations/replace-phone.ts").SmsCodeService | null = null,
+  ): Promise<import("./types.ts").ModifyPhoneResult> {
+    const { ReplacePhoneOperation } = await import("./operations/replace-phone.ts");
+    return new ReplacePhoneOperation(this).execute(newPhone, smsService);
+  }
+
+  async unlock403(
+    options: import("./operations/unlock-403.ts").UnlockOptions = {},
+  ): Promise<import("./types.ts").UnlockResult> {
+    const { Unlock403Operation } = await import("./operations/unlock-403.ts");
+    return new Unlock403Operation(this).execute(options);
+  }
+
+  async joinFamily(inviterEmail: string): Promise<import("./types.ts").JoinFamilyResult> {
+    const { JoinFamilyOperation } = await import("./operations/join-family.ts");
+    return new JoinFamilyOperation(this).execute(inviterEmail);
+  }
+
+  async enableFamilySharing(): Promise<import("./types.ts").EnableSharingResult> {
+    const { EnableSharingOperation } = await import("./operations/enable-sharing.ts");
+    return new EnableSharingOperation(this).execute();
+  }
+
+  async oauthAuthorize(
+    service: string,
+    oauthUrl?: string | null,
+    oauthUrls?: Record<string, string>,
+  ): Promise<import("./types.ts").OAuthResult> {
+    const { OAuthOperation } = await import("./operations/oauth.ts");
+    return new OAuthOperation(this, oauthUrls).execute(service, oauthUrl);
   }
 }

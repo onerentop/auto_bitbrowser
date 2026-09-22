@@ -25,27 +25,15 @@ export const ProStatusSchema = z.object({
   family_manager_email: z.string().nullish(),
 });
 
-/** 家庭组状态（仅本文件需要的最小结构，避免循环依赖） */
-export interface FamilyStatusLike {
-  has_family: boolean;
-  is_manager: boolean;
-  members: { email?: string | null; role: FamilyRole }[];
-}
-
-/** 引擎需额外提供 detectFamilyStatus；此处声明以解耦 */
-export interface EngineWithFamily extends StagehandGoogleEngine {
-  detectFamilyStatus(options?: { navigateIfNeeded?: boolean }): Promise<FamilyStatusLike>;
-}
-
 /** 统一走自动生成的工厂函数，默认值对齐 Python dataclass */
 function makeResult(partial: Partial<ProStatusResult> & { status: ProStatus }): ProStatusResult {
   return createProStatusResult(partial);
 }
 
 export class ProStatusOperation {
-  private readonly engine: EngineWithFamily;
+  private readonly engine: StagehandGoogleEngine;
 
-  constructor(engine: EngineWithFamily) {
+  constructor(engine: StagehandGoogleEngine) {
     this.engine = engine;
   }
 
