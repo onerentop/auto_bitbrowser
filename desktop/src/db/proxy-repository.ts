@@ -14,6 +14,15 @@ export interface ProxyRow {
   [key: string]: unknown;
 }
 
+/** 写入用的宽松代理结构：不要求索引签名，便于 DataStore 等上层传入 */
+export interface ProxyLike {
+  proxy_type?: string | null;
+  host?: string | null;
+  port?: string | number | null;
+  username?: string | null;
+  password?: string | null;
+}
+
 export interface ProxyUsageStat {
   proxy_id: number;
   proxy_type: string | null;
@@ -93,6 +102,127 @@ export class ProxyRepository {
       )
       .get(maxPerIp);
     return (row as ProxyRow) ?? null;
+  }
+
+  /**
+   * 绑定代理到窗口。browser_id 唯一，冲突时改绑并刷新 bound_at。
+   * 对标 bind_proxy_to_window()，异常吞掉返回 false。
+   */
+  bindProxyToWindow(proxyId: number, browserId: string, email: string | null): boolean {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO proxy_window_bindings (proxy_id, browser_id, email)
+           VALUES (?, ?, ?)
+           ON CONFLICT(browser_id) DO UPDATE SET
+             proxy_id = excluded.proxy_id,
+             email = excluded.email,
+             bound_at = CURRENT_TIMESTAMP`,
+        )
+        .run(proxyId, browserId, email);
+      return true;
+    } catch (error) {
+      console.error(`[DB ERROR] bind_proxy_to_window 失败: ${error}`);
+      return false;
+    }
+  }
+
+  /** 解绑窗口。对标 unbind_proxy_from_window() */
+  unbindProxyFromWindow(browserId: string): boolean {
+    try {
+      this.db.prepare("DELETE FROM proxy_window_bindings WHERE browser_id = ?").run(browserId);
+      return true;
+    } catch (error) {
+      console.error(`[DB ERROR] unbind_proxy_from_window 失败: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 增量保存代理列表，并清理不再出现的代理及其绑定。
+   * 对标 save_all_proxies()：以 host:port 为身份键，
+   * 命中则 UPDATE（只更新 type/username/password），否则 INSERT；
+   * 库里多出来的按 key 删除，连带删除 proxy_window_bindings。
+   */
+  saveAllProxies(proxies: ProxyLike[]): void {
+    try {
+      const rows = this.db.prepare("SELECT id, host, port FROM proxies").all() as {
+        id: number; host: string | null; port: string | number | null;
+      }[];
+      const existing = new Map<string, number>();
+      for (const r of rows) existing.set(`${r.host ?? ""}:${r.port ?? ""}`, r.id);
+
+      const updateStmt = this.db.prepare(
+        "UPDATE proxies SET proxy_type=?, username=?, password=? WHERE id=?",
+      );
+      const insertStmt = this.db.prepare(
+        "INSERT INTO proxies (proxy_type, username, password, host, port) VALUES (?, ?, ?, ?, ?)",
+      );
+      const delBind = this.db.prepare("DELETE FROM proxy_window_bindings WHERE proxy_id = ?");
+      const delProxy = this.db.prepare("DELETE FROM proxies WHERE id = ?");
+
+      this.db.exec("BEGIN");
+      try {
+        const newKeys = new Set<string>();
+        for (const proxy of proxies) {
+          const key = `${proxy.host ?? ""}:${proxy.port ?? ""}`;
+          newKeys.add(key);
+          const id = existing.get(key);
+          if (id !== undefined) {
+            updateStmt.run(proxy.proxy_type ?? "socks5", proxy.username ?? "", proxy.password ?? "", id);
+          } else {
+            insertStmt.run(
+              proxy.proxy_type ?? "socks5",
+              proxy.username ?? "",
+              proxy.password ?? "",
+              proxy.host ?? "",
+              proxy.port ?? "",
+            );
+          }
+        }
+
+        for (const [key, id] of existing) {
+          if (!newKeys.has(key)) {
+            delBind.run(id);
+            delProxy.run(id);
+          }
+        }
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    } catch (error) {
+      console.error(`[DB ERROR] save_all_proxies 失败: ${error}`);
+    }
+  }
+
+  /** 新增单个代理 */
+  addProxy(proxy: ProxyLike): void {
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO proxies (proxy_type, username, password, host, port) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          proxy.proxy_type ?? "socks5",
+          proxy.username ?? "",
+          proxy.password ?? "",
+          proxy.host ?? "",
+          proxy.port ?? "",
+        );
+    } catch (error) {
+      console.error(`[DB ERROR] add_proxy 失败: ${error}`);
+    }
+  }
+
+  /** 删除代理 */
+  deleteProxy(proxyId: number): void {
+    try {
+      this.db.prepare("DELETE FROM proxies WHERE id = ?").run(proxyId);
+    } catch (error) {
+      console.error(`[DB ERROR] delete_proxy 失败: ${error}`);
+    }
   }
 
   count(): number {
