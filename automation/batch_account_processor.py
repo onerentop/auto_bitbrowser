@@ -5,8 +5,6 @@
 """
 
 import asyncio
-import os
-import traceback
 from typing import Callable, List, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -25,7 +23,7 @@ except ImportError:
     create_cdp_service = None
 
 # 导入共享的 Pro 状态检测器
-from automation.pro_status_detector import check_pro_status_via_stagehand
+from automation.pro_status_detector import check_pro_status_via_stagehand, check_pro_status_with_engine
 
 # 检查 StagehandGoogleEngine 是否可用
 try:
@@ -42,6 +40,56 @@ from automation.auto_google_login import auto_google_login, LoginResult
 from automation.auto_antigravity_oauth import auto_antigravity_oauth, OAuthResult
 from automation.auto_unlock_403 import auto_unlock_403, UnlockResult
 from services.sms_bus_client import SMSBusClient
+
+# 检查 BrowserUseEngine 是否可用
+try:
+    from core.browseruse_engine import BrowserUseEngine
+    BROWSERUSE_ENGINE_AVAILABLE = True
+except ImportError:
+    BROWSERUSE_ENGINE_AVAILABLE = False
+    BrowserUseEngine = None
+
+# Pydantic 模型用于 AI 结构化提取
+try:
+    from pydantic import BaseModel, Field
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    PYDANTIC_AVAILABLE = False
+    BaseModel = object
+    Field = lambda *args, **kwargs: None
+
+
+# ==================== AI 提取数据模型 ====================
+
+if PYDANTIC_AVAILABLE:
+    class FamilyInfoExtractModel(BaseModel):
+        """家庭组信息提取模型"""
+        has_family_group: str = Field(
+            default="unknown",
+            description="是否有家庭组。可选值: yes（有）, no（无）, unknown（无法确定）"
+        )
+        family_role: str = Field(
+            default="unknown",
+            description="用户在家庭组中的角色。可选值: manager（管理员/创建者）, member（成员/被邀请者）, none（无家庭组）, unknown（无法确定）"
+        )
+        family_member_count: int = Field(
+            default=0,
+            description="家庭组成员数量（包括管理员自己），范围 1-6。如果无法确定返回 0"
+        )
+        family_manager_email: str = Field(
+            default="",
+            description="家庭组管理员的邮箱地址。如果当前用户是成员，这里应该是管理员的邮箱；如果是管理员则为空"
+        )
+
+    class AccountCountryExtractModel(BaseModel):
+        """账户国家提取模型"""
+        account_country: str = Field(
+            default="unknown",
+            description="账户所在国家的英文名称（如 'United States', 'China', 'Japan'）。如果无法确定返回 'unknown'"
+        )
+else:
+    FamilyInfoExtractModel = None
+    AccountCountryExtractModel = None
 
 
 @dataclass
@@ -107,6 +155,74 @@ class BatchResult:
             "duration_seconds": self.duration_seconds,
             "results": self.results,
         }
+
+
+@dataclass
+class AccountMembershipRefreshResult:
+    """账号会员信息刷新结果"""
+    email: str
+    is_pro: str = "unknown"  # yes/no/family_yes/detection_failed
+    membership_type: str = "unknown"  # regular/family/none/unknown
+    pro_plan_name: str = ""
+    family_role: str = "unknown"  # manager/member/none/unknown
+    has_family_group: str = "unknown"  # yes/no/unknown
+    family_manager_email: str = ""
+    family_member_count: int = 0
+    family_slots_left: int = -1
+    account_country: str = ""
+    error_message: str = ""
+    success: bool = False
+
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        return {
+            "email": self.email,
+            "is_pro": self.is_pro,
+            "membership_type": self.membership_type,
+            "pro_plan_name": self.pro_plan_name,
+            "family_role": self.family_role,
+            "has_family_group": self.has_family_group,
+            "family_manager_email": self.family_manager_email,
+            "family_member_count": self.family_member_count,
+            "family_slots_left": self.family_slots_left,
+            "account_country": self.account_country,
+            "error_message": self.error_message,
+            "success": self.success,
+        }
+
+    @classmethod
+    def from_pro_status(cls, email: str, is_pro: str) -> "AccountMembershipRefreshResult":
+        """从 Pro 状态创建结果对象"""
+        result = cls(email=email)
+        result.is_pro = is_pro
+
+        # 根据 is_pro 推断 membership_type
+        if is_pro == "yes":
+            result.membership_type = "regular"
+            result.family_role = "manager"  # 普通 Pro 默认是管理员
+        elif is_pro == "family_yes":
+            result.membership_type = "family"
+            result.family_role = "member"  # 家庭组 Pro 默认是成员
+        elif is_pro == "no":
+            result.membership_type = "none"
+            result.family_role = "none"
+        else:
+            result.membership_type = "unknown"
+            result.family_role = "unknown"
+
+        result.success = is_pro in ("yes", "no", "family_yes")
+        return result
+
+    def calculate_family_slots(self):
+        """计算剩余家庭组位置"""
+        if self.is_pro == "yes" and self.family_role == "manager":
+            # 普通 Pro 管理员：最多 6 人，减去当前成员数
+            self.family_slots_left = max(0, 6 - max(self.family_member_count, 1))
+        elif self.is_pro == "family_yes":
+            # 家庭组 Pro：不适用
+            self.family_slots_left = -1
+        else:
+            self.family_slots_left = -1
 
 
 class BatchAccountProcessor:
@@ -1226,8 +1342,9 @@ class BatchAccountProcessor:
             # 当前页面应该是 https://myaccount.google.com/family
             # 如果不是，先导航
             current_url = page.url
-            if "myaccount.google.com/family" not in current_url:
-                await page.goto(GoogleURLs.FAMILY_ACCOUNT, wait_until="domcontentloaded", timeout=15000)
+            if "myaccount.google.com/family" not in current_url and "families.google.com" not in current_url:
+                family_url = GoogleURLs.FAMILY_ACCOUNT if GoogleURLs else "https://families.google.com/families"
+                await page.goto(family_url, wait_until="domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(2000)
 
             # 方法 1: 通过计数页面上的成员头像/卡片
@@ -1237,6 +1354,9 @@ class BatchAccountProcessor:
                 "[role='listitem']",  # 列表项
                 ".family-member",  # 家庭成员 class
                 "[data-member]",  # 成员数据属性
+                "div[data-email]",  # 带邮箱的 div
+                "img[alt*='profile']",  # 用户头像
+                "[class*='member']",  # 包含 member 的 class
             ]
 
             for selector in member_selectors:
@@ -1260,12 +1380,16 @@ class BatchAccountProcessor:
                 r"(\d)\s*位\s*(?:家庭)?成员",
                 r"家庭群组\s*\((\d)\)",
                 r"(\d)\s*人",
+                r"(\d)\s*位\s*家庭群组成员",
+                r"家庭成员\s*[:：]?\s*(\d)",
             ]
 
             # 英文模式: "X members" / "X family members"
             en_patterns = [
                 r"(\d)\s*(?:family\s+)?members?",
                 r"Family\s+group\s*\((\d)\)",
+                r"(\d)\s+people",
+                r"Family\s+members?\s*[:：]?\s*(\d)",
             ]
 
             all_patterns = cn_patterns + en_patterns
@@ -1277,13 +1401,794 @@ class BatchAccountProcessor:
                     if 1 <= count <= 6:
                         return count
 
-            # 方法 3: 默认返回 1（至少有管理员自己）
+            # 方法 3: 计算页面中邮箱地址的数量（通常每个成员都有邮箱显示）
+            email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+            emails_found = re.findall(email_pattern, page_text)
+            unique_emails = set(emails_found)
+            # 过滤掉明显不是用户邮箱的（如支持邮箱等）
+            user_emails = [e for e in unique_emails if 'support' not in e.lower() and 'help' not in e.lower()]
+            if 1 <= len(user_emails) <= 6:
+                self._log(f"[{email}] 通过邮箱计数检测到 {len(user_emails)} 个成员")
+                return len(user_emails)
+
+            # 方法 4: 输出页面文本用于调试（仅前500字符）
+            self._log(f"[{email}] 页面文本前500字: {page_text[:500].replace(chr(10), ' ')}")
+
+            # 方法 5: 默认返回 1（至少有管理员自己）
             self._log(f"[{email}] 无法精确检测成员数量，默认为 1（管理员自己）")
             return 1
 
         except Exception as e:
             self._log(f"[{email}] [!] 获取家庭成员数量失败: {e}")
             return 0
+
+    async def batch_refresh_membership_info(
+        self,
+        accounts: List[Dict],
+        browser_ids: List[str],
+        mode: str = "full",
+    ) -> BatchResult:
+        """
+        批量刷新会员信息
+
+        Args:
+            accounts: 账号列表（需要已登录）
+            browser_ids: 浏览器窗口 ID 列表（与账号一一对应）
+            mode: 刷新模式
+                - "pro_only": 仅检测 Pro 状态（兼容现有逻辑）
+                - "full": 完整刷新（Pro + 家庭组详情 + 国家）
+
+        Returns:
+            BatchResult: 批量处理结果
+        """
+        if len(accounts) != len(browser_ids):
+            raise ValueError("账号数量与浏览器窗口数量不匹配")
+
+        result = BatchResult(total=len(accounts))
+        result.start_time = datetime.now()
+        self._stop_flag = False
+        self._semaphore = asyncio.Semaphore(self.concurrency)
+
+        mode_text = "完整刷新" if mode == "full" else "Pro 检测"
+        self._log(f"开始批量{mode_text}，共 {len(accounts)} 个账号，并发数 {self.concurrency}")
+
+        # 如果是 full 模式，创建任务记录
+        task_id = None
+        if mode == "full":
+            try:
+                task_id = DBManager.create_refresh_task(
+                    task_mode=mode,
+                    total_count=len(accounts),
+                )
+                emails = [a.get("email", "") for a in accounts]
+                DBManager.create_refresh_task_items(task_id, emails)
+                self._log(f"创建刷新任务 #{task_id}")
+            except Exception as e:
+                self._log(f"创建任务记录失败: {e}")
+                task_id = None
+
+        # 创建任务
+        tasks = []
+        for account, browser_id in zip(accounts, browser_ids):
+            task = self._refresh_membership_with_semaphore(
+                account=account,
+                browser_id=browser_id,
+                mode=mode,
+                task_id=task_id,
+                result=result,
+            )
+            tasks.append(task)
+
+        # 并发执行
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+        result.end_time = datetime.now()
+
+        # 统计
+        pro_count = sum(
+            1 for r in result.results
+            if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "yes"
+        )
+        family_pro_count = sum(
+            1 for r in result.results
+            if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "family_yes"
+        )
+        non_pro_count = sum(
+            1 for r in result.results
+            if r.get("status") == "success" and r.get("data", {}).get("is_pro") == "no"
+        )
+
+        self._log(
+            f"批量{mode_text}完成: Pro {pro_count}, Pro(家庭组) {family_pro_count}, 非Pro {non_pro_count}, "
+            f"失败 {result.failed_count}, 耗时 {result.duration_seconds:.1f}s"
+        )
+
+        # 更新任务状态
+        if task_id:
+            try:
+                DBManager.finish_refresh_task(
+                    task_id=task_id,
+                    status="completed" if not self._stop_flag else "stopped",
+                    success_count=result.success_count,
+                    failed_count=result.failed_count,
+                )
+            except Exception as e:
+                self._log(f"更新任务状态失败: {e}")
+
+        # 添加统计摘要
+        result.results.append({
+            "_summary": True,
+            "pro_count": pro_count + family_pro_count,
+            "pro_regular_count": pro_count,
+            "pro_family_count": family_pro_count,
+            "non_pro_count": non_pro_count,
+        })
+
+        return result
+
+    async def _refresh_membership_with_semaphore(
+        self,
+        account: Dict,
+        browser_id: str,
+        mode: str,
+        task_id: int | None,
+        result: BatchResult,
+    ):
+        """带信号量控制的会员信息刷新任务"""
+        from services.ix_api import openBrowser
+
+        email = account.get("email", "unknown")
+
+        if self._stop_flag:
+            result.add_skipped(email, "用户停止")
+            return
+
+        async with self._semaphore:
+            if self._stop_flag:
+                result.add_skipped(email, "用户停止")
+                return
+
+            # 标记任务明细开始
+            if task_id:
+                try:
+                    DBManager.update_refresh_task_item_started(task_id, email)
+                except Exception:
+                    pass
+
+            try:
+                self._log(f"[{email}] 开始刷新会员信息 (mode={mode})...")
+
+                # 打开浏览器
+                open_result = openBrowser(browser_id)
+                if not open_result.get("success"):
+                    error_msg = open_result.get("msg", "打开浏览器失败")
+                    result.add_failed(email, error_msg, "browser_open_failed")
+                    self._log(f"[{email}] ❌ 打开浏览器失败: {error_msg}")
+                    self._update_task_item_failed(task_id, email, error_msg)
+                    return
+
+                ws_endpoint = open_result.get("data", {}).get("ws", "")
+                if not ws_endpoint:
+                    result.add_failed(email, "无法获取 WebSocket 端点", "no_ws_endpoint")
+                    self._log(f"[{email}] ❌ 无法获取 WebSocket 端点")
+                    self._update_task_item_failed(task_id, email, "无法获取 WebSocket 端点")
+                    return
+
+                # ========== 统一引擎管理：Step 1/2/3 共用同一个 BrowserUseEngine ==========
+                # 关键修复：避免 Step 1 创建/销毁引擎后 SOCKS 代理失效
+                # 原因：engine.stop() 调用 browser.close() 断开 CDP 连接，
+                # 可能破坏浏览器的网络栈状态，导致后续 CDP 重连后 SOCKS 代理不可用
+
+                if mode == "full":
+                    if not BROWSERUSE_ENGINE_AVAILABLE or not BrowserUseEngine:
+                        raise RuntimeError("BrowserUseEngine 不可用，无法进行 full 模式检测")
+
+                    # 创建引擎实例并连接 CDP（全程共用）
+                    self._log(f"[{email}] 创建 BrowserUseEngine（全程共用）...")
+                    engine = BrowserUseEngine()
+                    try:
+                        await engine.connect_cdp(ws_endpoint)
+                        # Step 1: 检测 Pro 状态（使用共用引擎）
+                        self._log(f"[{email}] Step 1: 检测 Pro 状态...")
+                        pro_status = await check_pro_status_with_engine(
+                            engine=engine,
+                            email=email,
+                            log=lambda msg: self._log(f"[{email}] {msg}"),
+                        )
+
+                        # 创建结果对象
+                        refresh_result = AccountMembershipRefreshResult.from_pro_status(
+                            email=email,
+                            is_pro=pro_status if pro_status else "detection_failed",
+                        )
+
+                        if pro_status is None:
+                            # 检测失败
+                            DBManager.update_pro_status(email, "detection_failed")
+                            result.add_failed(email, "检测失败", "detection_failed")
+                            self._log(f"[{email}] ❌ 检测 Pro 状态失败")
+                            self._update_task_item_failed(task_id, email, "检测失败")
+                        else:
+                            # 检测成功
+                            status_text_map = {
+                                "yes": "Pro",
+                                "family_yes": "Pro(家庭组)",
+                                "no": "非Pro",
+                            }
+                            status_text = status_text_map.get(pro_status, pro_status)
+                            self._log(f"[{email}] ✅ Pro 状态: {status_text}")
+
+                            # Step 2: 检测家庭组详情（Pro 账号 + "no" 账号的反向验证）
+                            if pro_status in ("yes", "family_yes"):
+                                self._log(f"[{email}] Step 2: 检测家庭组详情 (BrowserUseEngine)...")
+                                await self._detect_family_details_via_browseruse(engine, email, refresh_result)
+
+                                # ========== 关键协调：根据家庭组检测结果修正 is_pro ==========
+                                if refresh_result.is_pro == "yes" and refresh_result.family_role == "member":
+                                    self._log(f"[{email}] ⚠️ 状态修正: is_pro 从 'yes' 修正为 'family_yes'（检测到家庭成员角色）")
+                                    refresh_result.is_pro = "family_yes"
+                                    refresh_result.membership_type = "family"
+
+                            elif pro_status == "no":
+                                # ========== 反向验证 ==========
+                                self._log(f"[{email}] Step 2 (反向验证): 检查是否实际为家庭组成员...")
+                                await self._detect_family_details_via_browseruse(engine, email, refresh_result)
+
+                                if refresh_result.has_family_group == "yes" and refresh_result.family_role == "member":
+                                    self._log(f"[{email}] ⚠️ 反向验证修正: is_pro 从 'no' 修正为 'family_yes'")
+                                    refresh_result.is_pro = "family_yes"
+                                    refresh_result.membership_type = "family"
+                                    pro_status = "family_yes"
+                                elif refresh_result.has_family_group == "yes" and refresh_result.family_role == "manager":
+                                    self._log(f"[{email}] ⚠️ 反向验证修正: is_pro 从 'no' 修正为 'yes'")
+                                    refresh_result.is_pro = "yes"
+                                    refresh_result.membership_type = "regular"
+                                    pro_status = "yes"
+                                else:
+                                    self._log(f"[{email}] 反向验证: 确认为非 Pro")
+
+                            # Step 3: 提取账户国家（所有账号）
+                            self._log(f"[{email}] Step 3: 提取账户国家 (BrowserUseEngine)...")
+                            await self._extract_account_country_via_browseruse(engine, email, refresh_result)
+
+                            # 计算剩余位置
+                            refresh_result.calculate_family_slots()
+
+                            # Step 4: 写入数据库
+                            DBManager.update_membership_info(
+                                email=email,
+                                is_pro=refresh_result.is_pro,
+                                pro_plan_name=refresh_result.pro_plan_name,
+                                family_role=refresh_result.family_role,
+                                family_manager_email=refresh_result.family_manager_email,
+                                has_family_group=refresh_result.has_family_group,
+                                family_member_count=refresh_result.family_member_count,
+                                family_slots_left=refresh_result.family_slots_left,
+                                account_country=refresh_result.account_country,
+                                error_message=None,
+                            )
+
+                            result.add_success(email, refresh_result.to_dict())
+
+                            # 更新任务明细
+                            if task_id:
+                                try:
+                                    DBManager.update_refresh_task_item(
+                                        task_id=task_id,
+                                        email=email,
+                                        status="success",
+                                        result=refresh_result.to_dict(),
+                                    )
+                                except Exception:
+                                    pass
+
+                    finally:
+                        await engine.stop(close_browser=False)
+
+                else:
+                    # pro_only 模式：使用独立引擎（向后兼容）
+                    self._log(f"[{email}] Step 1: 检测 Pro 状态...")
+                    pro_status = await check_pro_status_via_stagehand(
+                        page=None,
+                        email=email,
+                        ws_endpoint=ws_endpoint,
+                        log=lambda msg: self._log(f"[{email}] {msg}"),
+                    )
+
+                    refresh_result = AccountMembershipRefreshResult.from_pro_status(
+                        email=email,
+                        is_pro=pro_status if pro_status else "detection_failed",
+                    )
+
+                    if pro_status is None:
+                        DBManager.update_pro_status(email, "detection_failed")
+                        result.add_failed(email, "检测失败", "detection_failed")
+                        self._log(f"[{email}] ❌ 检测 Pro 状态失败")
+                        self._update_task_item_failed(task_id, email, "检测失败")
+                    else:
+                        status_text_map = {
+                            "yes": "Pro",
+                            "family_yes": "Pro(家庭组)",
+                            "no": "非Pro",
+                        }
+                        status_text = status_text_map.get(pro_status, pro_status)
+                        self._log(f"[{email}] ✅ Pro 状态: {status_text}")
+
+                        # pro_only 模式：仅更新 is_pro 字段
+                        DBManager.update_pro_status(email, refresh_result.is_pro)
+                        result.add_success(email, refresh_result.to_dict())
+
+                # 检测完成后关闭浏览器
+                try:
+                    closeBrowser(browser_id)
+                    self._log(f"[{email}] 浏览器窗口已关闭")
+                except Exception as e:
+                    self._log(f"[{email}] 关闭窗口失败: {e}")
+
+            except Exception as e:
+                result.add_failed(email, str(e), "exception")
+                self._log(f"[{email}] ❌ 异常: {e}")
+                self._update_task_item_failed(task_id, email, str(e))
+                # 尝试关闭浏览器
+                try:
+                    closeBrowser(browser_id)
+                except Exception:
+                    pass
+
+    def _update_task_item_failed(self, task_id: int | None, email: str, error_message: str):
+        """更新任务明细为失败状态"""
+        if task_id:
+            try:
+                DBManager.update_refresh_task_item(
+                    task_id=task_id,
+                    email=email,
+                    status="failed",
+                    result={"error_message": error_message},
+                )
+            except Exception:
+                pass
+
+    async def _detect_family_details_via_browseruse(
+        self,
+        engine: "BrowserUseEngine",
+        email: str,
+        refresh_result: "AccountMembershipRefreshResult",
+    ):
+        """
+        检测家庭组详情 - 页面文本优先方案（Plan B）
+
+        策略：
+        1. 导航到 myaccount.google.com/family/details（唯一可靠 URL）
+        2. 先用 Playwright inner_text 提取页面文本
+        3. 用正则从页面文本提取：角色、管理员名、成员数、邮箱
+        4. AI 仅在管理员邮箱缺失时使用（可能需要点击成员头像）
+        5. 导航失败不级联影响后续步骤
+
+        已知页面文本示例（myaccount.google.com/family/details）：
+        ```
+        Your Family Group details
+        View and manage your Family Group options. Learn more
+        Dyg Gonzales  gonzalesdyg126@gmail.com  Member
+        By leaving Bruna's Family Group, you'll lose access to ...  Leave Family Group
+        ```
+        """
+        import re
+
+        try:
+            # 重要修复：如果已经是 family_yes（家庭组成员），角色一定是 member
+            # 这个逻辑放在最前面，确保即使后续失败也能设置正确的角色
+            if refresh_result.is_pro == "family_yes":
+                refresh_result.family_role = "member"
+                self._log(f"[{email}] 账号是 family_yes，角色固定为 member")
+
+            # ========== Step 1: 导航到家庭组页面 ==========
+            # 注意：只使用 myaccount.google.com，因为 families.google.com 被 SOCKS 代理阻断
+            family_url = "https://myaccount.google.com/family/details"
+            self._log(f"[{email}] 导航到家庭组页面: {family_url}")
+            nav_result = await engine.navigate(family_url, timeout=15000)
+
+            if not nav_result.success:
+                self._log(f"[{email}] 导航家庭组页面失败: {nav_result.error}")
+                return
+
+            # 等待页面加载
+            await asyncio.sleep(3)
+
+            # 检查是否导航到了错误页面（如 chrome-error://）
+            page = engine._page
+            if not page:
+                self._log(f"[{email}] Page 对象不可用")
+                return
+
+            actual_url = page.url
+            self._log(f"[{email}] 家庭组页面实际 URL: {actual_url}")
+
+            if "chrome-error" in actual_url or "about:blank" in actual_url:
+                self._log(f"[{email}] 页面加载失败（错误页面），跳过家庭组检测")
+                return
+
+            # ========== Step 2: 从页面文本提取信息（主要方法） ==========
+            self._log(f"[{email}] 从页面文本提取家庭组信息...")
+            try:
+                page_text = await page.inner_text("body")
+            except Exception as e:
+                self._log(f"[{email}] 获取页面文本失败: {e}")
+                return
+
+            page_text_lower = page_text.lower()
+            self._log(f"[{email}] 页面文本 (前500字): {page_text[:500].replace(chr(10), ' ')}")
+
+            # ---------- 2a: 判断是否有家庭组 ----------
+            # 有家庭组的标识
+            has_family_indicators = [
+                "your family group",       # 英文
+                "family group details",    # 英文
+                "家庭群组详细信息",          # 中文简体
+                "你的家庭群组",              # 中文简体
+                "您的家庭群组",              # 中文简体
+                "family manager",          # 英文
+                "家庭管理员",                # 中文简体
+                "家庭群组管理員",            # 中文繁体
+                "leave family",            # 英文（退出家庭组）
+                "退出家庭群组",              # 中文
+                "离开家庭群组",              # 中文
+            ]
+            # 无家庭组的标识
+            no_family_indicators = [
+                "create a family group",   # 英文
+                "创建家庭群组",              # 中文
+                "you can create",          # 英文
+                "start a family group",    # 英文
+                "no family group",         # 英文
+            ]
+
+            has_family = False
+            no_family = False
+            for indicator in has_family_indicators:
+                if indicator.lower() in page_text_lower:
+                    has_family = True
+                    self._log(f"[{email}] 检测到家庭组标识: '{indicator}'")
+                    break
+            for indicator in no_family_indicators:
+                if indicator.lower() in page_text_lower:
+                    no_family = True
+                    self._log(f"[{email}] 检测到无家庭组标识: '{indicator}'")
+                    break
+
+            if no_family and not has_family:
+                refresh_result.has_family_group = "no"
+                refresh_result.family_role = "none"
+                self._log(f"[{email}] 页面文本确认：无家庭组")
+                return
+            elif has_family:
+                refresh_result.has_family_group = "yes"
+            else:
+                self._log(f"[{email}] 无法从页面文本判断家庭组状态")
+                refresh_result.has_family_group = "unknown"
+
+            # ---------- 2b: 检测用户角色（Member vs Family manager） ----------
+            # 关键逻辑：
+            # - 如果页面文本包含 "Leave Family" / "退出家庭" → 当前用户是 member
+            # - 如果页面文本包含 "X's Family Group" → X 是管理员，当前用户是 member
+            # - 如果当前用户邮箱旁边标注 "Family manager" → 当前用户是 manager
+            # - 如果当前用户邮箱旁边标注 "Member" → 当前用户是 member
+
+            detected_role = None
+
+            # 方法1: 查找 "Leave Family Group" 按钮（只有 member 才能看到）
+            leave_patterns = [
+                r"leave\s+famil",           # "Leave Family Group" / "Leave Family"
+                r"退出家庭群组",
+                r"离开家庭群组",
+                r"退出家庭",
+            ]
+            for pattern in leave_patterns:
+                if re.search(pattern, page_text, re.IGNORECASE):
+                    detected_role = "member"
+                    self._log(f"[{email}] 页面文本检测到 'Leave Family' → 角色=member")
+                    break
+
+            # 方法2: 查找 "X's Family Group"（X 是管理员名字）
+            if not detected_role:
+                # 匹配 "Bruna's Family Group" / "xxx 的家庭群组"
+                manager_name_patterns = [
+                    r"(?:leaving|leave)\s+(\w+(?:\s+\w+)?)'s\s+family",  # "leaving Bruna's Family"
+                    r"(\w+(?:\s+\w+)?)'s\s+family\s+group",               # "Bruna's Family Group"
+                    r"(\S+)\s*的家庭群组",                                  # "xxx 的家庭群组"
+                ]
+                for pattern in manager_name_patterns:
+                    match = re.search(pattern, page_text, re.IGNORECASE)
+                    if match:
+                        manager_name = match.group(1).strip()
+                        detected_role = "member"
+                        self._log(f"[{email}] 页面文本检测到管理员名: '{manager_name}' → 角色=member")
+                        break
+
+            # 方法3: 查找当前用户邮箱附近的角色标注
+            if not detected_role:
+                # 提取当前用户邮箱前后的文本上下文
+                email_lower = email.lower()
+                email_pos = page_text_lower.find(email_lower)
+                if email_pos >= 0:
+                    # 取邮箱前后 200 个字符
+                    context_start = max(0, email_pos - 200)
+                    context_end = min(len(page_text), email_pos + len(email) + 200)
+                    email_context = page_text[context_start:context_end].lower()
+
+                    if "member" in email_context and "family manager" not in email_context:
+                        detected_role = "member"
+                        self._log(f"[{email}] 邮箱上下文检测到 'Member' → 角色=member")
+                    elif "family manager" in email_context or "家庭管理员" in email_context:
+                        detected_role = "manager"
+                        self._log(f"[{email}] 邮箱上下文检测到 'Family manager' → 角色=manager")
+
+            # 方法4: 查找 "Delete Family Group" 按钮（只有 manager 才能看到）
+            if not detected_role:
+                manager_only_patterns = [
+                    r"delete\s+family\s+group",  # 只有管理员才有删除按钮
+                    r"删除家庭群组",
+                    r"invite\s+family\s+member",  # 只有管理员才能邀请
+                    r"邀请家庭成员",
+                    r"add\s+family\s+member",     # 添加成员
+                    r"添加家庭成员",
+                ]
+                for pattern in manager_only_patterns:
+                    if re.search(pattern, page_text, re.IGNORECASE):
+                        detected_role = "manager"
+                        self._log(f"[{email}] 页面文本检测到管理员专属按钮 → 角色=manager")
+                        break
+
+            # 应用检测到的角色（如果 is_pro 不是 family_yes，才使用页面文本检测结果）
+            if detected_role:
+                if refresh_result.is_pro == "family_yes":
+                    # family_yes 的角色已固定为 member，不覆盖
+                    self._log(f"[{email}] family_yes 角色固定为 member，忽略页面文本检测到的: {detected_role}")
+                else:
+                    refresh_result.family_role = detected_role
+                    self._log(f"[{email}] 页面文本最终角色: {detected_role}")
+
+            # ---------- 2c: 提取成员数量 ----------
+            # 方法1: 正则匹配 "X members" / "X 位成员"
+            count_patterns = [
+                r'(\d+)\s*(?:family\s+)?members?',
+                r'(\d+)\s*位\s*(?:家庭)?成员',
+                r'(\d+)\s*人',
+                r'家庭群组\s*\((\d+)\)',
+            ]
+            for pattern in count_patterns:
+                match = re.search(pattern, page_text, re.IGNORECASE)
+                if match:
+                    count = int(match.group(1))
+                    if 1 <= count <= 6:
+                        refresh_result.family_member_count = count
+                        self._log(f"[{email}] 页面文本提取成员数: {count}")
+                        break
+
+            # 方法2: 统计页面上的邮箱地址数量
+            if refresh_result.family_member_count == 0:
+                emails_found = re.findall(r'[\w.+-]+@[\w-]+\.\w+', page_text)
+                unique_emails = set(
+                    e for e in emails_found
+                    if 'support' not in e.lower()
+                    and 'help' not in e.lower()
+                    and 'noreply' not in e.lower()
+                    and not e.lower().endswith('@google.com')
+                )
+                if len(unique_emails) >= 1:
+                    # 注意：页面可能只显示当前用户的邮箱
+                    # 如果检测到 has_family_group=yes 且角色=member，至少有 2 人
+                    count = len(unique_emails)
+                    if refresh_result.has_family_group == "yes" and count == 1:
+                        count = 2  # 至少有管理员 + 当前用户
+                    if 1 <= count <= 6:
+                        refresh_result.family_member_count = count
+                        self._log(f"[{email}] 通过邮箱计数提取成员数: {count} (页面邮箱: {unique_emails})")
+
+            # 方法3: 默认值
+            if refresh_result.family_member_count == 0 and refresh_result.has_family_group == "yes":
+                refresh_result.family_member_count = 2  # 至少有管理员 + 当前用户
+                self._log(f"[{email}] 默认成员数: 2")
+
+            # ---------- 2d: 提取管理员邮箱（从页面文本） ----------
+            if not refresh_result.family_manager_email:
+                # 从页面文本中查找邮箱
+                emails_found = re.findall(r'[\w.+-]+@[\w-]+\.\w+', page_text)
+                # 过滤：排除当前用户邮箱和系统邮箱
+                candidate_emails = [
+                    e for e in emails_found
+                    if e.lower() != email.lower()
+                    and 'support' not in e.lower()
+                    and 'help' not in e.lower()
+                    and 'noreply' not in e.lower()
+                    and not e.lower().endswith('@google.com')
+                ]
+                if candidate_emails:
+                    refresh_result.family_manager_email = candidate_emails[0]
+                    self._log(f"[{email}] 页面文本提取管理员邮箱: {candidate_emails[0]}")
+
+            # ========== Step 3: AI 补充提取（仅在管理员邮箱缺失时） ==========
+            if not refresh_result.family_manager_email and refresh_result.has_family_group == "yes":
+                self._log(f"[{email}] 管理员邮箱仍为空，使用 AI 尝试提取...")
+                try:
+                    extract_result = await engine.extract(
+                        instruction="""Look at this Google Family page. I need the family manager's EMAIL ADDRESS.
+
+The family manager is the person who created/manages this family group.
+Their email should be visible on this page as text, OR you may need to click on their name/profile to reveal it.
+
+IMPORTANT: Look for email addresses in format like name@gmail.com
+- Check near each person's name
+- If emails are hidden, try clicking on the family manager's name or profile picture
+
+Return ONLY a JSON object:
+{"family_manager_email": "email@gmail.com"}
+
+If truly not found after clicking, return: {"family_manager_email": ""}""",
+                        timeout=30000,
+                        max_steps=6,
+                    )
+
+                    if extract_result.success and extract_result.data:
+                        data = extract_result.data
+                        self._log(f"[{email}] AI 管理员邮箱提取结果: {data}")
+
+                        # 处理 {'content': '...'} 包装格式
+                        if isinstance(data, dict) and "content" in data and len(data) == 1:
+                            content_str = data.get("content", "")
+                            # 从文本中提取邮箱
+                            email_match = re.search(r'[\w.+-]+@[\w-]+\.[\w.]+', content_str)
+                            if email_match:
+                                found_email = email_match.group(0)
+                                if found_email.lower() != email.lower():
+                                    data = {"family_manager_email": found_email}
+                            # 尝试提取 JSON
+                            import json as _json
+                            json_match = re.search(r'\{[^{}]*"family_manager_email"[^{}]*\}', content_str)
+                            if json_match:
+                                try:
+                                    data = _json.loads(json_match.group())
+                                except _json.JSONDecodeError:
+                                    pass
+
+                        if isinstance(data, dict):
+                            mgr_email = data.get("family_manager_email", "")
+                            if mgr_email and "@" in mgr_email and mgr_email.lower() != email.lower():
+                                refresh_result.family_manager_email = mgr_email
+                                self._log(f"[{email}] ✅ AI 提取管理员邮箱成功: {mgr_email}")
+                            else:
+                                self._log(f"[{email}] AI 未找到管理员邮箱")
+                    else:
+                        self._log(f"[{email}] AI 提取失败: {extract_result.error}")
+
+                except Exception as e:
+                    self._log(f"[{email}] AI 提取管理员邮箱异常: {e}")
+
+            self._log(f"[{email}] 家庭组: has={refresh_result.has_family_group}, role={refresh_result.family_role}, count={refresh_result.family_member_count}, manager_email={refresh_result.family_manager_email}")
+
+        except Exception as e:
+            self._log(f"[{email}] 家庭组检测失败: {e}")
+
+    async def _extract_account_country_via_browseruse(
+        self,
+        engine: "BrowserUseEngine",
+        email: str,
+        refresh_result: "AccountMembershipRefreshResult",
+    ):
+        """
+        使用 BrowserUseEngine AI 提取账户国家
+        """
+        try:
+            # ========== 导航错误恢复 ==========
+            # 如果之前的步骤导致浏览器停留在 chrome-error 页面，需要先恢复
+            try:
+                page = engine._page
+                if page:
+                    current_url = page.url
+                    if "chrome-error" in current_url or "about:blank" in current_url:
+                        self._log(f"[{email}] 检测到错误页面 ({current_url})，尝试恢复...")
+                        # 先导航到一个简单的 Google 页面恢复状态
+                        recovery_result = await engine.navigate(
+                            "https://myaccount.google.com",
+                            timeout=15000,
+                        )
+                        if not recovery_result.success:
+                            self._log(f"[{email}] 页面恢复失败，跳过国家提取")
+                            refresh_result.account_country = "unknown"
+                            return
+                        await asyncio.sleep(2)
+            except Exception as e:
+                self._log(f"[{email}] 检查页面状态异常: {e}")
+
+            # 导航到 Google 账号设置页面
+            self._log(f"[{email}] BrowserUseEngine: 导航到账号设置页面...")
+            nav_result = await engine.navigate(
+                "https://myaccount.google.com/personal-info",
+                timeout=15000,
+            )
+            if not nav_result.success:
+                self._log(f"[{email}] 导航账号设置页面失败: {nav_result.error}")
+                refresh_result.account_country = "unknown"
+                return
+
+            # 检查导航后是否又到了错误页面
+            try:
+                page = engine._page
+                if page and ("chrome-error" in page.url or "about:blank" in page.url):
+                    self._log(f"[{email}] 导航后仍在错误页面，跳过国家提取")
+                    refresh_result.account_country = "unknown"
+                    return
+            except Exception:
+                pass
+
+            # 等待页面加载
+            await asyncio.sleep(2)
+
+            # 使用 AI 提取国家信息
+            self._log(f"[{email}] BrowserUseEngine: 使用 AI 提取国家信息...")
+
+            extract_instruction = """Analyze this Google Account personal info page and find the user's country/region.
+
+Look for:
+- "Country/Region" field and its value
+- Location or address information
+- Any country name displayed on the page
+
+Return ONLY a valid JSON object with one key:
+- account_country: The country name in English (e.g., "United States", "China", "Japan", "United Kingdom")
+  - Return "unknown" if the country cannot be determined"""
+
+            extract_result = await engine.extract(
+                instruction=extract_instruction,
+                schema=AccountCountryExtractModel if AccountCountryExtractModel else None,
+                timeout=30000,
+                max_steps=10,
+            )
+
+            if extract_result.success and extract_result.data:
+                data = extract_result.data
+                self._log(f"[{email}] AI 提取国家结果: {data}")
+
+                # 处理 {'content': '...'} 包装格式
+                if isinstance(data, dict) and "content" in data and len(data) == 1:
+                    content_str = data.get("content", "")
+                    import re
+                    json_match = re.search(r'\{[^{}]*"account_country"[^{}]*\}', content_str, re.DOTALL)
+                    if json_match:
+                        try:
+                            import json
+                            data = json.loads(json_match.group())
+                            self._log(f"[{email}] 从 content 中提取 JSON: {data}")
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        # AI 返回自然语言，尝试从中提取国家名
+                        country_patterns = [
+                            r'(?:country|国家|地区|region)\s*(?:is|为|：|:)\s*([A-Z][a-zA-Z\s]+)',
+                            r'(?:United States|United Kingdom|China|Japan|South Korea|Germany|France|Brazil|India|Canada|Australia|Mexico|Russia|Italy|Spain|Netherlands|Turkey|Indonesia|Thailand|Vietnam|Philippines|Malaysia|Singapore|Taiwan|Hong Kong)',
+                        ]
+                        for pattern in country_patterns:
+                            match = re.search(pattern, content_str, re.IGNORECASE)
+                            if match:
+                                country_name = match.group(1).strip() if match.lastindex else match.group(0).strip()
+                                data = {"account_country": country_name}
+                                self._log(f"[{email}] 从自然语言中提取国家: {country_name}")
+                                break
+
+                if isinstance(data, dict):
+                    country = data.get("account_country", "unknown")
+                    if country and country != "unknown":
+                        refresh_result.account_country = country
+                        self._log(f"[{email}] 检测到国家: {country}")
+                        return
+                else:
+                    self._log(f"[{email}] AI 返回非字典类型数据: {type(data)}")
+
+            refresh_result.account_country = "unknown"
+            self._log(f"[{email}] 未检测到国家，设为 unknown")
+
+        except Exception as e:
+            self._log(f"[{email}] BrowserUseEngine 国家提取失败: {e}")
+            refresh_result.account_country = "unknown"
 
 
 # ==================== 便捷函数 ====================

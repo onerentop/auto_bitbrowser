@@ -622,3 +622,82 @@ class AccountRepository:
         except Exception as error:
             print(f"[DB ERROR] get_family_pro_accounts 失败: {error}")
             return []
+
+    @staticmethod
+    def update_membership_info(
+        email: str,
+        is_pro: str,
+        pro_plan_name: str,
+        family_role: str,
+        family_manager_email: str,
+        has_family_group: str,
+        family_member_count: int,
+        family_slots_left: int,
+        account_country: str,
+        error_message: str | None,
+        connection_factory: ConnectionFactory,
+        db_lock: Lock,
+    ) -> bool:
+        """
+        更新账号会员信息（刷新家庭组信息专用）。
+
+        Args:
+            email: 账号邮箱
+            is_pro: Pro 状态 (yes/no/family_yes/detection_failed)
+            pro_plan_name: Pro 计划名称
+            family_role: 家庭组角色 (manager/member/none/unknown)
+            family_manager_email: 家庭组管理员邮箱
+            has_family_group: 是否有家庭组 (yes/no/unknown)
+            family_member_count: 家庭成员数量
+            family_slots_left: 剩余家庭组位置
+            account_country: 账户所属国家
+            error_message: 刷新错误信息
+            connection_factory: 数据库连接工厂
+            db_lock: 数据库锁
+
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            with db_lock:
+                conn = connection_factory()
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE accounts SET
+                        is_pro = ?,
+                        pro_plan_name = ?,
+                        family_role = ?,
+                        family_manager_email = ?,
+                        has_family_group = ?,
+                        family_member_count = ?,
+                        family_slots_left = ?,
+                        account_country = ?,
+                        family_info_refresh_error = ?,
+                        family_info_refreshed_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE email = ?
+                    """,
+                    (
+                        is_pro,
+                        pro_plan_name,
+                        family_role,
+                        family_manager_email,
+                        has_family_group,
+                        family_member_count,
+                        family_slots_left,
+                        account_country,
+                        error_message,
+                        email,
+                    ),
+                )
+                conn.commit()
+                affected = cursor.rowcount
+                conn.close()
+
+                if affected > 0:
+                    print(f"[DB] 更新会员信息: {email} -> is_pro={is_pro}, role={family_role}")
+                return affected > 0
+        except Exception as error:
+            print(f"[DB ERROR] update_membership_info 失败: {error}")
+            return False

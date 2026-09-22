@@ -25,21 +25,21 @@ from application.sub2api_settings_service import (
     Sub2APISettingsSnapshot,
 )
 
-# 尝试导入 AI Agent 模块
-try:
-    from core.ai_browser_agent import VisionAnalyzer, create_llm, get_available_providers, LLM_ABSTRACTION_AVAILABLE
-    AI_AGENT_AVAILABLE = True
-except ImportError:
-    AI_AGENT_AVAILABLE = False
-    VisionAnalyzer = None
-    create_llm = None
-    get_available_providers = None
-    LLM_ABSTRACTION_AVAILABLE = False
+import time as _time
 
 
 class TestAIConnectionWorker(QThread):
-    """测试 AI 连接的后台线程（支持多提供商）"""
+    """测试 AI 连接的后台线程（支持多提供商）— 根据提供商自动选择 OpenAI / Anthropic 协议"""
     finished_signal = pyqtSignal(bool, str, dict)  # success, message, details
+
+    _DEFAULT_BASE_URLS = {
+        "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "anthropic": "https://api.anthropic.com",
+    }
+    _DEFAULT_MODELS = {
+        "gemini": "gemini-2.0-flash",
+        "anthropic": "claude-sonnet-4-20250514",
+    }
 
     def __init__(
         self,
@@ -56,45 +56,85 @@ class TestAIConnectionWorker(QThread):
 
     def run(self):
         try:
-            if not AI_AGENT_AVAILABLE:
-                self.finished_signal.emit(False, "AI Agent 模块不可用", {})
-                return
-
             if not self.api_key:
                 self.finished_signal.emit(False, "请输入 API Key", {})
                 return
 
-            # 优先使用 LLM 抽象层
-            if LLM_ABSTRACTION_AVAILABLE and create_llm:
-                try:
-                    llm = create_llm(
-                        provider=self.provider,
-                        api_key=self.api_key,
-                        base_url=self.base_url or None,
-                        model=self.model or None,
-                    )
-                    success, message, details = llm.test_connection()
-                    self.finished_signal.emit(success, message, details)
-                    return
-                except Exception as e:
-                    # 回退到 VisionAnalyzer
-                    pass
+            base_url = self.base_url or self._DEFAULT_BASE_URLS.get(self.provider, "")
+            model = self.model or self._DEFAULT_MODELS.get(self.provider, "")
 
-            # 回退: 使用 VisionAnalyzer
-            if VisionAnalyzer:
-                analyzer = VisionAnalyzer(
-                    api_key=self.api_key,
-                    base_url=self.base_url or None,
-                    model=self.model,
-                    provider=self.provider,
-                )
-                success, message, details = analyzer.test_connection()
-                self.finished_signal.emit(success, message, details)
+            if not base_url:
+                self.finished_signal.emit(False, f"未知提供商 '{self.provider}'，请手动填写 Base URL", {})
+                return
+
+            if self.provider == "anthropic":
+                self._test_anthropic(base_url, model)
             else:
-                self.finished_signal.emit(False, "VisionAnalyzer 不可用", {})
+                self._test_openai_compat(base_url, model)
 
         except Exception as e:
             self.finished_signal.emit(False, f"测试失败: {str(e)}", {"error": str(e)})
+
+    # ---------- Gemini / OpenAI 兼容协议 ----------
+    def _test_openai_compat(self, base_url: str, model: str):
+        try:
+            from openai import OpenAI
+        except ImportError:
+            self.finished_signal.emit(False, "缺少 openai 库，请运行: pip install openai", {})
+            return
+
+        client = OpenAI(api_key=self.api_key, base_url=base_url, timeout=30)
+        start = _time.time()
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Hi, reply with OK"}],
+            max_tokens=10,
+        )
+        elapsed_ms = int((_time.time() - start) * 1000)
+
+        content = (response.choices[0].message.content or "").strip() if response.choices else ""
+        actual_model = getattr(response, "model", model)
+
+        self.finished_signal.emit(True, "连接测试成功", {
+            "provider": self.provider,
+            "model": actual_model,
+            "response_time_ms": elapsed_ms,
+            "response_preview": content[:100],
+        })
+
+    # ---------- Anthropic 原生协议 ----------
+    def _test_anthropic(self, base_url: str, model: str):
+        try:
+            from anthropic import Anthropic
+        except ImportError:
+            self.finished_signal.emit(False, "缺少 anthropic 库，请运行: pip install anthropic", {})
+            return
+
+        # base_url 末尾不需要 /v1，anthropic 库会自动拼接
+        base_url = base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+
+        client = Anthropic(api_key=self.api_key, base_url=base_url, timeout=30.0)
+        start = _time.time()
+        response = client.messages.create(
+            model=model,
+            messages=[{"role": "user", "content": "Hi, reply with OK"}],
+            max_tokens=10,
+        )
+        elapsed_ms = int((_time.time() - start) * 1000)
+
+        content = ""
+        if response.content:
+            content = response.content[0].text.strip() if hasattr(response.content[0], "text") else ""
+        actual_model = getattr(response, "model", model)
+
+        self.finished_signal.emit(True, "连接测试成功", {
+            "provider": self.provider,
+            "model": actual_model,
+            "response_time_ms": elapsed_ms,
+            "response_preview": content[:100],
+        })
 
 
 # ============================================================

@@ -143,6 +143,58 @@ class DBManager:
             except sqlite3.OperationalError:
                 pass  # 列已存在
 
+            # ==================== 家庭组信息刷新扩展字段 ====================
+
+            # 动态添加 pro_plan_name 列（Pro 计划名称，如 "Premium 2TB"）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN pro_plan_name TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_role 列（家庭组角色）
+            # 状态值: manager / member / none / unknown
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_role TEXT DEFAULT 'unknown'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_manager_email 列（家庭组管理员邮箱）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_manager_email TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 has_family_group 列（是否有家庭组）
+            # 状态值: yes / no / unknown
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN has_family_group TEXT DEFAULT 'unknown'")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 account_country 列（账户所属国家）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN account_country TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_slots_left 列（剩余家庭组位置，-1 表示不适用）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_slots_left INTEGER DEFAULT -1")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_info_refreshed_at 列（家庭组信息最后刷新时间）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_info_refreshed_at TIMESTAMP")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
+            # 动态添加 family_info_refresh_error 列（家庭组信息刷新错误）
+            try:
+                cursor.execute("ALTER TABLE accounts ADD COLUMN family_info_refresh_error TEXT")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+
             # 创建卡片表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS cards (
@@ -180,6 +232,51 @@ class DBManager:
                     bound_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (proxy_id) REFERENCES proxies(id) ON DELETE CASCADE,
                     UNIQUE(browser_id)
+                )
+            ''')
+
+            # ==================== 账号刷新任务表 ====================
+
+            # 创建账号刷新任务主表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS account_refresh_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_type TEXT NOT NULL DEFAULT 'family_info_refresh',
+                    task_mode TEXT NOT NULL DEFAULT 'full',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    scope_type TEXT DEFAULT 'selected',
+                    total_count INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    progress_current INTEGER DEFAULT 0,
+                    progress_percent REAL DEFAULT 0.0,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT DEFAULT 'gui',
+                    note TEXT
+                )
+            ''')
+
+            # 创建账号刷新任务明细表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS account_refresh_task_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER NOT NULL,
+                    email TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error_message TEXT,
+                    is_pro TEXT,
+                    pro_plan_name TEXT,
+                    family_role TEXT,
+                    family_manager_email TEXT,
+                    has_family_group TEXT,
+                    family_member_count INTEGER,
+                    family_slots_left INTEGER,
+                    account_country TEXT,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    FOREIGN KEY (task_id) REFERENCES account_refresh_tasks(id) ON DELETE CASCADE
                 )
             ''')
 
@@ -1149,4 +1246,169 @@ class DBManager:
             list: 家庭组 Pro 账户列表
         """
         return AccountRepository.get_family_pro_accounts(DBManager.get_connection, lock)
+
+    # ==================== 账号刷新任务管理 ====================
+
+    @staticmethod
+    def create_refresh_task(task_mode: str, total_count: int) -> int:
+        """
+        创建账号刷新任务
+
+        Args:
+            task_mode: 任务模式 ('pro_only' | 'full')
+            total_count: 总账号数
+
+        Returns:
+            int: 新建任务的 ID
+        """
+        from services.repositories import AccountRefreshRepository
+        return AccountRefreshRepository.create_refresh_task(
+            task_mode,
+            total_count,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def create_refresh_task_items(task_id: int, emails: list):
+        """
+        批量创建刷新任务明细
+
+        Args:
+            task_id: 任务 ID
+            emails: 邮箱列表
+        """
+        from services.repositories import AccountRefreshRepository
+        AccountRefreshRepository.create_task_items(
+            task_id,
+            emails,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def update_refresh_task_item_started(task_id: int, email: str):
+        """
+        标记刷新任务明细开始执行
+
+        Args:
+            task_id: 任务 ID
+            email: 账号邮箱
+        """
+        from services.repositories import AccountRefreshRepository
+        AccountRefreshRepository.update_task_item_started(
+            task_id,
+            email,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def update_refresh_task_item(task_id: int, email: str, status: str, result: dict):
+        """
+        更新刷新任务明细
+
+        Args:
+            task_id: 任务 ID
+            email: 账号邮箱
+            status: 状态 ('success' | 'failed' | 'skipped')
+            result: 刷新结果字典
+        """
+        from services.repositories import AccountRefreshRepository
+        AccountRefreshRepository.update_task_item(
+            task_id,
+            email,
+            status,
+            result,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def update_refresh_task_progress(task_id: int, progress_current: int, success_count: int, failed_count: int):
+        """
+        更新刷新任务进度
+
+        Args:
+            task_id: 任务 ID
+            progress_current: 当前进度
+            success_count: 成功数
+            failed_count: 失败数
+        """
+        from services.repositories import AccountRefreshRepository
+        AccountRefreshRepository.update_task_progress(
+            task_id,
+            progress_current,
+            success_count,
+            failed_count,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def finish_refresh_task(task_id: int, status: str, success_count: int, failed_count: int):
+        """
+        完成刷新任务
+
+        Args:
+            task_id: 任务 ID
+            status: 最终状态 ('completed' | 'failed' | 'stopped')
+            success_count: 成功数
+            failed_count: 失败数
+        """
+        from services.repositories import AccountRefreshRepository
+        AccountRefreshRepository.finish_task(
+            task_id,
+            status,
+            success_count,
+            failed_count,
+            DBManager.get_connection,
+            lock,
+        )
+
+    @staticmethod
+    def update_membership_info(
+        email: str,
+        is_pro: str,
+        pro_plan_name: str = "",
+        family_role: str = "unknown",
+        family_manager_email: str = "",
+        has_family_group: str = "unknown",
+        family_member_count: int = 0,
+        family_slots_left: int = -1,
+        account_country: str = "",
+        error_message: str = None,
+    ) -> bool:
+        """
+        更新账号会员信息
+
+        Args:
+            email: 账号邮箱
+            is_pro: Pro 状态 (yes/no/family_yes/detection_failed)
+            pro_plan_name: Pro 计划名称
+            family_role: 家庭组角色 (manager/member/none/unknown)
+            family_manager_email: 家庭组管理员邮箱
+            has_family_group: 是否有家庭组 (yes/no/unknown)
+            family_member_count: 家庭成员数量
+            family_slots_left: 剩余家庭组位置
+            account_country: 账户所属国家
+            error_message: 刷新错误信息
+
+        Returns:
+            bool: 是否更新成功
+        """
+        return AccountRepository.update_membership_info(
+            email,
+            is_pro,
+            pro_plan_name,
+            family_role,
+            family_manager_email,
+            has_family_group,
+            family_member_count,
+            family_slots_left,
+            account_country,
+            error_message,
+            DBManager.get_connection,
+            lock,
+        )
 

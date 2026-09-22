@@ -402,6 +402,10 @@ def create_llm_adapter(
     # 默认值
     provider = (provider or "openai").lower()
 
+    # 提供商别名映射 (ConfigManager 用 "gemini"，适配器用 "google")
+    _PROVIDER_ALIASES = {"gemini": "google"}
+    provider = _PROVIDER_ALIASES.get(provider, provider)
+
     # 默认模型
     default_models = {
         "openai": "gpt-4o",
@@ -420,9 +424,13 @@ def create_llm_adapter(
             max_tokens=max_tokens,
         )
     elif provider == "google":
-        return GoogleAdapter(
+        # 使用 Gemini 的 OpenAI 兼容端点，无需安装 google-generativeai
+        gemini_base_url = base_url or "https://generativelanguage.googleapis.com/v1beta/openai"
+        gemini_api_key = api_key or os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+        return OpenAIAdapter(
             model=model,
-            api_key=api_key,
+            api_key=gemini_api_key,
+            base_url=gemini_base_url,
             temperature=temperature,
             max_tokens=max_tokens,
         )

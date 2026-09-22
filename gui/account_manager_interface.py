@@ -207,6 +207,12 @@ class AccountManagerInterface(BaseInterface):
         self.btnDetectPro.clicked.connect(self.onDetectPro)
         toolbar1Layout.addWidget(self.btnDetectPro)
 
+        # 刷新家庭组信息
+        self.btnRefreshFamilyInfo = PushButton(FIF.UPDATE, "刷新家庭组", self)
+        self.btnRefreshFamilyInfo.setToolTip("刷新选中账号的完整会员信息（Pro状态、家庭组、国家）")
+        self.btnRefreshFamilyInfo.clicked.connect(self.onRefreshFamilyInfo)
+        toolbar1Layout.addWidget(self.btnRefreshFamilyInfo)
+
         # 一键加入家庭组
         self.btnBatchJoinFamily = PushButton(FIF.PEOPLE, "一键加入家庭组", self)
         self.btnBatchJoinFamily.setToolTip("批量将普通账户加入到 Pro 账户的家庭组")
@@ -1050,6 +1056,48 @@ class AccountManagerInterface(BaseInterface):
 
         self._startTask("detect_pro", valid_accounts, valid_browser_ids)
 
+    def onRefreshFamilyInfo(self):
+        """刷新选中账号的完整会员信息（Pro状态、家庭组、国家）"""
+        accounts, browser_ids = self._getSelectedAccounts()
+
+        if not accounts:
+            self._showInfo("提示", "请先选择要刷新的账号")
+            return
+
+        (
+            valid_accounts,
+            valid_browser_ids,
+            skipped_not_logged,
+            skipped_no_browser,
+        ) = AccountManagerService.prepare_detect_pro_candidates(accounts, browser_ids)
+
+        if not valid_accounts:
+            msg = AccountManagerService.build_no_detect_pro_candidates_message(
+                skipped_not_logged=skipped_not_logged,
+                skipped_no_browser=skipped_no_browser,
+            )
+            self._showWarning("警告", msg)
+            return
+
+        # 构建确认消息
+        confirm_msg = f"将刷新 {len(valid_accounts)} 个账号的完整会员信息：\n"
+        confirm_msg += "• Pro 会员状态\n"
+        confirm_msg += "• 家庭组详情（角色、管理员、成员数）\n"
+        confirm_msg += "• 账户所属国家\n"
+
+        if skipped_not_logged:
+            confirm_msg += f"\n⚠️ 跳过 {len(skipped_not_logged)} 个未登录账号"
+        if skipped_no_browser:
+            confirm_msg += f"\n⚠️ 跳过 {len(skipped_no_browser)} 个未绑定窗口账号"
+
+        confirm_msg += "\n\n是否继续？"
+
+        w = MessageBox("确认刷新", confirm_msg, self)
+        if not w.exec():
+            return
+
+        self._startTask("refresh_membership_info", valid_accounts, valid_browser_ids)
+
     def onDetect403(self):
         """检测 403 需要解锁的账号（异步执行）- 只检测选中的账号"""
         if not self._checkTaskConflicts(include_detect_403=True):
@@ -1371,6 +1419,14 @@ class AccountManagerInterface(BaseInterface):
             pro_family_count = summary.get("pro_family_count", 0)
             non_pro_count = summary.get("non_pro_count", 0)
             self.log(f"Pro 检测完成: Pro {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
+        elif task_type == "refresh_membership_info":
+            r = result.get("result", {})
+            results_list = r.get("results", [])
+            summary = next((item for item in results_list if item.get("_summary")), {})
+            pro_regular_count = summary.get("pro_regular_count", 0)
+            pro_family_count = summary.get("pro_family_count", 0)
+            non_pro_count = summary.get("non_pro_count", 0)
+            self.log(f"会员信息刷新完成: Pro {pro_regular_count}, Pro(家庭组) {pro_family_count}, 非Pro {non_pro_count}, 失败 {r.get('failed_count', 0)}")
 
         self._loadData()
 
@@ -1393,6 +1449,7 @@ class AccountManagerInterface(BaseInterface):
         self.btnLoginOAuth.setEnabled(enabled)
         self.btnBatchBind.setEnabled(enabled)
         self.btnDetectPro.setEnabled(enabled)
+        self.btnRefreshFamilyInfo.setEnabled(enabled)
         self.btnBatchJoinFamily.setEnabled(enabled)
         self.btnEnableFamilySharing.setEnabled(enabled)
         self.btnDetect403.setEnabled(enabled)

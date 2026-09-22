@@ -190,6 +190,7 @@ class EngineProtocol(Protocol):
         instruction: str,
         schema: Optional[Type[T]] = None,
         timeout: float = 30000,
+        max_steps: int = 10,
     ) -> ExtractResult:
         """
         提取页面数据
@@ -200,6 +201,7 @@ class EngineProtocol(Protocol):
             instruction: 提取描述 (如 "提取所有商品价格")
             schema: Pydantic 模型类，用于结构化输出
             timeout: 超时时间（毫秒）
+            max_steps: AI Agent 最大步数 (默认 10)
 
         Returns:
             ExtractResult

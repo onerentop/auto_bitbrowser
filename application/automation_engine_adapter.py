@@ -84,10 +84,22 @@ class AutomationEngineAdapter:
             )
             return {"type": "unlock_403", "result": result.to_dict()}
 
-        if task_type == "detect_pro":
-            result = await processor.batch_detect_pro(
+        if task_type == "refresh_membership_info":
+            # 获取 mode 参数，默认为 full
+            mode = "full"
+            result = await processor.batch_refresh_membership_info(
                 accounts=list(accounts),
                 browser_ids=list(browser_ids),
+                mode=mode,
+            )
+            return {"type": "refresh_membership_info", "result": result.to_dict()}
+
+        if task_type == "detect_pro":
+            # 兼容现有 detect_pro，内部转发到 pro_only 模式的刷新
+            result = await processor.batch_refresh_membership_info(
+                accounts=list(accounts),
+                browser_ids=list(browser_ids),
+                mode="pro_only",
             )
             return {"type": "detect_pro", "result": result.to_dict()}
 

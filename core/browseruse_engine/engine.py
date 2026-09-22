@@ -137,6 +137,7 @@ class BrowserUseEngine:
         self._cdp_mode = False
         self._cdp_url: Optional[str] = None
         self._browser_id: Optional[str] = None
+        self._playwright: Optional[Any] = None  # Playwright 实例（需要在 stop() 中关闭）
         self._close_browser_on_exit = False
 
     async def __aenter__(self) -> "BrowserUseEngine":
@@ -251,6 +252,7 @@ class BrowserUseEngine:
             from playwright.async_api import async_playwright
 
             playwright = await async_playwright().start()
+            self._playwright = playwright  # 存储以便 stop() 清理
             self._browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
 
             # 获取默认上下文和页面
@@ -276,6 +278,21 @@ class BrowserUseEngine:
 
         except Exception as e:
             logger.error(f"CDP 连接失败: {e}")
+            # 清理已分配的资源，避免泄漏
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+                self._browser = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception:
+                    pass
+                self._playwright = None
+            self._page = None
+            self._context = None
             self._cdp_mode = False
             self._cdp_url = None
             raise RuntimeError(f"CDP 连接失败: {e}")
@@ -359,6 +376,20 @@ class BrowserUseEngine:
                 - False: 不关闭
         """
         if not self._initialized:
+            # 即使未完全初始化，也要清理可能已分配的底层资源
+            # （例如 connect_cdp 中 _initialize_components 失败的情况）
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+                self._browser = None
+            if self._playwright:
+                try:
+                    await self._playwright.stop()
+                except Exception:
+                    pass
+                self._playwright = None
             return
 
         logger.info("正在关闭 BrowserUseEngine...")
@@ -388,6 +419,14 @@ class BrowserUseEngine:
 
                 self._cdp_url = None
                 self._browser_id = None
+
+                # 关闭 Playwright 实例（避免资源泄漏）
+                if self._playwright:
+                    try:
+                        await self._playwright.stop()
+                    except Exception as e:
+                        logger.debug(f"关闭 Playwright 实例时出错: {e}")
+                    self._playwright = None
             else:
                 # 本地模式: 关闭浏览器
                 if self._context:
@@ -403,6 +442,14 @@ class BrowserUseEngine:
                     except Exception:
                         pass
                     self._browser = None
+
+                # 本地模式也需要清理 Playwright 实例
+                if self._playwright:
+                    try:
+                        await self._playwright.stop()
+                    except Exception:
+                        pass
+                    self._playwright = None
 
             self._page = None
             self._dom_service = None
@@ -552,6 +599,7 @@ class BrowserUseEngine:
         instruction: str,
         schema: Optional[Type[T]] = None,
         timeout: float = 30000,
+        max_steps: int = 10,
     ) -> ExtractResult:
         """
         提取页面数据
@@ -562,6 +610,7 @@ class BrowserUseEngine:
             instruction: 提取描述 (如 "提取所有商品价格")
             schema: Pydantic 模型类，用于结构化输出
             timeout: 超时时间（毫秒）
+            max_steps: AI Agent 最大步数 (默认 10)
 
         Returns:
             ExtractResult
@@ -583,7 +632,7 @@ class BrowserUseEngine:
             # 使用 Agent 执行提取
             result = await self._agent_service.run(
                 task=extract_task,
-                max_steps=3,
+                max_steps=max_steps,
             )
             duration_ms = (time.time() - start_time) * 1000
 

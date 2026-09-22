@@ -360,7 +360,7 @@ class DOMService:
         screenshot_base64 = None
         if include_screenshot:
             try:
-                screenshot_bytes = await self.page.screenshot(type="png")
+                screenshot_bytes = await self.page.screenshot(type="png", timeout=10000)
                 import base64
                 screenshot_base64 = base64.b64encode(screenshot_bytes).decode()
             except Exception as e:
