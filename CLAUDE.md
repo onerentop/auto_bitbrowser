@@ -8,6 +8,7 @@
 
 | Date | Changes |
 | ------ | --------- |
+| 2026-09-23 | **移除 5 个功能**：SheerID 验证、绑卡订阅、获取 SheerLink、综合查询、全自动订阅占位页，连同卡片管理标签页与底层引擎操作一并删除；同步删除失效的 `gui/config_ui.py` |
 | 2026-09-23 | **全面重写**：修正已失效的架构描述（`core/ai_browser_agent/` 早已删除）；补充双 AI 引擎、`application/` 应用服务层、`services/repositories/` 仓储层、Fluent GUI 实际界面清单；新增 `pytest.ini` 与测试基线说明 |
 | 2026-02-02 | AI context 初始化（**此版本描述的架构已失效**） |
 | 2026-01-23 | 目录结构优化，重构为模块化组织 |
@@ -17,10 +18,10 @@
 ## 项目概述
 
 **ixBrowser 自动化管理工具** —— 基于 Python + PyQt6-Fluent-Widgets 的桌面应用，
-驱动 ixBrowser 指纹浏览器批量完成 Google 账号自动化：SheerID 学生验证、绑卡订阅、
+驱动 ixBrowser 指纹浏览器批量完成 Google 账号自动化：家庭组邀请/加入、
 家庭组邀请/加入、2SV 手机与辅助邮箱/验证器修改、设备踢出、Pro 会员状态检测。
 
-- 规模：**154 个 Python 文件 / 约 48,000 行**
+- 规模：**131 个 Python 文件 / 约 33,700 行**
 - 入口：`main.py` → `gui/main_window_fluent.py::run_fluent_app()`
 
 ### 技术栈
@@ -61,29 +62,29 @@
 
 ```mermaid
 graph TB
-    subgraph L1["gui/ — 界面层 (26 文件 / 11.3k 行)"]
+    subgraph L1["gui/ — 界面层 (20 文件 / 6.0k 行)"]
         MWF["main_window_fluent.py<br/>MainFluentWindow"]
-        AMI["account_manager_interface.py<br/>2209 行 ⚠"]
-        CFG["config_ui.py<br/>2383 行 ⚠"]
+        AMI["account_manager_interface.py<br/>1811 行 ⚠"]
+        SET["setting_interface.py<br/>设置页（账号/代理/配置）"]
         FEAT["*_interface.py<br/>各功能页"]
     end
 
-    subgraph L2["application/ — 应用服务层 (7 文件 / 1.6k 行)"]
+    subgraph L2["application/ — 应用服务层 (6 文件 / 1.2k 行)"]
         ATO["account_task_orchestrator.py<br/>异步任务编排"]
         AEA["automation_engine_adapter.py<br/>统一调用入口"]
         AMS["account_manager_service.py"]
         SS["settings_service.py"]
     end
 
-    subgraph L3["automation/ — 业务流程层 (18 文件 / 8.2k 行)"]
-        BAP["batch_account_processor.py<br/>2261 行 ⚠"]
+    subgraph L3["automation/ — 业务流程层 (15 文件 / 6.1k 行)"]
+        BAP["batch_account_processor.py<br/>1942 行 ⚠"]
         PSD["pro_status_detector.py"]
-        AUTO["auto_*.py × 14"]
+        AUTO["auto_*.py × 13"]
     end
 
     subgraph L4A["core/stagehand_engine/ — 主力引擎"]
-        SE["engine.py 1828 行"]
-        OPS["operations/ × 15"]
+        SE["engine.py 1446 行"]
+        OPS["operations/ × 12"]
     end
 
     subgraph L4B["core/browseruse_engine/ — 新引擎"]
@@ -92,24 +93,24 @@ graph TB
         BOPS["operations/join_family"]
     end
 
-    subgraph L5["services/ — 服务层 (22 文件 / 8.4k 行)"]
+    subgraph L5["services/ — 服务层 (20 文件 / 6.7k 行)"]
         DB["database.py<br/>DBManager Facade"]
-        REPO["repositories/ × 7"]
+        REPO["repositories/ × 6"]
         IXA["ix_api.py / ix_window.py"]
-        EXT["sub2api · sms_bus · sheerid · imap"]
+        EXT["sub2api · sms_bus · imap"]
     end
 
     subgraph EXTSVC["外部服务"]
         IXB[("ixBrowser :53200")]
         LLM[("OpenAI / Anthropic / Gemini")]
-        SID[("SheerID API")]
+        SID[("SMS-Bus 接码")]
         GOOG[("Google One / Accounts")]
     end
 
-    MWF --> AMI & CFG & FEAT
+    MWF --> AMI & SET & FEAT
     AMI --> ATO --> AEA --> BAP & AUTO
     FEAT --> AEA
-    CFG --> SS
+    SET --> SS
     BAP --> SE & BE
     PSD --> SE & BE
     AUTO --> SE
@@ -140,7 +141,7 @@ gui/  →  application/  →  automation/  →  core/ 引擎
 | 模块 | 路径 | 职责 | 子文档 |
 | ------ | ------ | ------ | -------- |
 | **入口** | `main.py` | 启动 Fluent GUI | - |
-| **gui** | `gui/` | PyQt6-Fluent 界面（13 个导航页） | [gui/CLAUDE.md](gui/CLAUDE.md) |
+| **gui** | `gui/` | PyQt6-Fluent 界面（8 个导航页） | [gui/CLAUDE.md](gui/CLAUDE.md) |
 | **application** | `application/` | 跨模块业务编排，隔离 GUI 与底层 | - |
 | **automation** | `automation/` | 具体自动化业务流程 | [automation/CLAUDE.md](automation/CLAUDE.md) |
 | **core** | `core/` | 双 AI 引擎、配置、重试、解析 | [core/CLAUDE.md](core/CLAUDE.md) |
@@ -165,40 +166,31 @@ auto_bitbrowser2/
 │   ├── ai_task_interface.py         # AI 任务页基类
 │   ├── fluent_utils.py              # 主题、图标、消息框
 │   ├── home_interface.py            # 首页（窗口管理）
-│   ├── account_manager_interface.py # 账号管理 ⚠ 2209 行
-│   ├── config_ui.py                 # 配置界面 ⚠ 2383 行
-│   ├── setting_interface.py         # 设置页
+│   ├── account_manager_interface.py # 账号管理 ⚠ 1811 行
+│   ├── setting_interface.py         # 设置页（账号/代理/配置 3 个标签页）
 │   ├── import_totp_interface.py     # TOTP 密钥导入（二维码识别）
-│   ├── sheerid_interface.py         # SheerID 验证
-│   ├── bindcard_interface.py        # 绑卡订阅
-│   ├── sheerlink_interface.py       # 获取 SheerLink
 │   ├── replacephone_interface.py    # 替换手机号
 │   ├── replaceemail_interface.py    # 替换辅助邮箱
 │   ├── modify2sv_interface.py       # 修改 2SV 手机
 │   ├── modifyauth_interface.py      # 修改验证器
 │   ├── kickdevices_interface.py     # 踢出设备
-│   ├── query_interface.py           # 综合查询
-│   ├── placeholder_interface.py     # 占位页（全自动订阅尚未实现）
-│   └── data_management/             # 账号/卡片/代理标签页与批量导入对话框
+│   ├── placeholder_interface.py     # 占位页基类
+│   └── data_management/             # 账号/代理标签页与批量导入对话框
 │
 ├── application/                     # 应用服务层
 │   ├── automation_engine_adapter.py # ★ application → 底层的唯一入口
 │   ├── account_task_orchestrator.py # 异步批量任务编排
 │   ├── account_manager_service.py   # 账号查询与批量参数准备
 │   ├── settings_service.py          # 设置页编排
-│   ├── sub2api_settings_service.py  # Sub2API / SMS-Bus 配置
-│   └── sheerid_service.py           # SheerID 业务
+│   └── sub2api_settings_service.py  # Sub2API / SMS-Bus 配置
 │
 ├── automation/                      # 业务流程层
-│   ├── batch_account_processor.py   # ⚠ 2261 行，批量调度核心
+│   ├── batch_account_processor.py   # ⚠ 1942 行，批量调度核心
 │   ├── pro_status_detector.py       # Pro / 家庭组状态检测
 │   ├── auto_google_login.py         # Google 登录（含 TOTP）
 │   ├── auto_join_family.py          # 加入家庭组 → 已迁 BrowserUseEngine
 │   ├── auto_enable_family_sharing.py
-│   ├── auto_bind_card_ai.py         # 绑卡
-│   ├── auto_get_sheerlink_ai.py     # 获取 SheerID 链接
-│   ├── auto_subscribe.py            # 订阅
-│   ├── auto_replace_email.py        # 换辅助邮箱（1094 行）
+│   ├── auto_replace_email.py        # 换辅助邮箱（920 行）
 │   ├── auto_replace_phone.py        # 换手机号（849 行）
 │   ├── auto_replace_recovery_email.py / auto_replace_recovery_phone.py
 │   ├── auto_modify_2sv_phone.py / auto_modify_authenticator.py
@@ -207,14 +199,14 @@ auto_bitbrowser2/
 │   └── auto_antigravity_oauth.py    # OAuth 授权
 │
 ├── core/                            # 核心层
-│   ├── config_manager.py            # ConfigManager，847 行，含敏感字段加解密
+│   ├── config_manager.py            # ConfigManager，含敏感字段加解密
 │   ├── retry_helper.py              # RetryHelper / FailedTaskQueue / with_retry
 │   ├── data_parser.py               # parse_account_line / build_account_line
 │   ├── totp_extractor/              # 二维码 → TOTP 密钥
 │   ├── stagehand_engine/            # ★ 主力引擎
-│   │   ├── engine.py                # StagehandGoogleEngine（1828 行）
+│   │   ├── engine.py                # StagehandGoogleEngine（1446 行）
 │   │   ├── config.py types.py constants.py
-│   │   └── operations/              # 15 个 Operation 类
+│   │   └── operations/              # 12 个 Operation 类
 │   └── browseruse_engine/           # ★ 新引擎（自研 browser-use 架构）
 │       ├── engine.py protocol.py types.py
 │       ├── agent/                   # service / message_manager / prompts / views
@@ -224,24 +216,23 @@ auto_bitbrowser2/
 │       └── operations/join_family.py
 │
 ├── services/                        # 服务层
-│   ├── database.py                  # DBManager，1414 行，Facade
-│   ├── repositories/                # 从 database.py 下沉的仓储
+│   ├── database.py                  # DBManager，1124 行，Facade
+│   ├── repositories/                # 从 database.py 下沉的仓储（6 个）
 │   │   ├── account_repository.py    account_io_repository.py
-│   │   ├── account_refresh_repository.py  card_repository.py
+│   │   ├── account_refresh_repository.py
 │   │   ├── proxy_repository.py      history_repository.py
 │   │   └── recovery_email_repository.py
 │   ├── ix_api.py / ix_window.py     # ixBrowser 底层 API / 窗口高层封装
 │   ├── sub2api_client.py            # Sub2API（aiohttp 异步）
 │   ├── sms_bus_client.py            # SMS-Bus 接码平台
-│   ├── sheerid_verifier.py          # SheerID API
 │   ├── email_code_reader.py         # Gmail IMAP 验证码
 │   ├── recovery_email_manager.py    # 辅助邮箱池
 │   ├── proxy_allocator.py / proxy_smart_allocator.py
 │   ├── invite_lock.py               # 防止重复邀请的线程安全锁
-│   ├── data_store.py                # cards / proxies 内存数据
+│   ├── data_store.py                # proxies 内存数据
 │   └── account_manager.py
 │
-├── tests/                           # 22 文件 / 2587 行
+├── tests/                           # 20 文件 / 2039 行
 ├── docs/                            # 设计与实施计划文档
 ├── data/                            # 示例配置与数据
 └── web_admin/                       # Web 管理界面（:8080，基本未启用）
@@ -290,19 +281,19 @@ SQLite 数据层 Facade。逻辑正在逐步下沉到 `services/repositories/`�
 | 表 | 说明 |
 | --- | --- |
 | `accounts` | 账号主表 |
-| `cards` | 支付卡 |
+| `cards` | 支付卡（遗留表，卡片管理功能已移除） |
 | `proxies` / `proxy_window_bindings` | 代理及窗口绑定 |
 | `account_refresh_tasks` / `account_refresh_task_items` | 批量刷新任务与明细 |
 | `phone_modification_history` | 手机号修改记录 |
 | `email_modification_history` | 邮箱修改记录 |
 | `sv2_phone_modification_history` | 2SV 手机修改记录 |
 | `authenticator_modification_history` | 验证器修改记录 |
-| `sheerid_verification_history` | SheerID 验证记录 |
-| `bind_card_history` | 绑卡记录 |
+| `sheerid_verification_history` | SheerID 验证记录（遗留表，仅供综合数据 JOIN） |
+| `bind_card_history` | 绑卡记录（遗留表，仅供综合数据 JOIN） |
 | `recovery_email_pool` / `recovery_email_daily_usage` / `account_recovery_binding` | 辅助邮箱池、日用量、绑定关系 |
 | `learned_rules` | 学习到的规则 |
 
-**账号状态流转**：
+**账号状态流转**（字段与文件映射保留，SheerID/绑卡界面已移除）：
 ```text
 pending → link_ready → verified → subscribed
       ↘ ineligible / error
@@ -357,7 +348,7 @@ from core import ConfigManager, RetryHelper, parse_account_line
 
 ## 测试
 
-配置见 `pytest.ini`。当前基线：**72 passed, 5 failed, 1 skipped**。
+配置见 `pytest.ini`。当前基线：**70 passed, 5 failed, 1 skipped**。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -395,10 +386,10 @@ tests/test_stagehand_engine.py::TestStagehandGoogleEngine::test_navigate
 | 项 | 说明 |
 | --- | --- |
 | 双引擎并存 | 迁移策略未定，两套错误处理/重试语义 |
-| 超大文件 | `config_ui.py` 2383、`batch_account_processor.py` 2261、`account_manager_interface.py` 2209 |
+| 超大文件 | `batch_account_processor.py` 1942、`account_manager_interface.py` 1811、`stagehand_engine/engine.py` 1446 |
 | `core → services` 反向依赖 | `stagehand_engine/engine.py:89`、`browseruse_engine/engine.py:52` 用函数内延迟 import 规避循环，方向上仍是倒置 |
-| `database.py` 未随仓储拆分瘦身 | 已拆出 7 个 repository，主文件仍 1414 行 |
-| 「全自动订阅」未实现 | `PlaceholderInterface` 占位 |
+| `database.py` 未随仓储拆分瘦身 | 已拆出 6 个 repository，主文件仍 1124 行 |
+| 遗留数据表 | `cards`、`bind_card_history`、`sheerid_verification_history` 已无写入方，仅 `account_io_repository` 的综合查询仍 JOIN 后两者 |
 
 ### 数据与文件
 
