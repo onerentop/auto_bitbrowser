@@ -208,6 +208,38 @@ export class IxBrowserClient {
     await this.call("profile-update", { profile_id: profileId, proxy_config: proxy });
     return true;
   }
+  /**
+   * 按 ID 查单个窗口的完整信息。
+   * 对标 services/ix_api.py 的 get_profile_info()——查不到返回 null。
+   */
+  async getProfileInfo(profileId: number): Promise<IxProfile | null> {
+    try {
+      return await this.getProfileById(profileId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 更新窗口信息（备注、2FA 密钥等）。
+   * 对标 update_profile()：只发送传入的字段。
+   */
+  async updateProfile(
+    profileId: number,
+    fields: { note?: string; tfa_secret?: string; name?: string },
+  ): Promise<boolean> {
+    const params: Record<string, unknown> = { profile_id: profileId };
+    for (const [k, v] of Object.entries(fields)) {
+      if (v !== undefined) params[k] = v;
+    }
+    try {
+      await this.call("profile-update", params);
+      return true;
+    } catch (error) {
+      console.error(`[ix] update_profile 失败: ${error}`);
+      return false;
+    }
+  }
 
   /** 分组列表 */
   async getGroupList(page = 1, limit = 100): Promise<unknown[]> {
