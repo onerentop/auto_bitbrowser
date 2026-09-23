@@ -598,16 +598,16 @@ test("settings handler：config.json 越界值载入后经夹紧即可保存", a
 
 test("SettingsService.save：保存前重读磁盘，不覆盖外部写入的表单外键", () => {
   const { cm, configFile } = makeConfig();
-  cm.setSub2apiToken("OLD-TOKEN");
+  cm.set("sub2api.admin_token", "OLD-TOKEN");
   const svc = new SettingsService(cm);
   svc.loadSettingsSnapshot(); // cm 内部已有缓存
 
   // 模拟同时运行的 Python 版直接改磁盘
   const other = new ConfigManager({ configFile, log: silent });
-  other.setSub2apiToken("NEW-TOKEN");
+  other.set("sub2api.admin_token", "NEW-TOKEN");
 
   svc.saveSettingsSnapshot(baseSnapshot());
-  assert.equal(new ConfigManager({ configFile, log: silent }).getSub2apiToken(), "NEW-TOKEN");
+  assert.equal(new ConfigManager({ configFile, log: silent }).get("sub2api.admin_token"), "NEW-TOKEN");
 });
 
 test("SettingsService：加载后原样保存，密钥不被重复加密，表单外加密键保持不变", () => {
@@ -615,8 +615,9 @@ test("SettingsService：加载后原样保存，密钥不被重复加密，表�
   cm.setAiProviderApiKey("gemini", "G-KEY");
   cm.setAiProviderApiKey("anthropic", "A-KEY");
   cm.setGmailImapPassword("app pass");
-  cm.setSub2apiToken("SUB-TOKEN");
-  cm.setSmsBusToken("SMS-TOKEN");
+  // Sub2API / SMS-Bus 功能已删除，但它们的加密字段仍可能由 Python 版写入，必须原样保留
+  cm.set("sub2api.admin_token", "SUB-TOKEN");
+  cm.set("sms_bus.token", "SMS-TOKEN");
   const before = JSON.parse(readFileSync(configFile, "utf-8"));
 
   const svc = new SettingsService(cm);
@@ -629,8 +630,8 @@ test("SettingsService：加载后原样保存，密钥不被重复加密，表�
   assert.equal(fresh.getAiProviderApiKey("gemini"), "G-KEY");
   assert.equal(fresh.getAiProviderApiKey("anthropic"), "A-KEY");
   assert.equal(fresh.getGmailImapPassword(), "app pass");
-  assert.equal(fresh.getSub2apiToken(), "SUB-TOKEN");
-  assert.equal(fresh.getSmsBusToken(), "SMS-TOKEN");
+  assert.equal(fresh.get("sub2api.admin_token"), "SUB-TOKEN");
+  assert.equal(fresh.get("sms_bus.token"), "SMS-TOKEN");
   const after = JSON.parse(readFileSync(configFile, "utf-8"));
   assert.equal(after.sub2api.admin_token, before.sub2api.admin_token, "表单外密文原样保留");
   assert.equal(after.sms_bus.token, before.sms_bus.token);

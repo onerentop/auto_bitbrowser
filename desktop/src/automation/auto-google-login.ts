@@ -53,9 +53,7 @@ export async function autoGoogleLogin(
   account: Record<string, unknown>,
   options: {
     callback?: ((msg: string) => void) | null;
-    accountRepo?: AccountRepository;
-    /** 登录成功后的 Pro 检测钩子（pro_status_detector 尚未移植，先留接口） */
-    detectPro?: ((email: string) => Promise<string | null>) | null;
+    accountRepo?: Pick<AccountRepository, "updateLoginStatus">;
   } = {},
 ): Promise<AutoLoginResult> {
   const email = String(account["email"] ?? "");
@@ -96,22 +94,6 @@ export async function autoGoogleLogin(
       if (result.success) {
         log("[OK] 登录成功");
         repo?.updateLoginStatus(email, "logged_in");
-
-        // Pro 状态检测（失败不阻断登录成功的结论）
-        if (options.detectPro) {
-          try {
-            const proStatus = await options.detectPro(email);
-            if (proStatus === "yes" || proStatus === "family_yes") {
-              repo?.updateProStatus(email, proStatus);
-            } else if (proStatus === "no") {
-              repo?.updateProStatus(email, "no");
-            } else {
-              log("[!] Pro 会员状态检测失败，将在「检测 Pro」功能中重试");
-            }
-          } catch {
-            log("[!] Pro 会员状态检测失败，将在「检测 Pro」功能中重试");
-          }
-        }
 
         return {
           success: true,

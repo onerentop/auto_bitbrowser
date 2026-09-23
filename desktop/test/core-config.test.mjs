@@ -257,10 +257,10 @@ test("历史明文敏感字段在 load 时自动迁移为密文并记日志", ()
   );
 });
 
-test("setSmsBusToken / getSmsBusToken 往返，落盘为密文", () => {
+test("敏感路径 sms_bus.token 经 set / get 往返，落盘为密文", () => {
   withConfig(({ cm, file }) => {
-    cm.setSmsBusToken("sms-token-xyz");
-    assert.equal(cm.getSmsBusToken(), "sms-token-xyz");
+    cm.set("sms_bus.token", "sms-token-xyz");
+    assert.equal(cm.get("sms_bus.token"), "sms-token-xyz");
     assert.ok(String(readRaw(file).sms_bus.token).startsWith("ENC:"));
   });
 });
@@ -299,9 +299,7 @@ test("账号管理配置的默认值与 Python 一致", () => {
     assert.equal(cm.getLoginMaxRetries(), 2);
     assert.equal(cm.getLoginRetryDelay(), 3);
     assert.equal(cm.getLoginTimeout(), 120);
-    assert.equal(cm.getOauthTimeout(), 180);
     assert.equal(cm.getAiDefaultProvider(), "gemini");
-    assert.equal(cm.getSmsBusDefaultCountryId(), null);
   });
 });
 

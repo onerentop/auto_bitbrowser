@@ -1,6 +1,6 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-23（BrowserUse 引擎移植完成） ｜ 分支 `dev_ai` ｜ 全部已提交推送
+> 最后更新：2026-09-23（按用户要求删除账号管理的 OAuth / Pro / 家庭组 / 403 / Sub2API 等功能及 BrowserUse 引擎） ｜ 分支 `dev_ai`
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -14,8 +14,8 @@
 本项目正在把 Python 的 ixBrowser 自动化工具重写成 Node/TypeScript，
 代码在 desktop/ 目录。Python 侧保持原样作为对拍基准与回退方案。
 
-当前进度：services / engine(Stagehand) / browseruse 三层完成，automation 层 12/15。
-下一步按 PROGRESS.md 第五章继续（家庭组加入：用户确认不需要，不移植）。
+当前进度：后端与全部界面已移植；账号管理的 OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API 以及
+BrowserUse 引擎已按用户要求删除（见第二章第 8 节）。当前阶段：真实账号逐项测试。
 
 注意事项：
 - Stagehand 必须锁 3.7.3，不可升级（原因见 PROGRESS.md 第三章）
@@ -29,9 +29,9 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 728/728 通过
+pnpm test               # 应 394/394 通过
 pnpm typecheck:app      # Electron 骨架，应无输出
-pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
+pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（49/49）
 pnpm verify:selectors   # 应 0 缺失
 ```
 
@@ -62,10 +62,9 @@ cd desktop
 node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```
 
-产出的 JSON 含四段：
-`stagehand`（92 条提示词）、`browseruse`（131 条）、
-`browseruse_constants`（3 个 URL + 5 组关键词，共 33 条）、
-`browseruse_prompt_files`（两份系统提示词 md 的 sha256）。
+产出的 JSON 含 `stagehand` 段（Python 侧全部 op 的提示词）；校验脚本用 `REMOVED_STAGEHAND_OPS`
+剔除已删除的 6 个 op（oauth / pro_status / unlock_403 / enable_sharing / join_family / family），剩 49 条。
+（BrowserUse 引擎已删除，不再比对其提示词、常量与 md 文件。）
 
 ### 工作目录速查
 
@@ -75,11 +74,10 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/ENGINE_SLICE_REPORT.md` | 引擎切片验证报告（Stagehand 版本约束的原始依据） |
 | `desktop/src/services/` `src/db/` | services 层（已完成） |
 | `desktop/src/engine/` | Stagehand 引擎层（已完成） |
-| `desktop/src/browseruse/` | BrowserUse 引擎层（已完成） |
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
 | `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
-| `desktop/test/` | 728 个单测（含 `app-*.test.mjs`） |
+| `desktop/test/` | 394 个单测（含 `app-*.test.mjs`） |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -91,18 +89,18 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `core`（配置 / 重试 / 并发 / 解析） | ✅ 完成 | 5 | ~1500 |
 | `services`（数据与服务） | ✅ 完成 | 13 | ~3400 |
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
-| `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
-| `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
+| `browseruse`（BrowserUse 引擎） | 🗑️ 已删除（用户要求） | — | — |
+| `automation`（业务流程） | ✅ 保留登录 + 5 个 AI 任务 | 12 | ~2350 |
 | 前端界面 | ✅ 骨架 + 全部页面（首页 / 5 个 AI 任务页 / 账号管理 / 导入 TOTP / 设置） | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 728/728 通过
+pnpm test               # 394/394 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
-                        # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
+                        # 提示词 49/49 = 100%
 pnpm verify:selectors   # 选择器缺失 0（197/197）
 ```
 
@@ -114,12 +112,9 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 |---|---|
 | `ixbrowser/client.ts` | ixBrowser HTTP 协议，含 CDP 端点获取 |
 | `db/connection.ts` | 用 Node 内置 `node:sqlite`（免原生编译、免 electron-rebuild） |
-| `db/*-repository.ts` × 6 | 账号 / 代理 / 历史 / 邮箱池 / 刷新任务 / IO |
+| `db/*-repository.ts` × 5 | 账号 / 代理 / 历史 / 邮箱池 / IO（刷新任务仓储已随会员刷新删除） |
 | `core/data-parser.ts` | 账号行解析（URL 提取 + 多分隔符探测） |
-| `services/sms-bus-client.ts` | 接码平台 |
-| `services/sub2api-client.ts` | Sub2API |
 | `services/email-code-reader.ts` | Gmail 验证码（提取逻辑为纯函数） |
-| `services/invite-lock.ts` | 邀请锁 |
 | `services/proxy-allocator.ts` / `data-store.ts` | 代理分配与缓存 |
 | `services/recovery-email-manager.ts` | 辅助邮箱池策略 |
 
@@ -138,29 +133,10 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 
 **提示词一致性**：92/92 与 Python 逐字一致。
 
-### 3. browseruse 层（BrowserUse 引擎，全部｜本轮新增）
+### 3. browseruse 层 —— 🗑️ 已删除
 
-对标 `core/browseruse_engine/`（22 文件 / 4303 行）→ `desktop/src/browseruse/`（26 文件 / 5713 行）。
-
-| 模块 | 说明 |
-|---|---|
-| `protocol.ts` | `EngineProtocol` + 6 个结果类型与工厂 |
-| `types.ts` | 动作模型归一化、`parseAgentOutput`、DOM/历史的文本序列化 |
-| `constants.ts` | 3 个 URL、8 个超时/步数、5 组关键词（与 Python 逐条对齐） |
-| `page.ts` | Playwright Page 的结构化子集 `BrowserPageLike` + `LogFn` |
-| `playwright-cdp.ts` | 可注入的 `CdpConnector`，默认惰性加载 `playwright-core` |
-| `llm/base.ts` `llm/adapters.ts` | 消息类型 + OpenAI/Anthropic/Google 三家适配器 |
-| `dom/views.ts` `serializer.ts` `service.ts` | 注入 JS 提取可交互元素、索引→选择器/坐标映射 |
-| `tools/registry.ts` `executor.ts` `actions.ts` | 动作注册表 + 执行器 + 10 个动作 |
-| `agent/service.ts` `message-manager.ts` `prompts.ts` | Agent 循环、消息窗口、提示词加载 |
-| `agent/prompts/*.md` | 两份系统提示词，**与 Python 侧字节一致**（sha256 校验） |
-| `operations/join-family.ts` | `sendInvite` / `acceptInvite` + 4 段 Agent 提示词 |
-| `engine.ts` | 主引擎：CDP 接管、四原语、`run`、`sendFamilyInvite` / `joinFamily` |
-| `index.ts` | 统一出口 + **编译期协议一致性断言** |
-
-**协议一致性**：`index.ts` 的 `assertEngineConformance()` 在编译期证明
-`BrowserUseEngine` 同时满足 `EngineProtocol` 与 `pro-status-detector.ts` 的 `ProDetectEngine`，
-签名一旦漂移 `pnpm typecheck` 立刻失败。
+曾完整移植 `core/browseruse_engine/`（26 文件 / 5713 行），只服务于 Pro 检测、会员刷新与家庭组加入。
+这些功能按用户要求删除后已无调用方，整个 `src/browseruse/` 连同测试一并删除（见第 8 节）。
 
 ### 4. automation 层（12/15）
 
@@ -172,16 +148,12 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `auto-modify-2sv-phone.ts` | ✅ |
 | `auto-modify-authenticator.ts` | ✅（含密钥三处保存） |
 | `auto-replace-recovery-email.ts` / `-phone.ts` | ✅ |
-| `auto-enable-family-sharing.ts` | ✅（含批量） |
-| `auto-unlock-403.ts` | ✅（带重试循环） |
-| `auto-antigravity-oauth.ts` | ✅（含批量） |
-| `pro-status-detector.ts` | ✅（含二次验证 4 分支） |
+| `auto-enable-family-sharing.ts` / `auto-unlock-403.ts` / `auto-antigravity-oauth.ts` / `pro-status-detector.ts` | 🗑️ 已删除（用户要求） |
 | `auto-replace-email.ts` / `auto-replace-phone.ts` | ✅（Playwright 选择器直连） |
 | `auto-join-family.ts` | ❌ 用户确认不需要，不移植 |
-| `batch/types.ts` | ✅ batch 的两个结果 dataclass |
-| `batch/pro-detection.ts` | ✅ batch L1008-1424 的 4 个页面检测方法 |
-| `batch/membership-detect.ts` | ✅ batch L1751-2244 的 2 个 BrowserUse 检测方法 |
-| `batch-account-processor.ts` | ✅ 主类 1463 行（六个 batch_* 入口 + 两个便捷函数） |
+| `batch/types.ts` | ✅ 只剩 `BatchResult` |
+| `batch/pro-detection.ts` / `batch/membership-detect.ts` | 🗑️ 已删除（用户要求） |
+| `batch-account-processor.ts` | ✅ 只保留 `batchLogin`（其余五个 batch_* 入口已删除） |
 
 ### 5. core 层（本轮新增）
 
@@ -235,7 +207,7 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 |---|---|---|
 | 设置（配置 / 代理 / 账号数据） | `settings/load·save·setDataDir·getTheme·testAi`、`proxies*`（增删改查、导入、绑定详情、解绑）、`accounts*`（增改查、导入） | `settings_delete_accounts`（逐个找窗口→删窗口→删账号） |
 | 首页（ixBrowser 窗口管理） | `home/getConfig·saveConfig·listGroups·listBrowsers` | `home_open_browsers`、`home_delete_browsers` |
-| 账号管理 | `accounts/list·getDefaults·precheck·start·bindCandidates·bind·unbind·deleteOne` | `login` `oauth` `login_and_oauth` `detect_pro` `refresh_membership_info` `unlock_403` `batch_bind` `batch_delete` `detect_403` `enable_family_sharing` |
+| 账号管理 | `accounts/list·getDefaults·precheck·start·bindCandidates·bind·unbind·deleteOne` | `login` `batch_bind` `batch_delete`（OAuth / Pro / 家庭组 / 共享 / 403 已删除） |
 
 新增后端模块：`src/application/{settings-service,settings-data,test-ai-connection,home-tree,account-manager-service,account-task-orchestrator}.ts`、`src/ixbrowser/{window,groups}.ts`、`src/engine/stagehand-config.ts`。
 
@@ -279,6 +251,26 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 > ⚠️ **实机验证一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
 > 「运行状态」页会显示当前数据目录，启动后先确认。
 
+### 8. 按用户要求删除的功能（2026-09-23）
+
+只删 desktop，Python 侧保持原样；数据库表结构与 `config.json` 默认配置树不变（与 Python 版共用同一份数据）。
+
+| 删除项 | 界面 | 后端 / 底层 |
+|---|---|---|
+| 批量 OAuth、一键登录+OAuth、单个 OAuth（行内按钮与右键菜单）、「自动绑定代理」 | 账号管理 | `batchOauth` / `batchLoginAndOauth`、`auto-antigravity-oauth.ts`、`engine/operations/oauth.ts`、`services/proxy-smart-allocator.ts` |
+| 检测 Pro、刷新家庭组 | 账号管理 | `batchDetectPro` / `batchRefreshMembershipInfo`、`pro-status-detector.ts`、`batch/{pro-detection,membership-detect}.ts`、`engine/operations/{pro-status,family}.ts`、`db/account-refresh-repository.ts`、登录后的 `detectPro` 钩子 |
+| 开启共享 | 账号管理 | `auto-enable-family-sharing.ts`、`engine/operations/enable-sharing.ts` |
+| 检测 403、批量解锁 403 | 账号管理 | `executeDetect403`、`auto-unlock-403.ts`、`engine/operations/unlock-403.ts`、`services/sms-bus-client.ts` |
+| Sub2API 关联 | 账号管理（Sub2API 列、「已关联」统计） | `services/sub2api-client.ts` |
+| Pro / Sub2API / 解锁状态三列及 10 个相关筛选项 | 账号管理（筛选只剩 全部 / 未登录 / 已登录 / 登录失败） | — |
+| 家庭组加入后端 | （界面早已移除） | `src/browseruse/` 整个目录、`engine/operations/join-family.ts`、`services/invite-lock.ts` |
+
+- 账号管理保留：批量登录 / 单个登录、批量绑定窗口、右键绑定 / 解绑 / 删除、删除选中、删除+窗口
+- 已删除的操作名（`oauth` `detect_pro` `unlock_403` 等）传到 `abb/accounts/precheck|start` 一律返回 `INVALID_ARGUMENT`
+- 表格「操作」列：已登录账号原本显示「OAuth」，现在留空
+- `ConfigManager` 删掉 Sub2API / SMS-Bus / OAuth 超时的专用读写方法；这些键仍在默认配置树里，通用 `get/set` 照常加解密，设置页保存时原样保留
+- `package.json` 里 `playwright-core` 与 `@ai-sdk/*` 已无直接引用，但它们分别是 Stagehand 3.7.3 的 peer / optional 依赖，**暂不移除**（移除前需真机确认 Stagehand 加载 Gemini provider 不受影响）
+
 ## 三、关键决策与坑（重要，勿改）
 
 ### 依赖版本必须锁死
@@ -294,14 +286,12 @@ Extensions.getExtensions     不支持 ('wasn't found')
 Extensions.loadUnpacked      不支持 (Method not available)
 ```
 
-### 本轮新增依赖
+### 早期引入的依赖
 
 | 依赖 | 用途 |
 |---|---|
-| `playwright-core` | BrowserUse 的 CDP 连接（`connectOverCDP`）。**惰性动态 import**，模块顶层不加载 |
-| `ai` + `@ai-sdk/openai` / `@ai-sdk/anthropic` / `@ai-sdk/google` | LLM 适配层的底座。同样惰性加载，未装也不影响 typecheck 与单测 |
-
-**刻意没引入** `openai` / `@anthropic-ai/sdk` / `@google/generative-ai` 三家官方 SDK。
+| `playwright-core` | 原为 BrowserUse 的 CDP 连接（已删除）；现只作为 Stagehand 3.7.3 的 peer 依赖保留 |
+| `ai` + `@ai-sdk/openai` / `@ai-sdk/anthropic` / `@ai-sdk/google` | 原为 BrowserUse LLM 适配层（已删除）；Stagehand 把 `@ai-sdk/*` 列为 optional 依赖，暂保留 |
 
 ### 自研 TOTP 而非 otplib
 
@@ -406,10 +396,7 @@ pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
 pnpm verify:selectors
 ```
 
-`verify:prompts` 现在做三件事：
-1. 提示词逐条比对：stagehand 92 条 + browseruse 131 条 = **223 条**
-2. BrowserUse 常量比对：3 个 URL + 5 组关键词 = **33 条**，必须出现在 `browseruse/constants.ts`
-3. 两份系统提示词 md 的 **sha256 字节比对**
+`verify:prompts` 逐条比对 Stagehand 提示词（保留的 op 共 **49 条**），已删除的 op 由 `REMOVED_STAGEHAND_OPS` 排除。
 
 `ops_spec.json` 由 `scripts/extract-ops-spec.py` 从 Python 侧生成（重建命令见第零章）。
 
@@ -419,13 +406,10 @@ pnpm verify:selectors
 2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
 3. **前端界面** —— 骨架 ✅、第一批（首页 / 账号管理 / 设置）✅、第二批（5 个 AI 任务页 / 导入 TOTP）✅，Python GUI 的全部页面已移植。后续：
    - 5 个 AI 页接入 SMS-Bus / IMAP 验证码：**用户确认不需要**，与 Python GUI 保持一致（触发验证码即判失败）
-   - 家庭组加入：**用户确认不需要，不移植**（界面按钮与右键菜单已移除；BrowserUse 引擎的 join-family 操作与家庭组分配纯函数保留在后端代码中，未接线）
+   - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
+   - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归仍未做**：批量登录 / OAuth / 403 / Pro 检测都只有离线 + 假依赖测试，开始联调前先用测试账号冒烟
-
-**真机回归尚未做**：本轮与前几轮都是离线等价移植，`ENGINE_SLICE_REPORT.md` 里
-只验证了 Stagehand 的管道层。BrowserUse 的 Agent 循环、DOM 注入脚本、LLM 适配
-**一次真机都没跑过**，全量测试时要留足账号预算。
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 

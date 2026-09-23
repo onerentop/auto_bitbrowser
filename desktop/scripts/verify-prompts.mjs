@@ -2,20 +2,15 @@
  * 提示词一致性校验器
  *
  * 把 Python 侧的自然语言提示词与 TypeScript 移植版逐条比对，
- * 防止照搬过程中丢字、改标点、漏指令。覆盖两个引擎：
- *   - stagehand  : core/stagehand_engine/operations/*.py   → src/engine/operations/*.ts
- *   - browseruse : core/browseruse_engine/ 的 4 个文件      → src/browseruse/**\/*.ts
- *
- * 额外两项校验（BrowserUse 专属）：
- *   - 常量：join_family.py 的 URL 与 5 组关键词，必须在 src/browseruse/constants.ts 里逐条出现
- *   - 系统提示词 md：两份文件与 Python 侧**字节级**一致（sha256 比对）
+ * 防止照搬过程中丢字、改标点、漏指令。覆盖范围：
+ *   - stagehand : core/stagehand_engine/operations/*.py → src/engine/operations/*.ts
+ *     （已删除功能对应的 operation 见 REMOVED_STAGEHAND_OPS，不参与比对）
  *
  * 用法：node scripts/verify-prompts.mjs <ops_spec.json>
  *   ops_spec.json 由 scripts/extract-ops-spec.py 生成：
  *     .\.venv\Scripts\python.exe desktop\scripts\extract-ops-spec.py <输出路径>
  */
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -78,17 +73,15 @@ function stagehandTsPath(pyFile) {
   return path.join(srcDir, "engine", "operations", name);
 }
 
-/** browseruse：Python 相对路径 → TS 文件路径 */
-const BROWSERUSE_MAP = {
-  "operations/join_family.py": ["browseruse", "operations", "join-family.ts"],
-  "tools/actions.py": ["browseruse", "tools", "actions.ts"],
-  "agent/service.py": ["browseruse", "agent", "service.ts"],
-  "agent/prompts/__init__.py": ["browseruse", "agent", "prompts.ts"],
-};
-function browseruseTsPath(pyFile) {
-  const parts = BROWSERUSE_MAP[pyFile];
-  return parts ? path.join(srcDir, ...parts) : null;
-}
+/** 已随账号管理页功能删除的 operation（Python 侧仍保留，TS 侧不再移植），不参与比对 */
+const REMOVED_STAGEHAND_OPS = new Set([
+  "enable_sharing.py",
+  "family.py",
+  "join_family.py",
+  "oauth.py",
+  "pro_status.py",
+  "unlock_403.py",
+]);
 
 /** 归一化：去掉首尾空白、统一换行、压缩内部连续空白行 */
 function normalize(s) {
@@ -178,63 +171,14 @@ function checkGroup(files, resolveTs, label) {
   }
 }
 
-// ==================== 1. 提示词比对 ====================
+// ==================== 提示词比对 ====================
 
-// 兼容旧格式：没有 stagehand 键时，整个对象就是 stagehand 段
-const stagehandFiles = spec.stagehand ?? spec;
+// 兼容旧格式：没有 stagehand 键时，整个对象就是 stagehand 段。
+// 已删除功能对应的 operation 在 TS 侧不再存在，从比对范围中剔除（旧 spec 里的 browseruse 段同样忽略）。
+const stagehandFiles = Object.fromEntries(
+  Object.entries(spec.stagehand ?? spec).filter(([pyFile]) => !REMOVED_STAGEHAND_OPS.has(pyFile)),
+);
 checkGroup(stagehandFiles, stagehandTsPath, "stagehand");
-if (spec.browseruse) {
-  checkGroup(spec.browseruse, browseruseTsPath, "browseruse");
-}
-
-// ==================== 2. BrowserUse 常量比对 ====================
-
-let constTotal = 0;
-let constMissing = 0;
-const constProblems = [];
-
-if (spec.browseruse_constants) {
-  const constPath = path.join(srcDir, "browseruse", "constants.ts");
-  const constSrc = fs.existsSync(constPath) ? fs.readFileSync(constPath, "utf8") : "";
-  for (const [name, value] of Object.entries(spec.browseruse_constants)) {
-    const values = Array.isArray(value) ? value : [value];
-    for (const v of values) {
-      constTotal += 1;
-      // 关键词/URL 必须以字符串字面量的形式出现在 constants.ts
-      if (!constSrc.includes(JSON.stringify(v)) && !constSrc.includes(`"${v}"`)) {
-        constMissing += 1;
-        constProblems.push(`${name}: ${v}`);
-      }
-    }
-  }
-}
-
-// ==================== 3. 系统提示词 md 字节比对 ====================
-
-let mdTotal = 0;
-let mdMissing = 0;
-const mdProblems = [];
-
-if (spec.browseruse_prompt_files) {
-  for (const [name, meta] of Object.entries(spec.browseruse_prompt_files)) {
-    mdTotal += 1;
-    const tsMd = path.join(srcDir, "browseruse", "agent", "prompts", name);
-    if (!fs.existsSync(tsMd)) {
-      mdMissing += 1;
-      mdProblems.push(`${name}: TS 侧缺失`);
-      continue;
-    }
-    const buf = fs.readFileSync(tsMd);
-    const sha = crypto.createHash("sha256").update(buf).digest("hex");
-    if (sha !== meta.sha256 || buf.length !== meta.bytes) {
-      mdMissing += 1;
-      mdProblems.push(
-        `${name}: sha256 ${sha.slice(0, 12)}… vs Python ${String(meta.sha256).slice(0, 12)}…，` +
-          `字节 ${buf.length} vs ${meta.bytes}`,
-      );
-    }
-  }
-}
 
 // ==================== 输出 ====================
 
@@ -252,20 +196,11 @@ for (const [f, items] of Object.entries(missingByFile)) {
   if (items.length > 6) console.log(`    ... 还有 ${items.length - 6} 条`);
 }
 
-if (spec.browseruse_constants) {
-  console.log(`BrowserUse 常量     : ${constTotal - constMissing}/${constTotal} 命中`);
-  for (const p of constProblems.slice(0, 10)) console.log(`    缺失常量: ${p}`);
-}
-if (spec.browseruse_prompt_files) {
-  console.log(`系统提示词 md 字节  : ${mdTotal - mdMissing}/${mdTotal} 一致`);
-  for (const p of mdProblems) console.log(`    ${p}`);
-}
-
 const coverage = totalPy === 0 ? 0 : Math.round((totalFound / totalPy) * 1000) / 10;
 console.log("");
 console.log(`覆盖率: ${coverage}%`);
 
-const failed = totalMissing > 0 || constMissing > 0 || mdMissing > 0;
+const failed = totalMissing > 0;
 // 仓库根目录仅用于错误信息定位，避免路径歧义
 if (failed) console.log(`（比对基准仓库: ${repoRoot}）`);
 process.exit(failed ? 1 : 0);

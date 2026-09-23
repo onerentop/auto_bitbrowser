@@ -3,7 +3,8 @@
  * 对标 core/stagehand_engine/constants.py
  *
  * 本文件由脚本从 Python 源逐字生成，未手工改写，保证关键词完全一致。
- * 这些关键词是业务判定的核心（登录态、Pro 状态、家庭组角色），改动会直接影响判定结果。
+ * 这些关键词是业务判定的核心（登录态），改动会直接影响判定结果。
+ * ProKeywords / FamilyKeywords 只被已删除的 Pro 检测 / 家庭组操作使用，已随之移除（Python 侧仍保留）。
  */
 
 /** Google 服务 URL */
@@ -75,24 +76,6 @@ export const LoginKeywords = {
   SECURITY_CHALLENGE: ["verify it's you", "验证是否是您本人", "security check", "confirm your identity"],
   CAPTCHA: ["captcha", "验证码", "robot", "机器人", "recaptcha"],
   ACCOUNT_DISABLED: ["account has been disabled", "帐号已被停用", "suspended", "disabled"],
-} as const;
-
-/** Pro 状态关键词 */
-export const ProKeywords = {
-  POSITIVE: ["google one", "premium", "pro", "2 tb", "100 gb", "200 gb", "member benefits", "会员权益"],
-  NEGATIVE: ["upgrade", "升级", "get more storage", "获取更多存储空间", "free plan", "免费方案", "15 gb"],
-  EXPIRED: ["expired", "已过期", "renew", "续订", "payment failed", "付款失败"],
-} as const;
-
-/** 家庭组关键词 */
-export const FamilyKeywords = {
-  HAS_FAMILY: ["your family group", "your family on google", "your family", "with a family group", "您的家庭群组", "family members", "家庭成员", "manage family"],
-  NO_FAMILY: ["create a family", "create a family group", "you can create a family group", "get started", "创建家庭群组", "start a family group", "set up a family", "no family group"],
-  MANAGER: ["you manage this family", "you are the family manager", "you are family manager", "you can manage family settings", "管理成员"],
-  FAMILY_MEMBER: ["shared with you", "与您共享", "shared by", "由...共享", "leave family", "退出家庭", "your membership is shared", "您的会员由"],
-  INDEPENDENT_SUBSCRIBER: ["next payment", "下次付款", "cancel membership", "取消会员", "change payment method", "更改付款方式", "share google one with family", "与家人共享 google one", "manage family settings", "管理家庭设置"],
-  SHARING_ENABLED: ["sharing is on", "共享已开启", "shared with family", "与家人共享"],
-  SHARING_DISABLED: ["sharing is off", "共享已关闭", "turn on sharing", "开启共享"],
 } as const;
 
 /** 大小写不敏感的关键词命中判断（对标 Python 侧的 any(k in text.lower())） */

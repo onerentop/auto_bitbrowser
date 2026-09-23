@@ -33,8 +33,7 @@
  *   6. `asyncio.sleep(delay)` → 可注入的 `sleepImpl(ms)`（默认 setTimeout），
  *      单测可传假 sleep 避免真等。**Python 的延迟单位是秒，sleepImpl 参数是毫秒**
  *      （与 engine/playwright-compat.ts 的约定一致），转换在调用点 `delay * 1000`。
- *   7. `LogFn` / `noopLog` 与 browseruse/page.ts 中的定义同形，但在本文件内重新声明，
- *      避免 core 层反向依赖 browseruse 模块。
+ *   7. `LogFn` / `noopLog` 在本文件内声明，避免 core 层依赖上层模块。
  *
  * 保留的 Python 行为（看着可疑但没改）：
  *   - `_calculate_delay` **没有抖动（jitter）**，就是纯指数退避 + 上限截断。
@@ -300,7 +299,7 @@ function formatTimestamp(d: Date = new Date()): string {
   );
 }
 
-/** 工厂：字段全必需，默认值在这里补齐（同 browseruse/types.ts 的约定） */
+/** 工厂：字段全必需，默认值在这里补齐 */
 export function createFailedTask(
   overrides: Partial<FailedTask> & { id: string; type: string },
 ): FailedTask {

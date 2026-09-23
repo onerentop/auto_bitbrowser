@@ -7,7 +7,7 @@
  *
  * 批量操作全部走 ctx.tasks（全局单任务，重复启动抛 TASK_BUSY）；
  * 候选筛选 / 确认文案在 ./accounts/plan.ts，执行逻辑在 src/application/account-task-orchestrator.ts。
- * 依赖（批处理器、Sub2API、窗口操作、开启共享）可通过第二参数注入，单测全部离线。
+ * 依赖（批处理器、窗口操作）可通过第二参数注入，单测全部离线。
  */
 import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
@@ -34,17 +34,11 @@ import {
   executeAccountWorkerTask,
   executeBatchBind,
   executeBatchDelete,
-  executeDetect403,
-  executeEnableFamilySharing,
   workerFinishedLogLines,
-  type EnableSharingFn,
   type LlmParams,
-  type Sub2ApiForOrchestrator,
   type WorkerProcessor,
 } from "../../../src/application/account-task-orchestrator.ts";
 import { BatchAccountProcessor } from "../../../src/automation/batch-account-processor.ts";
-import { autoEnableFamilySharing } from "../../../src/automation/auto-enable-family-sharing.ts";
-import { Sub2ApiClient } from "../../../src/services/sub2api-client.ts";
 import { deleteBrowserById } from "../../../src/ixbrowser/window.ts";
 import type { ConfigManager } from "../../../src/core/config-manager.ts";
 
@@ -61,10 +55,6 @@ export const MAX_ROWS = 100_000;
 export interface AccountsHandlerDeps {
   /** 对标 AutomationEngineAdapter.create_batch_processor */
   createProcessor?: (options: { concurrency: number; callback: (msg: string) => void }) => WorkerProcessor;
-  /** 对标 AutomationEngineAdapter.create_sub2api_client */
-  createSub2ApiClient?: () => Sub2ApiForOrchestrator;
-  /** 对标 AutomationEngineAdapter.run_enable_family_sharing */
-  runEnableSharing?: EnableSharingFn;
   /** 对标 services.ix_api.closeBrowser */
   closeBrowser?: (browserId: string) => Promise<unknown>;
   /** 对标 services.ix_api.deleteBrowser */
@@ -106,7 +96,7 @@ function requireRows(value: unknown, action: AccountsAction): SelectedRow[] {
   const seen = new Set<string>();
   const rows = parsed.filter((r) => (seen.has(r.email) ? false : (seen.add(r.email), true)));
   // 单行操作必须恰好一行
-  if ((action === "single_login" || action === "single_oauth" || action === "delete_one_with_window") && rows.length !== 1) {
+  if ((action === "single_login" || action === "delete_one_with_window") && rows.length !== 1) {
     throw invalid(`${action} 需要恰好 1 行`);
   }
   return rows;
@@ -119,8 +109,7 @@ function requireOptions(value: unknown): AccountsRunOptions {
   if (typeof c !== "number" || !Number.isInteger(c) || c < CONCURRENCY_MIN || c > CONCURRENCY_MAX) {
     throw invalid(`concurrency 必须是 ${CONCURRENCY_MIN}-${CONCURRENCY_MAX} 的整数`);
   }
-  if (typeof o["autoBindProxy"] !== "boolean") throw invalid("autoBindProxy 必须是布尔值");
-  return { concurrency: c, autoBindProxy: o["autoBindProxy"] };
+  return { concurrency: c };
 }
 
 function requireBrowserId(value: unknown): string {
@@ -160,7 +149,6 @@ function errorText(error: unknown): string {
 /** 对标 create_batch_processor(concurrency)；必须注入 db，否则批处理器会跳过写库（导出供单测校验） */
 export function createDefaultProcessor(
   ctx: HostContext,
-  createSub2ApiClient: () => Sub2ApiForOrchestrator,
   options: { concurrency: number; callback: (msg: string) => void },
 ): BatchAccountProcessor {
   return new BatchAccountProcessor(
@@ -168,8 +156,6 @@ export function createDefaultProcessor(
     {
       config: ctx.config(),
       db: ctx.db(),
-      ixClient: ctx.ix(),
-      createSub2ApiClient: () => createSub2ApiClient() as Sub2ApiClient,
     },
   );
 }
@@ -181,74 +167,38 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
   const repo = () => ctx.accountRepo();
   const listWindows = deps.listWindows ?? (async () => ctx.ix().getProfileList({ ...WINDOW_LIST_QUERY }));
 
-  /** 对标 Sub2APIClient()：从配置 sub2api.* 构造（不用模块级 configManager 单例，它的路径在打包后不对） */
-  const createSub2ApiClient =
-    deps.createSub2ApiClient ??
-    (() => {
-      const cfg = ctx.config();
-      return new Sub2ApiClient({ baseUrl: cfg.getSub2apiBaseUrl(), adminToken: cfg.getSub2apiToken() });
-    });
-
   const createProcessor =
     deps.createProcessor ??
     ((options: { concurrency: number; callback: (msg: string) => void }): WorkerProcessor =>
-      createDefaultProcessor(ctx, createSub2ApiClient, options));
-
-  const runEnableSharing: EnableSharingFn =
-    deps.runEnableSharing ??
-    ((account, browserId, callback) =>
-      autoEnableFamilySharing(browserId, account, {
-        callback,
-        closeBrowserOnSuccess: false,
-        accountRepo: repo(),
-      }));
+      createDefaultProcessor(ctx, options));
 
   const closeBrowser = deps.closeBrowser ?? ((id: string) => ctx.ix().closeProfile(Number(id)));
   const deleteBrowser =
     deps.deleteBrowser ??
     (async (id: string) => ({ success: await deleteBrowserById({ client: ctx.ix(), log: ctx.log }, id) }));
 
-  const planEnv = (busy: boolean): PlanEnv => ({
-    repo: repo(),
-    busy,
-    listWindows,
-    sms: () => {
-      const cfg = ctx.config();
-      return {
-        token: cfg.getSmsBusToken(),
-        countryId: cfg.getSmsBusDefaultCountryId(),
-        projectId: cfg.getSmsBusDefaultProjectId(),
-        maxRetries: cfg.getSmsBusMaxRetries(),
-      };
-    },
-  });
+  const planEnv = (busy: boolean): PlanEnv => ({ repo: repo(), busy, listWindows });
 
   // ---------- 各类任务的执行体 ----------
 
   const runTask = (spec: TaskSpec, options: AccountsRunOptions): TaskInfo => {
     switch (spec.kind) {
-      case "worker":
-        return ctx.tasks.start(spec.taskType, spec.label, async (api: TaskApi) => {
+      case "login":
+        return ctx.tasks.start("login", spec.label, async (api: TaskApi) => {
           const total = spec.accounts.length;
           api.log(spec.startLog);
           api.progress(0, total);
           const result = await executeAccountWorkerTask({
-            taskType: spec.taskType,
+            taskType: "login",
             accounts: spec.accounts,
             browserIds: spec.browserIds,
             concurrency: options.concurrency,
-            smsToken: spec.sms?.token ?? null,
-            countryId: spec.sms?.countryId ?? null,
-            projectId: spec.sms?.projectId ?? null,
-            maxRetries: spec.sms?.maxRetries ?? null,
-            autoBindProxy: options.autoBindProxy,
             llm: readLlmParams(ctx.config()),
             shouldStop: api.shouldStop,
             onStop: api.onStop,
             log: api.log,
             progressFromLog: createLogProgressTracker(total, api.progress),
             createProcessor,
-            createSub2ApiClient,
           });
           for (const line of workerFinishedLogLines(result)) api.log(line);
           return result;
@@ -306,44 +256,6 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           if (spec.withWindows) api.log(`已删除 ${results.deleted_windows} 个窗口`);
           return results;
         });
-
-      case "detect_403":
-        return ctx.tasks.start("detect_403", spec.label, async (api) => {
-          const total = spec.accounts.length;
-          api.progress(0, total);
-          const results = await executeDetect403({
-            accounts: spec.accounts,
-            shouldStop: api.shouldStop,
-            log: api.log,
-            progress: (i) => api.progress(i, total),
-            createSub2ApiClient,
-            repo: repo(),
-          });
-          // 对标 _onDetect403Finished（:1194）
-          api.log(`检测完成: 共 ${results.total} 个账号，${results.needs_unlock} 个需要解锁`);
-          return results;
-        });
-
-      case "enable_sharing":
-        return ctx.tasks.start("enable_family_sharing", spec.label, async (api) => {
-          const total = spec.accounts.length;
-          api.log(`开始批量开启家庭共享，共 ${total} 个账户...`);
-          api.progress(0, total);
-          const r = await executeEnableFamilySharing({
-            accounts: spec.accounts,
-            browserIds: spec.browserIds,
-            shouldStop: api.shouldStop,
-            log: api.log,
-            progress: (i) => api.progress(i, total),
-            runEnableSharing,
-          });
-          // 对标 _onEnableFamilySharingFinished（:2180-2188）
-          const created = r.family_created_count > 0 ? `, 创建家庭组 ${r.family_created_count}` : "";
-          api.log(
-            `开启家庭共享完成: 成功 ${r.success_count}${created}, 已开启 ${r.already_enabled_count}, 失败 ${r.failed_count}`,
-          );
-          return r;
-        });
     }
   };
 
@@ -376,11 +288,8 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           email: a.email,
           login_status: str(a.login_status),
           last_error: str(a["last_error"]),
-          is_pro: str(a.is_pro),
           browser_profile_id: browserId,
           window_name: browserId ? (nameMap.get(browserId) ?? "") : "",
-          sub2api_status: str(a.sub2api_status),
-          unlock_status: str(a.unlock_status),
           updated_at: str(a.updated_at),
         };
       });

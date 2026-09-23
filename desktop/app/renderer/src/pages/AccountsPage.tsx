@@ -2,12 +2,14 @@
  * 账号管理页 —— 对标 gui/account_manager_interface.py（AccountManagerInterface）
  *
  * 布局用 antd 重新组织，功能与文案照搬 Python：
- *   - 两行工具栏（:170-310）、全选 + 已选计数（:121-134）、10 列表格（:312-365）、底部统计（:486）
- *   - 筛选 14 项在前端过滤（:591-636），勾选只对当前筛选可见的行生效（:715-735）
+ *   - 两行工具栏（:170-310）、全选 + 已选计数（:121-134）、表格（:312-365）、底部统计（:486）
+ *   - 筛选在前端过滤（:591-636），勾选只对当前筛选可见的行生效（:715-735）
  *   - 右键菜单（:638-711）
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
  *   - 任务运行中，除「停止」外所有操作禁用（:1445-1460）；任务结束后刷新列表
  *   - 「一键加入家庭组」与右键「加入家庭组」：用户确认不需要，桌面版不提供（Python 侧保留）
+ *   - 按用户要求删除（Python 侧保留）：OAuth（批量 / 单个 / 一键登录+OAuth）与「自动绑定代理」、检测 Pro、
+ *     刷新家庭组、开启共享、检测 403、批量解锁 403，以及 Pro / Sub2API / 解锁状态三列和对应筛选项
  * 日志区与进度条由全局 TaskDock 承担。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -27,14 +29,7 @@ import {
   type MenuProps,
   type TableColumnsType,
 } from "antd";
-import {
-  CloudDownloadOutlined,
-  DeleteOutlined,
-  LinkOutlined,
-  PauseOutlined,
-  ReloadOutlined,
-  SendOutlined,
-} from "@ant-design/icons";
+import { CloudDownloadOutlined, DeleteOutlined, PauseOutlined, ReloadOutlined } from "@ant-design/icons";
 import type {
   AccountListRow,
   AccountsAction,
@@ -45,31 +40,11 @@ import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, stopTask, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
-import {
-  FILTER_OPTIONS,
-  loginView,
-  matchesFilter,
-  proView,
-  statsText,
-  sub2apiView,
-  unlockView,
-  type FilterOption,
-} from "./accounts/status.ts";
+import { FILTER_OPTIONS, loginView, matchesFilter, statsText, type FilterOption } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
 
 /** 本页启动的任务类型：结束后刷新列表（对标各 finished 回调里的 _loadData） */
-const ACCOUNT_TASK_TYPES = new Set([
-  "login",
-  "oauth",
-  "login_and_oauth",
-  "unlock_403",
-  "detect_pro",
-  "refresh_membership_info",
-  "batch_bind",
-  "batch_delete",
-  "detect_403",
-  "enable_family_sharing",
-]);
+const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete"]);
 
 
 function toSelected(row: AccountListRow): SelectedRow {
@@ -97,7 +72,6 @@ export function AccountsPage(): ReactElement {
   const [filter, setFilter] = useState<FilterOption>("全部");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [concurrency, setConcurrency] = useState(3);
-  const [autoBindProxy, setAutoBindProxy] = useState(true);
   const [bindEmail, setBindEmail] = useState<string | null>(null);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const closeBind = useCallback(() => setBindEmail(null), []);
@@ -213,7 +187,7 @@ export function AccountsPage(): ReactElement {
         for (const step of pre.confirms) {
           if (!(await confirm(step))) return;
         }
-        const info = await invoke(IPC.invoke.accountsStart, action, targetRows, { concurrency, autoBindProxy });
+        const info = await invoke(IPC.invoke.accountsStart, action, targetRows, { concurrency });
         markTaskStarted(info);
       } catch (e) {
         logLocal(`错误: ${describeError(e)}`);
@@ -222,7 +196,7 @@ export function AccountsPage(): ReactElement {
         actionPending.current = false;
       }
     },
-    [checkedRows, concurrency, autoBindProxy, notify, confirm],
+    [checkedRows, concurrency, notify, confirm],
   );
 
   // ---------- 单条操作（右键菜单） ----------
@@ -273,11 +247,7 @@ export function AccountsPage(): ReactElement {
           { key: "unbind", label: "解绑窗口", disabled: busy },
         ]
       : [{ key: "bind", label: "绑定窗口", disabled: busy }];
-    items.push(
-      { type: "divider" },
-      { key: "login", label: "登录", disabled: busy },
-      { key: "oauth", label: "OAuth", disabled: busy },
-    );
+    items.push({ type: "divider" }, { key: "login", label: "登录", disabled: busy });
     // Python :685 在此处还有「加入家庭组」—— 用户确认不需要该功能，桌面版不提供
     items.push(
       { type: "divider" },
@@ -301,9 +271,6 @@ export function AccountsPage(): ReactElement {
         break;
       case "login":
         void runAction("single_login", [toSelected(row)]);
-        break;
-      case "oauth":
-        void runAction("single_oauth", [toSelected(row)]);
         break;
       case "refresh":
         void load();
@@ -335,42 +302,15 @@ export function AccountsPage(): ReactElement {
         return tag(v.text, v.color, v.tooltip);
       },
     },
-    {
-      title: "Pro",
-      key: "pro",
-      width: 90,
-      render: (_, r) => {
-        const v = proView(r.is_pro);
-        return tag(v.text, v.color, v.tooltip);
-      },
-    },
     { title: "窗口名称", key: "windowName", ellipsis: true, render: (_, r) => r.window_name || "-" },
     { title: "窗口ID", key: "windowId", width: 100, render: (_, r) => r.browser_profile_id || "-" },
-    {
-      title: "Sub2API",
-      key: "sub2api",
-      width: 90,
-      render: (_, r) => {
-        const v = sub2apiView(r.sub2api_status);
-        return tag(v.text, v.color);
-      },
-    },
-    {
-      title: "解锁状态",
-      key: "unlock",
-      width: 90,
-      render: (_, r) => {
-        const v = unlockView(r.unlock_status);
-        return tag(v.text, v.color);
-      },
-    },
     { title: "更新时间", key: "updatedAt", width: 170, render: (_, r) => r.updated_at || "-" },
     {
       title: "操作",
       key: "action",
       width: 100,
       fixed: "right",
-      // 对标 :475-480：未登录显示「登录」，已登录显示「OAuth」
+      // 对标 :475-480：未登录显示「登录」；已登录原本显示「OAuth」，OAuth 已删除，这里留空
       render: (_, r) =>
         r.login_status !== "logged_in" ? (
           <Button
@@ -382,17 +322,7 @@ export function AccountsPage(): ReactElement {
           >
             登录
           </Button>
-        ) : (
-          <Button
-            type="link"
-            size="small"
-            icon={<LinkOutlined />}
-            disabled={busy}
-            onClick={() => void runAction("single_oauth", [toSelected(r)])}
-          >
-            OAuth
-          </Button>
-        ),
+        ) : null,
     },
   ];
 
@@ -421,21 +351,13 @@ export function AccountsPage(): ReactElement {
       <Card size="small">
         <Space wrap>
           {btn("批量登录", "login", "批量登录选中的账号", { primary: true, icon: <CloudDownloadOutlined /> })}
-          {btn("批量 OAuth", "oauth", "批量进行 OAuth 授权", { icon: <LinkOutlined /> })}
-          {btn("一键登录+OAuth", "login_and_oauth", "一键完成登录和OAuth", { icon: <SendOutlined /> })}
           <span style={{ width: 8 }} />
           {btn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
-          {btn("检测 Pro", "detect_pro", "检测选中已登录账号的 Google One Pro 会员状态")}
-          {btn("刷新家庭组", "refresh_membership_info", "刷新选中账号的完整会员信息（Pro状态、家庭组、国家）")}
-          {btn("开启共享", "enable_family_sharing", "为普通 Pro 账户开启家庭组共享功能")}
         </Space>
       </Card>
 
       <Card size="small">
         <Space wrap>
-          {btn("检测 403", "detect_403")}
-          {btn("批量解锁 403", "unlock_403")}
-          <span style={{ width: 8 }} />
           <Button icon={<ReloadOutlined />} disabled={busy} loading={loading} onClick={() => void load()}>
             刷新
           </Button>
@@ -475,11 +397,6 @@ export function AccountsPage(): ReactElement {
             onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
             disabled={busy}
           />
-          <Tooltip title="OAuth 成功后自动绑定到使用量最少的代理">
-            <Checkbox checked={autoBindProxy} onChange={(e) => setAutoBindProxy(e.target.checked)} disabled={busy}>
-              自动绑定代理
-            </Checkbox>
-          </Tooltip>
         </Space>
       </Card>
 
@@ -502,7 +419,7 @@ export function AccountsPage(): ReactElement {
         loading={loading}
         columns={columns}
         dataSource={visibleRows}
-        scroll={{ x: 1200 }}
+        scroll={{ x: 900 }}
         pagination={{ defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200, 500] }}
         rowSelection={{
           hideSelectAll: true,

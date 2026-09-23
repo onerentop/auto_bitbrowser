@@ -44,13 +44,10 @@ export interface AccountListRow {
   email: string;
   login_status: string | null;
   last_error: string | null;
-  is_pro: string | null;
   /** 未绑定时为空串 */
   browser_profile_id: string;
   /** 由 browser_profile_id 映射；ixBrowser 不可达或未找到时为空串 */
   window_name: string;
-  sub2api_status: string | null;
-  unlock_status: string | null;
   updated_at: string | null;
 }
 
@@ -65,21 +62,15 @@ export interface AccountsDefaults {
   loginConcurrency: number;
 }
 
-/** 批量操作种类 */
+/**
+ * 批量操作种类
+ * 已按用户要求删除：OAuth（批量 / 单个 / 一键登录+OAuth）、检测 Pro、刷新家庭组、开启共享、检测 403、批量解锁 403
+ */
 export type AccountsAction =
   /** 行内 / 右键「登录」（对标 _singleLogin，:801） */
   | "single_login"
-  /** 行内 / 右键「OAuth」（对标 _singleOAuth，:815） */
-  | "single_oauth"
   | "login"
-  | "oauth"
-  | "login_and_oauth"
   | "batch_bind"
-  | "detect_pro"
-  | "refresh_membership_info"
-  | "enable_family_sharing"
-  | "detect_403"
-  | "unlock_403"
   /** 删除选中（仅账号） */
   | "delete"
   /** 删除选中 + 窗口 */
@@ -89,16 +80,8 @@ export type AccountsAction =
 
 export const ACCOUNTS_ACTIONS: readonly AccountsAction[] = [
   "single_login",
-  "single_oauth",
   "login",
-  "oauth",
-  "login_and_oauth",
   "batch_bind",
-  "detect_pro",
-  "refresh_membership_info",
-  "enable_family_sharing",
-  "detect_403",
-  "unlock_403",
   "delete",
   "delete_with_windows",
   "delete_one_with_window",
@@ -111,12 +94,10 @@ export interface SelectedRow {
   browserId: string;
 }
 
-/** 页面上的选项 */
+/** 页面上的选项（「自动绑定代理」只服务 OAuth，已随 OAuth 删除） */
 export interface AccountsRunOptions {
   /** 并发数 1-10 */
   concurrency: number;
-  /** 自动绑定代理 */
-  autoBindProxy: boolean;
 }
 
 export interface ConfirmStep {

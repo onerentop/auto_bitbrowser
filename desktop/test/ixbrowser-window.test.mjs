@@ -191,34 +191,3 @@ test("bindAccountToBrowser：绑定、空串解绑、不存在的邮箱返回 fa
   assert.equal(repo.getAccountByEmail("a@x.com").browser_profile_id, "");
   assert.equal(repo.bindAccountToBrowser("no@x.com", "1"), false);
 });
-
-test("getAccountsNeedingUnlock：状态在两种之一且 validation_url 非空", () => {
-  const { repo } = repoWith([
-    { email: "a", unlock_status: "needs_unlock", validation_url: "http://v" },
-    { email: "b", unlock_status: "unlock_failed", validation_url: "http://v" },
-    { email: "c", unlock_status: "needs_unlock", validation_url: "" },
-    { email: "d", unlock_status: "needs_unlock" },
-    { email: "e", unlock_status: "unlocked", validation_url: "http://v" },
-  ]);
-  assert.deepEqual(
-    repo.getAccountsNeedingUnlock().map((r) => r.email).sort(),
-    ["a", "b"],
-  );
-});
-
-test("getAvailableProAccounts：条件与排序对齐 Python，附带 available_slots", () => {
-  const ok = { is_pro: "yes", login_status: "logged_in", browser_profile_id: "1" };
-  const { repo } = repoWith([
-    { email: "a", ...ok, family_member_count: 3 },
-    { email: "b", ...ok, family_member_count: 1 },
-    { email: "full", ...ok, family_member_count: 6 },
-    { email: "fam", ...ok, is_pro: "family_yes" },
-    { email: "nologin", ...ok, login_status: "not_logged" },
-    { email: "nowin", ...ok, browser_profile_id: "" },
-  ]);
-  const rows = repo.getAvailableProAccounts();
-  assert.deepEqual(rows.map((r) => [r.email, r.available_slots]), [
-    ["b", 5],
-    ["a", 3],
-  ]);
-});

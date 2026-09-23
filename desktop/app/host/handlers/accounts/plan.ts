@@ -6,6 +6,8 @@
  *   - ok=false：对标 _showInfo / _showWarning / _showError 后 return
  *   - ok=true ：confirms 依次对标 MessageBox(...).exec()，全部确认后才启动 task
  * precheck 与 start 共用本函数，start 时会重新执行一遍（数据可能在两次调用之间变化）。
+ *
+ * 已按用户要求删除：OAuth（批量 / 单个 / 一键登录+OAuth）、检测 Pro、刷新家庭组、开启共享、检测 403、批量解锁 403。
  */
 import type {
   AccountsAction,
@@ -16,61 +18,33 @@ import type {
 import { DELETE_ACCOUNTS_ONLY_LABEL } from "../../../shared/channels/accounts.ts";
 import {
   buildBatchDeleteConfirmMessage,
-  buildDetectProConfirmMessage,
-  buildEnableFamilySharingConfirmMessage,
-  buildNoDetectProCandidatesMessage,
-  buildNoEnableFamilySharingCandidatesMessage,
-  buildNoLinkedAccountsForDetect403Message,
-  buildNoSelectedUnlockTargetsMessage,
-  buildRefreshMembershipConfirmMessage,
-  buildUnlockAllConfirmMessage,
-  buildUnlockConfirmMessage,
   checkTaskConflicts,
   collectMissingBrowserEmails,
   collectUnboundEmails,
-  collectUnlockTargetsFromAll,
-  collectUnlockTargetsFromSelected,
-  filterLinkedAccountsForDetect403,
   getAccountAndBrowser,
   matchAccountsToWindows,
-  prepareDetectProCandidates,
-  prepareEnableFamilySharingCandidates,
   resolveSelectedAccounts,
-  splitAccountsWithBrowser,
   type AccountDict,
   type AccountLookup,
   type WindowLike,
 } from "../../../../src/application/account-manager-service.ts";
-import type { WorkerTaskType } from "../../../../src/application/account-task-orchestrator.ts";
-
-export interface SmsSettings {
-  token: string;
-  countryId: number | null;
-  projectId: number | null;
-  maxRetries: number | null;
-}
 
 export interface PlanEnv {
-  repo: AccountLookup & { getAccountsNeedingUnlock(): AccountDict[] };
+  repo: AccountLookup;
   /** 是否已有任务在跑（对标 _checkTaskConflicts） */
   busy: boolean;
   /** 对标 get_profile_list(page=1, limit=500)；不可达时抛错 */
   listWindows(): Promise<WindowLike[]>;
-  /** SMS-Bus 配置（对标 ConfigManager.get_sms_bus_*） */
-  sms(): SmsSettings;
 }
 
 export type TaskSpec =
   | {
-      kind: "worker";
-      taskType: WorkerTaskType;
+      kind: "login";
       label: string;
       accounts: AccountDict[];
       browserIds: string[];
       /** 任务开始时写入的第一条日志 */
       startLog: string;
-      /** 仅 unlock_403 需要 */
-      sms: SmsSettings | null;
     }
   | { kind: "bind"; label: string; matched: Array<[string, string]>; notMatchedCount: number }
   | {
@@ -81,9 +55,7 @@ export type TaskSpec =
       withWindows: boolean;
       /** 界面行上的窗口 ID 与数据库不一致而跳过的账号（执行时记日志并计为失败） */
       staleEmails: string[];
-    }
-  | { kind: "detect_403"; label: string; accounts: AccountDict[] }
-  | { kind: "enable_sharing"; label: string; accounts: AccountDict[]; browserIds: string[] };
+    };
 
 export type PlanFailure = Extract<AccountsPrecheckResult, { ok: false }>;
 export type Plan = PlanFailure | { ok: true; confirms: ConfirmStep[]; logs: string[]; total: number; task: TaskSpec };
@@ -101,32 +73,21 @@ export function toPrecheckResult(plan: Plan): AccountsPrecheckResult {
   return { ok: true, confirms: plan.confirms, logs: plan.logs, total: plan.total };
 }
 
-const WORKER_LABELS: Record<WorkerTaskType, string> = {
-  login: "批量登录",
-  oauth: "批量 OAuth",
-  login_and_oauth: "一键登录+OAuth",
-  detect_pro: "检测 Pro",
-  refresh_membership_info: "刷新家庭组",
-  unlock_403: "批量解锁 403",
-};
-
 /** 对标 _startTask（:1317）开头的日志 */
-function worker(taskType: WorkerTaskType, accounts: AccountDict[], browserIds: string[], label?: string): TaskSpec {
+function login(accounts: AccountDict[], browserIds: string[], label = "批量登录"): TaskSpec {
   return {
-    kind: "worker",
-    taskType,
-    label: label ?? WORKER_LABELS[taskType],
+    kind: "login",
+    label,
     accounts,
     browserIds,
-    startLog: `开始 ${taskType} 任务，共 ${accounts.length} 个账号...`,
-    sms: null,
+    startLog: `开始 login 任务，共 ${accounts.length} 个账号...`,
   };
 }
 
-/** 「以下账号未绑定窗口」提示（:843-844 带「等 N 个」，:862 / :880 不带） */
-function missingMessage(missing: string[], withCount: boolean): string {
+/** 「以下账号未绑定窗口」提示（:843-844） */
+function missingMessage(missing: string[]): string {
   let msg = `以下账号未绑定窗口:\n${missing.slice(0, 5).join(", ")}`;
-  if (withCount && missing.length > 5) msg += `\n...等 ${missing.length} 个`;
+  if (missing.length > 5) msg += `\n...等 ${missing.length} 个`;
   return msg;
 }
 
@@ -162,34 +123,26 @@ export async function planAction(action: AccountsAction, rows: readonly Selected
   };
 
   switch (action) {
-    // ---------- 单个账号（:801-827） ----------
-    case "single_login":
-    case "single_oauth": {
+    // ---------- 单个账号（:801-813） ----------
+    case "single_login": {
       const busy = conflict();
       if (busy) return busy;
       const email = rows[0]?.email ?? "";
       const { account, browserId } = getAccountAndBrowser(env.repo, email);
       if (!account) return warning(`未找到账号: ${email}`);
       if (!browserId) return warning(`账号 ${email} 未绑定浏览器窗口`);
-      const taskType = action === "single_login" ? "login" : "oauth";
-      return ok(worker(taskType, [account], [browserId], `${taskType === "login" ? "登录" : "OAuth"} ${email}`), 1);
+      return ok(login([account], [browserId], `登录 ${email}`), 1);
     }
 
-    // ---------- 批量登录 / OAuth / 登录+OAuth（:831-884） ----------
-    case "login":
-    case "oauth":
-    case "login_and_oauth": {
+    // ---------- 批量登录（:831-849） ----------
+    case "login": {
       const busy = conflict();
       if (busy) return busy;
       const { accounts, browserIds } = selectedDb();
-      if (accounts.length === 0) {
-        const tip =
-          action === "login" ? "请先选择要登录的账号" : action === "oauth" ? "请先选择要进行 OAuth 的账号" : "请先选择账号";
-        return info(tip);
-      }
+      if (accounts.length === 0) return info("请先选择要登录的账号");
       const missing = collectMissingBrowserEmails(accounts, browserIds);
-      if (missing.length) return warning(missingMessage(missing, action === "login"));
-      return ok(worker(action, accounts, browserIds), accounts.length);
+      if (missing.length) return warning(missingMessage(missing));
+      return ok(login(accounts, browserIds), accounts.length);
     }
 
     // ---------- 批量绑定窗口（:886-988） ----------
@@ -227,126 +180,6 @@ export async function planAction(action: AccountsAction, rows: readonly Selected
         matched.length,
         [{ title: "确认", message: `${msg}\n\n是否继续？` }],
       );
-    }
-
-    // ---------- 检测 Pro / 刷新家庭组（:1024-1099） ----------
-    case "detect_pro":
-    case "refresh_membership_info": {
-      const busy = conflict();
-      if (busy) return busy;
-      const { accounts, browserIds } = selectedDb();
-      if (accounts.length === 0) {
-        return info(action === "detect_pro" ? "请先选择要检测的账号" : "请先选择要刷新的账号");
-      }
-      const c = prepareDetectProCandidates(accounts, browserIds);
-      if (c.validAccounts.length === 0) {
-        return warning(buildNoDetectProCandidatesMessage(c.skippedNotLogged, c.skippedNoBrowser));
-      }
-      const confirm: ConfirmStep =
-        action === "detect_pro"
-          ? {
-              title: "确认检测",
-              message: `${buildDetectProConfirmMessage(
-                c.validAccounts.length,
-                c.skippedNotLogged.length,
-                c.skippedNoBrowser.length,
-              )}\n\n是否继续？`,
-            }
-          : {
-              title: "确认刷新",
-              message: buildRefreshMembershipConfirmMessage(
-                c.validAccounts.length,
-                c.skippedNotLogged.length,
-                c.skippedNoBrowser.length,
-              ),
-            };
-      return ok(worker(action, c.validAccounts, c.validBrowserIds), c.validAccounts.length, [confirm]);
-    }
-
-    // ---------- 开启共享（:2082-2118） ----------
-    case "enable_family_sharing": {
-      const busy = conflict();
-      if (busy) return busy;
-      const { accounts, browserIds } = selectedDb();
-      if (accounts.length === 0) return info("请先勾选要开启共享的 Pro 账号");
-      const c = prepareEnableFamilySharingCandidates(accounts, browserIds);
-      if (c.validAccounts.length === 0) {
-        return warning(
-          buildNoEnableFamilySharingCandidatesMessage(c.skippedNotPro, c.skippedNotLogged, c.skippedNoBrowser),
-        );
-      }
-      const msg = buildEnableFamilySharingConfirmMessage(
-        c.validAccounts.length,
-        c.skippedNotPro.length,
-        c.skippedNotLogged.length,
-        c.skippedNoBrowser.length,
-      );
-      return ok(
-        { kind: "enable_sharing", label: "开启共享", accounts: c.validAccounts, browserIds: c.validBrowserIds },
-        c.validAccounts.length,
-        [{ title: "确认开启共享", message: `${msg}\n\n是否继续？` }],
-      );
-    }
-
-    // ---------- 检测 403（:1101-1176） ----------
-    case "detect_403": {
-      const busy = conflict();
-      if (busy) return busy;
-      const { accounts } = selected();
-      if (accounts.length === 0) return info("请先选择要检测的账号");
-      const linked = filterLinkedAccountsForDetect403(accounts);
-      if (linked.length === 0) return warning(buildNoLinkedAccountsForDetect403Message(accounts.length), "提示");
-      return ok({ kind: "detect_403", label: "检测 403", accounts: linked }, linked.length, [], [
-        `正在检测选中账号的 403 状态，共 ${linked.length} 个已关联账号...`,
-      ]);
-    }
-
-    // ---------- 批量解锁 403（:1217-1287） ----------
-    case "unlock_403": {
-      const busy = conflict();
-      if (busy) return busy;
-      const confirms: ConfirmStep[] = [];
-      const logs: string[] = [];
-      let accountsToUnlock: AccountDict[];
-      let browserIds: string[];
-
-      const { accounts: selectedAccounts, browserIds: selectedBrowserIds } = selectedDb();
-      if (selectedAccounts.length) {
-        ({ accountsToUnlock, browserIds } = collectUnlockTargetsFromSelected(selectedAccounts, selectedBrowserIds));
-        if (accountsToUnlock.length === 0) return info(buildNoSelectedUnlockTargetsMessage());
-        logs.push(`用户选中了 ${selectedAccounts.length} 个账号，其中 ${accountsToUnlock.length} 个需要解锁`);
-      } else {
-        const all = env.repo.getAccountsNeedingUnlock();
-        if (all.length === 0) return info("没有需要解锁的账号\n请先点击「检测 403」按钮");
-        confirms.push({ title: "确认", message: buildUnlockAllConfirmMessage(all.length) });
-        ({ accountsToUnlock, browserIds } = collectUnlockTargetsFromAll(all));
-      }
-
-      // 检查 SMS-Bus Token（:1254-1262）
-      const sms = env.sms();
-      if (!sms.token) {
-        return warning("请先配置 SMS-Bus Token\n\n在「配置管理」→「Sub2API 设置」→「SMS-Bus」中设置 API Token");
-      }
-
-      const split = splitAccountsWithBrowser(accountsToUnlock, browserIds);
-      if (split.accountsWithBrowser.length === 0) return warning("所有需要解锁的账号都未绑定窗口");
-
-      // Python 打印 None 的位置还原为 "None"（:1274）
-      logs.push(`SMS-Bus 配置: country_id=${sms.countryId ?? "None"}, project_id=${sms.projectId ?? "None"}`);
-      const msg = buildUnlockConfirmMessage(
-        split.accountsWithBrowser.length,
-        split.noBrowserEmails.length,
-        sms.countryId,
-        sms.projectId,
-      );
-      confirms.push({ title: "确认解锁", message: `${msg}\n\n是否继续？` });
-
-      const task = worker("unlock_403", split.accountsWithBrowser, split.validBrowserIds);
-      if (task.kind === "worker") {
-        task.startLog = `开始解锁任务，共 ${split.accountsWithBrowser.length} 个账号...`;
-        task.sms = sms;
-      }
-      return ok(task, split.accountsWithBrowser.length, confirms, logs);
     }
 
     // ---------- 批量删除（:1687-1766） ----------

@@ -31,8 +31,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { LlmConfigProvider } from "../browseruse/llm/adapters.ts";
-
 /** 配置树里的任意值（Python 侧是 JSON 可序列化的任意对象） */
 export type ConfigValue = unknown;
 
@@ -781,72 +779,6 @@ export class ConfigManager {
     this.set("gmail_imap_password", encrypted);
   }
 
-  // ============ Sub2API 配置方法 ============
-
-  /** 对标 get_sub2api_enabled() */
-  getSub2apiEnabled(): boolean {
-    return this.get("sub2api.enabled", true) as boolean;
-  }
-
-  /** 对标 set_sub2api_enabled() */
-  setSub2apiEnabled(enabled: boolean): void {
-    this.set("sub2api.enabled", enabled);
-  }
-
-  /** 对标 get_sub2api_base_url() */
-  getSub2apiBaseUrl(): string {
-    return this.get("sub2api.base_url", "https://sub2api.topren.top") as string;
-  }
-
-  /** 对标 set_sub2api_base_url() */
-  setSub2apiBaseUrl(baseUrl: string): void {
-    this.set("sub2api.base_url", baseUrl);
-  }
-
-  /** 对标 get_sub2api_username() */
-  getSub2apiUsername(): string {
-    return this.get("sub2api.username", "") as string;
-  }
-
-  /** 对标 set_sub2api_username() */
-  setSub2apiUsername(username: string): void {
-    this.set("sub2api.username", username);
-  }
-
-  /** 对标 get_sub2api_password()：获取解密后的 Sub2API 密码 */
-  getSub2apiPassword(): string {
-    const encrypted = this.get("sub2api.password", "") as string;
-    return decryptSensitive(encrypted);
-  }
-
-  /** 对标 set_sub2api_password()：加密保存 Sub2API 密码 */
-  setSub2apiPassword(password: string): void {
-    const encrypted = encryptSensitive(password);
-    this.set("sub2api.password", encrypted);
-  }
-
-  /** 对标 get_sub2api_token()：获取解密后的 Sub2API Admin Token */
-  getSub2apiToken(): string {
-    const encrypted = this.get("sub2api.admin_token", "") as string;
-    return decryptSensitive(encrypted);
-  }
-
-  /** 对标 set_sub2api_token()：加密保存 Sub2API Admin Token */
-  setSub2apiToken(token: string): void {
-    const encrypted = encryptSensitive(token);
-    this.set("sub2api.admin_token", encrypted);
-  }
-
-  /** 对标 get_sub2api_default_group() */
-  getSub2apiDefaultGroup(): string {
-    return this.get("sub2api.default_group", "claude_share") as string;
-  }
-
-  /** 对标 set_sub2api_default_group() */
-  setSub2apiDefaultGroup(group: string): void {
-    this.set("sub2api.default_group", group);
-  }
-
   // ============ 账号管理配置方法 ============
 
   /** 对标 get_login_concurrency()：获取并发登录数 */
@@ -869,16 +801,6 @@ export class ConfigManager {
     this.set("account_manager.login_timeout", timeout);
   }
 
-  /** 对标 get_oauth_timeout()：获取 OAuth 超时时间（秒） */
-  getOauthTimeout(): number {
-    return this.get("account_manager.oauth_timeout", 180) as number;
-  }
-
-  /** 对标 set_oauth_timeout() */
-  setOauthTimeout(timeout: number): void {
-    this.set("account_manager.oauth_timeout", timeout);
-  }
-
   /** 对标 get_login_max_retries()：获取登录最大重试次数 */
   getLoginMaxRetries(): number {
     return this.get("account_manager.login_max_retries", 2) as number;
@@ -899,94 +821,6 @@ export class ConfigManager {
     this.set("account_manager.login_retry_delay", delay);
   }
 
-  // ============ SMS-Bus 配置方法 ============
-
-  /** 对标 get_sms_bus_token()：获取 SMS-Bus API Token */
-  getSmsBusToken(): string {
-    const encrypted = this.get("sms_bus.token", "") as string;
-    return decryptSensitive(encrypted);
-  }
-
-  /** 对标 set_sms_bus_token()：加密保存 SMS-Bus API Token */
-  setSmsBusToken(token: string): void {
-    const encrypted = encryptSensitive(token);
-    this.set("sms_bus.token", encrypted);
-  }
-
-  /** 对标 get_sms_bus_default_country_id()（无配置时为 null，对应 Python 的 None） */
-  getSmsBusDefaultCountryId(): number | null {
-    return this.get("sms_bus.default_country_id", null) as number | null;
-  }
-
-  /** 对标 set_sms_bus_default_country_id() */
-  setSmsBusDefaultCountryId(countryId: number | null): void {
-    this.set("sms_bus.default_country_id", countryId);
-  }
-
-  /** 对标 get_sms_bus_default_project_id()（无配置时为 null，对应 Python 的 None） */
-  getSmsBusDefaultProjectId(): number | null {
-    return this.get("sms_bus.default_project_id", null) as number | null;
-  }
-
-  /** 对标 set_sms_bus_default_project_id() */
-  setSmsBusDefaultProjectId(projectId: number | null): void {
-    this.set("sms_bus.default_project_id", projectId);
-  }
-
-  /** 对标 get_sms_bus_timeout()：获取 SMS-Bus 等待验证码超时时间（秒） */
-  getSmsBusTimeout(): number {
-    return this.get("sms_bus.sms_timeout", 120) as number;
-  }
-
-  /** 对标 set_sms_bus_timeout() */
-  setSmsBusTimeout(timeout: number): void {
-    this.set("sms_bus.sms_timeout", timeout);
-  }
-
-  /** 对标 get_sms_bus_poll_interval()：获取 SMS-Bus 轮询间隔（秒） */
-  getSmsBusPollInterval(): number {
-    return this.get("sms_bus.sms_poll_interval", 5) as number;
-  }
-
-  /** 对标 set_sms_bus_poll_interval() */
-  setSmsBusPollInterval(interval: number): void {
-    this.set("sms_bus.sms_poll_interval", interval);
-  }
-
-  /** 对标 get_sms_bus_max_retries()：获取 SMS-Bus 总尝试次数（不是额外重试次数） */
-  getSmsBusMaxRetries(): number {
-    return this.get("sms_bus.max_retries", 2) as number;
-  }
-
-  /** 对标 set_sms_bus_max_retries()：设置 SMS-Bus 总尝试次数（不是额外重试次数） */
-  setSmsBusMaxRetries(retries: number): void {
-    this.set("sms_bus.max_retries", retries);
-  }
-
-  // ============ LlmConfigProvider 适配（Node 侧新增） ============
-  // Python 侧没有这四个方法；它们只是 get_ai_* 的别名，用来直接满足
-  // browseruse/llm/adapters.ts 的 LlmConfigProvider 与
-  // automation/pro-status-detector.ts 的 AiConfigProvider 结构类型。
-
-  /** LlmConfigProvider：等价于 getAiDefaultProvider() */
-  getDefaultProvider(): string {
-    return this.getAiDefaultProvider();
-  }
-
-  /** LlmConfigProvider：等价于 getAiProviderApiKey(provider) */
-  getProviderApiKey(provider: string): string {
-    return this.getAiProviderApiKey(provider);
-  }
-
-  /** LlmConfigProvider：等价于 getAiProviderModel(provider) */
-  getProviderModel(provider: string): string {
-    return this.getAiProviderModel(provider);
-  }
-
-  /** LlmConfigProvider：等价于 getAiProviderBaseUrl(provider) */
-  getProviderBaseUrl(provider: string): string {
-    return this.getAiProviderBaseUrl(provider);
-  }
 }
 
 function errText(e: unknown): string {
@@ -1031,13 +865,4 @@ export function getConfig(key: string, defaultValue: ConfigValue = null): Config
 /** 对标模块级便捷函数 set_config() */
 export function setConfig(key: string, value: ConfigValue): void {
   configManager.set(key, value);
-}
-
-/**
- * 编译期断言：ConfigManager 满足 browseruse/llm/adapters.ts 的 LlmConfigProvider
- * （同时也满足 automation/pro-status-detector.ts 的 AiConfigProvider，二者结构一致）。
- * 若方法签名走样，这里会直接编译报错。
- */
-export function assertLlmConfigProviderConformance(c: ConfigManager): LlmConfigProvider {
-  return c;
 }

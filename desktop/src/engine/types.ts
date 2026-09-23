@@ -8,14 +8,6 @@
  *      构造默认值由 createXxx() 提供——这样读取结果时无需 undefined 判断
  */
 
-/** 家庭组角色 */
-export type FamilyRole = "manager" | "member" | "none";
-export const FamilyRoleValues = {
-  MANAGER: "manager",
-  MEMBER: "member",
-  NONE: "none",
-} as const;
-
 /** 登录状态枚举 */
 export type LoginState = "logged_in" | "logged_out" | "need_password" | "need_2fa" | "need_recovery" | "wrong_password" | "account_not_found" | "account_disabled" | "captcha_required" | "security_challenge" | "unknown";
 export const LoginStateValues = {
@@ -46,16 +38,6 @@ export const OperationStatusValues = {
   LINK_READY: "link_ready",
   INELIGIBLE: "ineligible",
   ERROR: "error",
-} as const;
-
-/** Pro 订阅状态 */
-export type ProStatus = "active" | "expired" | "free" | "trial" | "unknown";
-export const ProStatusValues = {
-  ACTIVE: "active",
-  EXPIRED: "expired",
-  FREE: "free",
-  TRIAL: "trial",
-  UNKNOWN: "unknown",
 } as const;
 
 /** 两步验证方法 */
@@ -124,41 +106,6 @@ export function createBaseOperationResult(overrides: Partial<BaseOperationResult
   return base as unknown as BaseOperationResult;
 }
 
-/** 开启家庭共享操作结果 */
-export interface EnableSharingResult {
-  success: boolean;
-  message: string;
-  error: string | null;
-  error_type: string | null;
-  duration_ms: number;
-  can_retry: boolean;
-  was_already_enabled: boolean;
-  sharing_enabled: boolean;
-  family_created: boolean;
-  member_count: number;
-}
-
-/** 构造 EnableSharingResult，默认值对齐 Python dataclass */
-export function createEnableSharingResult(overrides: Partial<EnableSharingResult> = {}): EnableSharingResult {
-  const base: Record<string, unknown> = {
-    success: false,
-    message: "",
-    error: null,
-    error_type: null,
-    duration_ms: 0,
-    can_retry: false,
-    was_already_enabled: false,
-    sharing_enabled: false,
-    family_created: false,
-    member_count: 0,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as EnableSharingResult;
-}
-
 /** 提取结果 */
 export interface ExtractResult {
   success: boolean;
@@ -180,98 +127,6 @@ export function createExtractResult(overrides: Partial<ExtractResult> = {}): Ext
     if (v !== undefined) base[k] = v;
   }
   return base as unknown as ExtractResult;
-}
-
-/** 家庭组成员 */
-export interface FamilyMember {
-  email: string;
-  name: string | null;
-  role: FamilyRole;
-  avatar_url: string | null;
-}
-
-/** 构造 FamilyMember，默认值对齐 Python dataclass */
-export function createFamilyMember(overrides: Partial<FamilyMember> = {}): FamilyMember {
-  const base: Record<string, unknown> = {
-    email: "",
-    name: null,
-    avatar_url: null,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as FamilyMember;
-}
-
-/** 家庭组状态检测结果 */
-export interface FamilyStatusResult {
-  has_family: boolean;
-  role: FamilyRole;
-  is_manager: boolean;
-  member_count: number;
-  members: FamilyMember[];
-  sharing_enabled: boolean;
-  can_share_subscription: boolean;
-  family_name: string | null;
-}
-
-/** 构造 FamilyStatusResult，默认值对齐 Python dataclass */
-export function createFamilyStatusResult(overrides: Partial<FamilyStatusResult> = {}): FamilyStatusResult {
-  const base: Record<string, unknown> = {
-    has_family: false,
-    is_manager: false,
-    member_count: 0,
-    members: [],
-    sharing_enabled: false,
-    can_share_subscription: false,
-    family_name: null,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as FamilyStatusResult;
-}
-
-/** 加入家庭组操作结果 */
-export interface JoinFamilyResult {
-  success: boolean;
-  message: string;
-  error: string | null;
-  error_type: string | null;
-  duration_ms: number;
-  can_retry: boolean;
-  joined_as: FamilyRole;
-  family_manager_email: string | null;
-  inviter_email: string | null;
-  member_count_after: number;
-  already_in_family: boolean;
-  invite_sent: boolean;
-  invite_accepted: boolean;
-}
-
-/** 构造 JoinFamilyResult，默认值对齐 Python dataclass */
-export function createJoinFamilyResult(overrides: Partial<JoinFamilyResult> = {}): JoinFamilyResult {
-  const base: Record<string, unknown> = {
-    success: false,
-    message: "",
-    error: null,
-    error_type: null,
-    duration_ms: 0,
-    can_retry: false,
-    family_manager_email: null,
-    inviter_email: null,
-    member_count_after: 0,
-    already_in_family: false,
-    invite_sent: false,
-    invite_accepted: false,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as JoinFamilyResult;
 }
 
 /** 踢出设备操作结果 */
@@ -455,51 +310,6 @@ export function createNavigationResult(overrides: Partial<NavigationResult> = {}
   return base as unknown as NavigationResult;
 }
 
-/** OAuth 授权操作结果 */
-export interface OAuthResult {
-  success: boolean;
-  message: string;
-  error: string | null;
-  error_type: string | null;
-  duration_ms: number;
-  can_retry: boolean;
-  service_name: string;
-  service: string;
-  authorized: boolean;
-  redirect_url: string | null;
-  access_token: string | null;
-  refresh_token: string | null;
-  expires_in: number | null;
-  oauth_email: string | null;
-  account_id: string | null;
-}
-
-/** 构造 OAuthResult，默认值对齐 Python dataclass */
-export function createOAuthResult(overrides: Partial<OAuthResult> = {}): OAuthResult {
-  const base: Record<string, unknown> = {
-    success: false,
-    message: "",
-    error: null,
-    error_type: null,
-    duration_ms: 0,
-    can_retry: false,
-    service_name: "",
-    service: "",
-    authorized: false,
-    redirect_url: null,
-    access_token: null,
-    refresh_token: null,
-    expires_in: null,
-    oauth_email: null,
-    account_id: null,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as OAuthResult;
-}
-
 /** 观察结果 */
 export interface ObserveResult {
   success: boolean;
@@ -521,42 +331,6 @@ export function createObserveResult(overrides: Partial<ObserveResult> = {}): Obs
     if (v !== undefined) base[k] = v;
   }
   return base as unknown as ObserveResult;
-}
-
-/** Pro 状态检测结果 */
-export interface ProStatusResult {
-  status: ProStatus;
-  is_pro: boolean;
-  is_family_member: boolean;
-  family_manager_email: string | null;
-  plan_name: string | null;
-  storage_used: string | null;
-  storage_total: string | null;
-  expiry_date: string | null;
-  confidence: number;
-  method_used: string;
-  raw_keywords: string[];
-}
-
-/** 构造 ProStatusResult，默认值对齐 Python dataclass */
-export function createProStatusResult(overrides: Partial<ProStatusResult> = {}): ProStatusResult {
-  const base: Record<string, unknown> = {
-    is_pro: false,
-    is_family_member: false,
-    family_manager_email: null,
-    plan_name: null,
-    storage_used: null,
-    storage_total: null,
-    expiry_date: null,
-    confidence: 0,
-    method_used: "",
-    raw_keywords: [],
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as ProStatusResult;
 }
 
 /** 替换辅助邮箱操作结果 */
@@ -629,46 +403,5 @@ export function createReplacePhoneResult(overrides: Partial<ReplacePhoneResult> 
     if (v !== undefined) base[k] = v;
   }
   return base as unknown as ReplacePhoneResult;
-}
-
-/** 解锁 403 操作结果 */
-export interface UnlockResult {
-  success: boolean;
-  message: string;
-  error: string | null;
-  error_type: string | null;
-  duration_ms: number;
-  can_retry: boolean;
-  was_locked: boolean;
-  unlocked: boolean;
-  verification_url: string | null;
-  phone_used: string | null;
-  sms_code_used: string | null;
-  needs_manual: boolean;
-  lock_reason: string | null;
-}
-
-/** 构造 UnlockResult，默认值对齐 Python dataclass */
-export function createUnlockResult(overrides: Partial<UnlockResult> = {}): UnlockResult {
-  const base: Record<string, unknown> = {
-    success: false,
-    message: "",
-    error: null,
-    error_type: null,
-    duration_ms: 0,
-    can_retry: false,
-    was_locked: false,
-    unlocked: false,
-    verification_url: null,
-    phone_used: null,
-    sms_code_used: null,
-    needs_manual: false,
-    lock_reason: null,
-  };
-  // 跳过 undefined：Partial 允许显式传 undefined，但不应覆盖默认值
-  for (const [k, v] of Object.entries(overrides)) {
-    if (v !== undefined) base[k] = v;
-  }
-  return base as unknown as UnlockResult;
 }
 

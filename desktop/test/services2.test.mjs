@@ -1,8 +1,7 @@
-/** invite-lock / proxy-allocator / recovery-email-manager / data-store 单测（内存 SQLite） */
+/** proxy-allocator / recovery-email-manager / data-store 单测（内存 SQLite） */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { InviteLockManager } from "../src/services/invite-lock.ts";
 import { ProxyAllocator } from "../src/services/proxy-allocator.ts";
 import { ProxyRepository } from "../src/db/proxy-repository.ts";
 import { RecoveryEmailRepository } from "../src/db/recovery-email-repository.ts";
@@ -19,62 +18,6 @@ function freshDb() {
     email TEXT, bound_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
   return db;
 }
-
-// ---------------- InviteLockManager ----------------
-
-test("锁: 首次成功，重复失败，解锁后可再锁", () => {
-  const m = new InviteLockManager();
-  assert.equal(m.tryLock("A@b.com"), true);
-  assert.equal(m.tryLock("a@B.com"), false, "大小写归一后应视为同一邮箱");
-  m.unlock("  a@b.com  ");
-  assert.equal(m.tryLock("a@b.com"), true);
-});
-
-test("锁: 空邮箱视为无需加锁", () => {
-  const m = new InviteLockManager();
-  assert.equal(m.tryLock(""), true);
-  assert.equal(m.isLocked(""), false);
-  assert.equal(m.getLockedCount(), 0);
-});
-
-test("锁: 超时后自动释放", () => {
-  const m = new InviteLockManager(30 * 60_000);
-  m.tryLock("x@y.com");
-  assert.equal(m.isLocked("x@y.com"), true);
-  m.setTimeout(0.0001); // 6ms
-  const until = Date.now() + 15;
-  while (Date.now() < until) { /* busy wait */ }
-  assert.equal(m.isLocked("x@y.com"), false);
-  assert.equal(m.tryLock("x@y.com"), true);
-});
-
-test("锁: setTimeout 忽略非正数", () => {
-  const m = new InviteLockManager(60_000);
-  m.setTimeout(0);
-  m.setTimeout(-5);
-  m.tryLock("a@b.com");
-  assert.equal(m.isLocked("a@b.com"), true, "超时未被改成 0");
-});
-
-test("锁: 计数、列表与清空", () => {
-  const m = new InviteLockManager();
-  m.tryLock("a@b.com"); m.tryLock("c@d.com");
-  assert.equal(m.getLockedCount(), 2);
-  assert.deepEqual(m.getLockedEmails().sort(), ["a@b.com", "c@d.com"]);
-  assert.equal(m.clearAll(), 2);
-  assert.equal(m.getLockedCount(), 0);
-});
-
-test("锁: getLockInfo 返回时间，未锁返回 null", () => {
-  const m = new InviteLockManager();
-  assert.equal(m.getLockInfo("a@b.com"), null);
-  m.tryLock("a@b.com");
-  assert.ok(m.getLockInfo("a@b.com") instanceof Date);
-});
-
-test("锁: 单例", () => {
-  assert.equal(InviteLockManager.getInstance(), InviteLockManager.getInstance());
-});
 
 // ---------------- ProxyAllocator ----------------
 

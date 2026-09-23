@@ -1,6 +1,6 @@
 /**
  * 账号管理页：后端 handler（app/host/handlers/accounts.ts + accounts/plan.ts）与渲染层纯函数的离线单测
- * :memory: 库 + initDb、假 ixBrowser、假批处理器 / Sub2API，全部离线。
+ * :memory: 库 + initDb、假 ixBrowser、假批处理器，全部离线。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,15 +17,7 @@ import { createDispatcher } from "../app/host/dispatch.ts";
 import { createAccountsHandlers, createDefaultProcessor, readLlmParams } from "../app/host/handlers/accounts.ts";
 import { finishedNotice } from "../app/renderer/src/pages/accounts/finished-notice.ts";
 import { createBatchResult } from "../src/automation/batch/types.ts";
-import {
-  FILTER_OPTIONS,
-  loginView,
-  matchesFilter,
-  proView,
-  statsText,
-  sub2apiView,
-  unlockView,
-} from "../app/renderer/src/pages/accounts/status.ts";
+import { FILTER_OPTIONS, loginView, matchesFilter, statsText } from "../app/renderer/src/pages/accounts/status.ts";
 
 const CH = ACCOUNTS_INVOKE;
 
@@ -102,7 +94,7 @@ function seed(ctx, rows) {
   }
 }
 
-const OPTS = { concurrency: 2, autoBindProxy: true };
+const OPTS = { concurrency: 2 };
 
 // ==================== 列表 ====================
 
@@ -147,14 +139,17 @@ test("参数校验：非法参数一律 INVALID_ARGUMENT", async () => {
     assert.equal(env.error.code, ERROR_CODES.INVALID_ARGUMENT, `${channel} ${JSON.stringify(args)}`);
   };
   await bad(CH.accountsPrecheck, ["nope", []]);
+  // 已删除的操作一律视为未知操作
+  for (const removed of ["oauth", "single_oauth", "login_and_oauth", "detect_pro", "refresh_membership_info", "enable_family_sharing", "detect_403", "unlock_403"]) {
+    await bad(CH.accountsPrecheck, [removed, []]);
+  }
   await bad(CH.accountsPrecheck, ["login", "not-array"]);
   await bad(CH.accountsPrecheck, ["login", [{ email: 1 }]]);
   await bad(CH.accountsPrecheck, ["login", [null]]);
   await bad(CH.accountsPrecheck, ["single_login", [{ email: "a", browserId: "" }, { email: "b", browserId: "" }]]);
-  await bad(CH.accountsStart, ["login", [], { concurrency: 0, autoBindProxy: true }]);
-  await bad(CH.accountsStart, ["login", [], { concurrency: 11, autoBindProxy: true }]);
-  await bad(CH.accountsStart, ["login", [], { concurrency: 2.5, autoBindProxy: true }]);
-  await bad(CH.accountsStart, ["login", [], { concurrency: 2, autoBindProxy: "yes" }]);
+  await bad(CH.accountsStart, ["login", [], { concurrency: 0 }]);
+  await bad(CH.accountsStart, ["login", [], { concurrency: 11 }]);
+  await bad(CH.accountsStart, ["login", [], { concurrency: 2.5 }]);
   await bad(CH.accountsStart, ["login", [], null]);
   await bad(CH.accountsBind, ["a@x.com", "abc"]);
   await bad(CH.accountsBind, ["", "12"]);
@@ -186,62 +181,6 @@ test("precheck：批量登录的前置校验文案（:831-848）", async () => {
   assert.deepEqual(ok, { ok: true, confirms: [], logs: [], total: 1 });
 });
 
-test("precheck：检测 Pro 只处理已登录且已绑窗口的账号，确认文案带「是否继续？」", async () => {
-  const s = setup();
-  seed(s.ctx, [
-    { email: "a", browser_profile_id: "1", login_status: "logged_in" },
-    { email: "b", browser_profile_id: "2" },
-  ]);
-  const rows = [
-    { email: "a", browserId: "1" },
-    { email: "b", browserId: "2" },
-  ];
-  const r = await s.call(CH.accountsPrecheck, "detect_pro", rows);
-  assert.equal(r.ok, true);
-  assert.equal(r.total, 1);
-  assert.deepEqual(r.confirms, [
-    { title: "确认检测", message: "将检测 1 个已登录账号的 Pro 状态\n\n⚠️ 跳过 1 个未登录账号\n\n是否继续？" },
-  ]);
-  const none = await s.call(CH.accountsPrecheck, "detect_pro", [{ email: "b", browserId: "2" }]);
-  assert.deepEqual(none, { ok: false, level: "warning", title: "警告", message: "没有可检测的账号\n\n❌ 1 个未登录\n" });
-});
-
-test("precheck：批量解锁未配置 SMS-Bus Token 时拒绝；无勾选时先确认解锁全部", async () => {
-  const s = setup();
-  seed(s.ctx, [{ email: "a", browser_profile_id: "1", unlock_status: "needs_unlock", validation_url: "https://v" }]);
-  const r = await s.call(CH.accountsPrecheck, "unlock_403", []);
-  assert.equal(r.ok, false);
-  assert.match(r.message, /^请先配置 SMS-Bus Token/);
-
-  s.ctx.config().setSmsBusToken("tok");
-  const ok = await s.call(CH.accountsPrecheck, "unlock_403", []);
-  assert.equal(ok.ok, true);
-  assert.deepEqual(
-    ok.confirms.map((c) => c.title),
-    ["确认", "确认解锁"],
-  );
-  assert.match(ok.confirms[0].message, /是否解锁全部 1 个需要解锁的账号/);
-  assert.match(ok.confirms[1].message, /国家ID: 自动 \| 服务ID: 自动\n\n是否继续？$/);
-  assert.deepEqual(ok.logs, ["SMS-Bus 配置: country_id=None, project_id=None"]);
-
-  // 有勾选但都不需要解锁
-  seed(s.ctx, [{ email: "b", browser_profile_id: "2" }]);
-  const none = await s.call(CH.accountsPrecheck, "unlock_403", [{ email: "b", browserId: "2" }]);
-  assert.equal(none.level, "info");
-  assert.match(none.message, /^选中的账号中没有需要解锁的/);
-});
-
-test("precheck：检测 403 只处理已关联账号", async () => {
-  const s = setup();
-  seed(s.ctx, [{ email: "a" }]);
-  const r = await s.call(CH.accountsPrecheck, "detect_403", [{ email: "a", browserId: "" }]);
-  assert.deepEqual(r, {
-    ok: false,
-    level: "warning",
-    title: "提示",
-    message: "选中的 1 个账号中没有已关联的账号\n\n只有 Sub2API 状态为「已关联」的账号才能检测 403",
-  });
-});
 
 test("precheck：批量绑定按窗口名匹配，ix 不可达时报错", async () => {
   const s = setup({ windows: [{ profile_id: 7, name: "A@x.com" }, { profile_id: 8, name: "zz" }] });
@@ -284,23 +223,6 @@ function fakeProcessorFactory() {
         if (state.gate) await state.gate;
         return createBatchResult({ total: a.length, success_count: a.length });
       },
-      async batchOauth(a, b, o) {
-        state.calls.push(["batchOauth", a.map((x) => x.email), b, o]);
-        return createBatchResult({ total: a.length });
-      },
-      async batchLoginAndOauth() {
-        throw new Error("unused");
-      },
-      async batchUnlock403(a, b, o) {
-        state.calls.push(["batchUnlock403", a.map((x) => x.email), b, o]);
-        return createBatchResult({ total: a.length });
-      },
-      async batchRefreshMembershipInfo(a, b, mode) {
-        state.calls.push(["batchRefreshMembershipInfo", a.map((x) => x.email), b, mode]);
-        const r = createBatchResult({ total: a.length });
-        r.results.push({ _summary: true, pro_count: 0, pro_regular_count: 0, pro_family_count: 0, non_pro_count: 1 });
-        return r;
-      },
       stop() {
         state.stopped++;
       },
@@ -311,7 +233,7 @@ function fakeProcessorFactory() {
 
 test("start：批量登录作为后台任务运行，传入并发数，结果形状 {type, result}", async () => {
   const p = fakeProcessorFactory();
-  const s = setup({ deps: { createProcessor: p.factory, createSub2ApiClient: () => ({}) } });
+  const s = setup({ deps: { createProcessor: p.factory } });
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
   const done = s.finished();
   const info = await s.call(CH.accountsStart, "login", [{ email: "a", browserId: "1" }], OPTS);
@@ -330,56 +252,12 @@ test("start：批量登录作为后台任务运行，传入并发数，结果形
   assert.ok(s.events.some(([c, p2]) => c === IPC.event.taskProgress && p2.current === 1 && p2.total === 1));
 });
 
-test("start：检测 Pro 走 pro_only，刷新家庭组走 full；单个 OAuth 用库里的窗口 ID", async () => {
-  const p = fakeProcessorFactory();
-  const s = setup({ deps: { createProcessor: p.factory, createSub2ApiClient: () => ({}) } });
-  seed(s.ctx, [{ email: "a", browser_profile_id: "1", login_status: "logged_in" }]);
-  const rows = [{ email: "a", browserId: "1" }];
-  let done = s.finished();
-  await s.call(CH.accountsStart, "detect_pro", rows, OPTS);
-  await done;
-  done = s.finished();
-  await s.call(CH.accountsStart, "refresh_membership_info", rows, OPTS);
-  await done;
-  done = s.finished();
-  const info = await s.call(CH.accountsStart, "single_oauth", [{ email: "a", browserId: "" }], OPTS);
-  assert.equal(info.label, "OAuth a");
-  await done;
-  assert.deepEqual(
-    p.state.calls.map((c) => [c[0], c[3] && typeof c[3] === "object" ? "opts" : c[3]]),
-    [
-      ["batchRefreshMembershipInfo", "pro_only"],
-      ["batchRefreshMembershipInfo", "full"],
-      ["batchOauth", "opts"],
-    ],
-  );
-  assert.deepEqual(p.state.calls[2][2], ["1"]);
-  assert.equal(p.state.calls[2][3].autoBindProxy, true);
-});
-
-test("start：解锁任务把 SMS-Bus 配置传给 batchUnlock403", async () => {
-  const p = fakeProcessorFactory();
-  const s = setup({ deps: { createProcessor: p.factory } });
-  s.ctx.config().setSmsBusToken("tok");
-  s.ctx.config().setSmsBusDefaultCountryId(6);
-  seed(s.ctx, [{ email: "a", browser_profile_id: "1", unlock_status: "needs_unlock", validation_url: "u" }]);
-  const done = s.finished();
-  await s.call(CH.accountsStart, "unlock_403", [{ email: "a", browserId: "1" }], OPTS);
-  const e = await done;
-  assert.equal(e.result.type, "unlock_403");
-  const opt = p.state.calls[0][3];
-  assert.equal(opt.smsToken, "tok");
-  assert.equal(opt.countryId, 6);
-  assert.equal(opt.projectId, null);
-  assert.equal(opt.maxRetries, 2);
-  assert.equal(s.logs()[0], "开始解锁任务，共 1 个账号...");
-});
 
 test("start：停止会触发 processor.stop，任务结束状态为 stopped", async () => {
   const p = fakeProcessorFactory();
   let open;
   p.state.gate = new Promise((r) => (open = r));
-  const s = setup({ deps: { createProcessor: p.factory, createSub2ApiClient: () => ({}) } });
+  const s = setup({ deps: { createProcessor: p.factory } });
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
   const done = s.finished();
   await s.call(CH.accountsStart, "login", [{ email: "a", browserId: "1" }], OPTS);
@@ -441,25 +319,6 @@ test("start：删除+窗口 —— 结果形状，窗口先关后删，账号从
   assert.ok(s.logs().includes("批量删除完成: 删除账号 2/2, 失败 0"));
 });
 
-test("start：检测 403 —— 结果形状 {total, needs_unlock, accounts} 且写回 unlock_status", async () => {
-  const client = {
-    async checkAccountExists() {
-      return null;
-    },
-    async testAccountConnection() {
-      return { success: false, data: { needs_unlock: true, validation_url: "https://verify" }, statusCode: 403 };
-    },
-  };
-  const s = setup({ deps: { createSub2ApiClient: () => client } });
-  seed(s.ctx, [{ email: "a", sub2api_status: "linked", sub2api_account_id: 5 }]);
-  const done = s.finished();
-  await s.call(CH.accountsStart, "detect_403", [{ email: "a", browserId: "" }], OPTS);
-  const e = await done;
-  assert.deepEqual(e.result, { total: 1, needs_unlock: 1, accounts: ["a"] });
-  const row = s.ctx.accountRepo().getAccountByEmail("a");
-  assert.equal(row.unlock_status, "needs_unlock");
-  assert.equal(row.validation_url, "https://verify");
-});
 
 test("start：批量绑定 —— 结果形状 {total, success_count, failed_count} 并写库", async () => {
   const s = setup({ windows: [{ profile_id: 7, name: "a@x.com" }] });
@@ -469,25 +328,6 @@ test("start：批量绑定 —— 结果形状 {total, success_count, failed_cou
   const e = await done;
   assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
   assert.equal(s.ctx.accountRepo().getAccountByEmail("a@x.com").browser_profile_id, "7");
-});
-
-test("start：开启共享 —— 结果形状", async () => {
-  const s = setup({
-    deps: { runEnableSharing: async () => ({ success: true, message: "ok", familyCreated: true }) },
-  });
-  seed(s.ctx, [{ email: "p", is_pro: "yes", login_status: "logged_in", browser_profile_id: "1" }]);
-  const done = s.finished();
-  const info = await s.call(CH.accountsStart, "enable_family_sharing", [{ email: "p", browserId: "1" }], OPTS);
-  assert.equal(info.type, "enable_family_sharing");
-  const e = await done;
-  assert.deepEqual(e.result, {
-    total: 1,
-    success_count: 1,
-    already_enabled_count: 0,
-    family_created_count: 1,
-    failed_count: 0,
-    failed_list: [],
-  });
 });
 
 // ==================== 单条操作 ====================
@@ -526,45 +366,21 @@ test("bindCandidates / bind / unbind / deleteOne", async () => {
 
 // ==================== 以数据库为准 / 写库失败 / 忙碌拦截 ====================
 
-test("start：worker 任务使用数据库里的窗口 ID，不信任行上的值；库里未绑定按未绑定处理", async () => {
+test("start：登录任务使用数据库里的窗口 ID，不信任行上的值；库里未绑定按未绑定处理", async () => {
   const p = fakeProcessorFactory();
-  const sharing = [];
-  const s = setup({
-    deps: {
-      createProcessor: p.factory,
-      createSub2ApiClient: () => ({}),
-      runEnableSharing: async (acc, id) => {
-        sharing.push([acc.email, id]);
-        return { success: true, message: "" };
-      },
-    },
-  });
-  s.ctx.config().setSmsBusToken("tok");
-  seed(s.ctx, [
-    { email: "a", browser_profile_id: "1", login_status: "logged_in", is_pro: "yes", unlock_status: "needs_unlock" },
-    { email: "b" },
-  ]);
-  const stale = [{ email: "a", browserId: "99" }];
-  for (const action of ["login", "detect_pro", "enable_family_sharing", "unlock_403"]) {
-    const done = s.finished();
-    await s.call(CH.accountsStart, action, stale, OPTS);
-    assert.equal((await done).outcome, "succeeded", action);
-  }
+  const s = setup({ deps: { createProcessor: p.factory } });
+  seed(s.ctx, [{ email: "a", browser_profile_id: "1" }, { email: "b" }]);
+  const done = s.finished();
+  await s.call(CH.accountsStart, "login", [{ email: "a", browserId: "99" }], OPTS);
+  assert.equal((await done).outcome, "succeeded");
   assert.deepEqual(
     p.state.calls.map((c) => [c[0], c[2]]),
-    [
-      ["batchLogin", ["1"]],
-      ["batchRefreshMembershipInfo", ["1"]],
-      ["batchUnlock403", ["1"]],
-    ],
+    [["batchLogin", ["1"]]],
   );
-  assert.deepEqual(sharing, [["a", "1"]]);
 
   // 行上说已绑定、库里未绑定 → 沿用「未绑定窗口」的前置校验文案
   const r = await s.call(CH.accountsPrecheck, "login", [{ email: "b", browserId: "5" }]);
   assert.deepEqual(r, { ok: false, level: "warning", title: "警告", message: "以下账号未绑定窗口:\nb" });
-  const d = await s.call(CH.accountsPrecheck, "detect_pro", [{ email: "b", browserId: "5" }]);
-  assert.equal(d.ok, false);
 });
 
 test("start：删除+窗口 —— 行上窗口 ID 与数据库不一致时整条跳过，不误删窗口", async () => {
@@ -711,7 +527,7 @@ test("bind / unbind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => 
 
 test("requireRows：按 email 去重", async () => {
   const p = fakeProcessorFactory();
-  const s = setup({ deps: { createProcessor: p.factory, createSub2ApiClient: () => ({}) } });
+  const s = setup({ deps: { createProcessor: p.factory } });
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
   const rows = [
     { email: "a", browserId: "1" },
@@ -725,10 +541,9 @@ test("requireRows：按 email 去重", async () => {
 test("默认 createProcessor 注入了 db（批处理器拿到仓储，不打「未注入」告警）", () => {
   const s = setup();
   const msgs = [];
-  const p = createDefaultProcessor(s.ctx, () => ({}), { concurrency: 2, callback: (m) => msgs.push(m) });
+  const p = createDefaultProcessor(s.ctx, { concurrency: 2, callback: (m) => msgs.push(m) });
   assert.equal(p.concurrency, 2);
   assert.ok(p.accountRepo);
-  assert.ok(p.refreshTaskRepo);
   assert.equal(msgs.some((m) => m.includes("未注入")), false);
 });
 
@@ -738,15 +553,6 @@ test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", ()
     title: "绑定完成",
     message: "成功绑定 2/3 个账号",
   });
-  assert.deepEqual(finishedNotice(ev("detect_403", { total: 4, needs_unlock: 0, accounts: [] })), {
-    title: "检测完成",
-    message: "共检测 4 个账号，无需解锁",
-  });
-  const many = ["a", "b", "c", "d", "e", "f"];
-  assert.deepEqual(finishedNotice(ev("detect_403", { total: 9, needs_unlock: 6, accounts: many })), {
-    title: "检测完成",
-    message: "共检测 9 个已关联账号\n发现 6 个需要解锁\n\n账号: a, b, c, d, e\n...等 6 个",
-  });
   assert.deepEqual(finishedNotice(ev("batch_delete", { deleted_accounts: 2, deleted_windows: 1 }, { label: "删除选中" })), {
     title: "删除完成",
     message: "已删除 2 个账号",
@@ -754,20 +560,6 @@ test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", ()
   assert.deepEqual(finishedNotice(ev("batch_delete", { deleted_accounts: 2, deleted_windows: 1 }, { label: "删除+窗口" })), {
     title: "删除完成",
     message: "已删除 2 个账号\n已删除 1 个窗口",
-  });
-  const sharing = finishedNotice(
-    ev("enable_family_sharing", {
-      success_count: 1,
-      already_enabled_count: 0,
-      family_created_count: 1,
-      failed_count: 1,
-      failed_list: [{ email: "x", error: "0123456789012345678901234567890123" }],
-    }),
-  );
-  assert.deepEqual(sharing, {
-    title: "完成",
-    message:
-      "开启家庭共享完成\n\n成功: 1\n  ↳ 其中新建家庭组: 1\n已开启（跳过）: 0\n失败: 1\n\n失败账户:\n  • x: 012345678901234567890123456789...\n",
   });
   assert.equal(finishedNotice(ev("batch_bind", null, { outcome: "failed" })), null);
   assert.equal(finishedNotice(ev("batch_delete", {}, { outcome: "stopped" })), null);
@@ -804,16 +596,13 @@ const row = (o) => ({
   email: "x",
   login_status: "not_logged",
   last_error: null,
-  is_pro: "unknown",
   browser_profile_id: "",
   window_name: "",
-  sub2api_status: "not_linked",
-  unlock_status: "none",
   updated_at: null,
   ...o,
 });
 
-test("状态文案与颜色（:505-587）", () => {
+test("登录状态文案与颜色（:505-523）", () => {
   const long = "123456789012345678901234";
   assert.deepEqual(loginView(row({ login_status: "login_failed", last_error: long })), {
     text: "失败: 12345678901234567890...",
@@ -823,31 +612,17 @@ test("状态文案与颜色（:505-587）", () => {
   assert.equal(loginView(row({ login_status: "login_failed" })).text, "失败");
   assert.equal(loginView(row({ login_status: null })).text, "未登录");
   assert.equal(loginView(row({ login_status: "weird" })).text, "weird");
-  assert.deepEqual(proView("family_yes"), { text: "家庭", color: "#2196F3", tooltip: "家庭组 Pro 会员（被邀请加入）" });
-  assert.equal(proView(null).text, "-");
-  assert.equal(proView("detection_failed").color, "#FF9800");
-  assert.equal(sub2apiView("oauth_failed").text, "失败");
-  assert.equal(sub2apiView(null).text, "未关联");
-  assert.deepEqual(unlockView("needs_unlock"), { text: "需解锁", color: "#FF9800" });
-  assert.equal(unlockView(null).text, "-");
 });
 
-test("筛选 14 项按显示文本判断（:591-636）", () => {
-  assert.equal(FILTER_OPTIONS.length, 14);
+test("筛选 4 项按显示文本判断（:591-636）", () => {
+  assert.deepEqual([...FILTER_OPTIONS], ["全部", "未登录", "已登录", "登录失败"]);
   assert.equal(matchesFilter(row({ login_status: "login_failed", last_error: "x" }), "登录失败"), true);
   assert.equal(matchesFilter(row({ login_status: null }), "未登录"), true);
-  assert.equal(matchesFilter(row({ is_pro: "family_yes" }), "Pro会员"), true);
-  assert.equal(matchesFilter(row({ is_pro: "family_yes" }), "Pro(家庭组)"), true);
-  assert.equal(matchesFilter(row({ is_pro: "yes" }), "Pro(家庭组)"), false);
-  assert.equal(matchesFilter(row({ sub2api_status: "oauth_failed" }), "OAuth失败"), true);
-  assert.equal(matchesFilter(row({ unlock_status: "unlock_failed" }), "解锁失败"), true);
-  assert.equal(matchesFilter(row({ unlock_status: "unlocked" }), "需要解锁"), false);
+  assert.equal(matchesFilter(row({ login_status: "logged_in" }), "已登录"), true);
+  assert.equal(matchesFilter(row({ login_status: "logged_in" }), "未登录"), false);
   assert.equal(matchesFilter(row({}), "全部"), true);
 });
 
-test("底部统计（:486）", () => {
-  assert.equal(
-    statsText([row({ login_status: "logged_in", sub2api_status: "linked" }), row({ login_status: "logged_in" }), row({})]),
-    "总计 3 个 | 已登录 2 | 已关联 1",
-  );
+test("底部统计（:486，已去掉 Sub2API「已关联」计数）", () => {
+  assert.equal(statsText([row({ login_status: "logged_in" }), row({ login_status: "logged_in" }), row({})]), "总计 3 个 | 已登录 2");
 });

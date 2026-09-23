@@ -121,7 +121,7 @@ export class StagehandGoogleEngine {
   /**
    * 直接从 CDP WebSocket 端点接入。
    * 对标 Python 的 engine.connect_cdp(ws_endpoint)——不经过 ixBrowser API，
-   * 用于「窗口已经开着，只要接管」的场景（如 pro_status_detector 复用现有连接）。
+   * 用于「窗口已经开着，只要接管」的场景。
    */
   static async connectCdp(
     wsEndpoint: string,
@@ -223,9 +223,7 @@ export class StagehandGoogleEngine {
    * （例如 class="upgrade-banner" 会让页面被判为非订阅），且跨标签文本
    * （<span>Manage</span> <span>membership</span>）匹配不到。
    *
-   * 与 Python 的两条路径语义一致：
-   *   - BrowserUse 路径用 page.inner_text("body")
-   *   - Stagehand 路径用 AI extract "all visible text"
+   * 与 Python 的做法语义一致（Python 分别用 page.inner_text("body") 与 AI extract "all visible text"）。
    * 这里走浏览器原生 innerText：更快、不消耗额度、结果确定。
    */
   async getPageContent(): Promise<string> {
@@ -403,20 +401,6 @@ export class StagehandGoogleEngine {
     return new LoginOperation(this).execute(options);
   }
 
-  async detectProStatus(
-    options: { navigateIfNeeded?: boolean } = {},
-  ): Promise<import("./types.ts").ProStatusResult> {
-    const { ProStatusOperation } = await import("./operations/pro-status.ts");
-    return new ProStatusOperation(this as never).execute(options);
-  }
-
-  async detectFamilyStatus(
-    options: { navigateIfNeeded?: boolean } = {},
-  ): Promise<import("./types.ts").FamilyStatusResult> {
-    const { FamilyOperation } = await import("./operations/family.ts");
-    return new FamilyOperation(this).execute(options);
-  }
-
   async kickDevices(
     options: { keepCurrent?: boolean } = {},
   ): Promise<import("./types.ts").KickDevicesResult> {
@@ -451,31 +435,5 @@ export class StagehandGoogleEngine {
   ): Promise<import("./types.ts").ModifyPhoneResult> {
     const { ReplacePhoneOperation } = await import("./operations/replace-phone.ts");
     return new ReplacePhoneOperation(this).execute(newPhone, smsService);
-  }
-
-  async unlock403(
-    options: import("./operations/unlock-403.ts").UnlockOptions = {},
-  ): Promise<import("./types.ts").UnlockResult> {
-    const { Unlock403Operation } = await import("./operations/unlock-403.ts");
-    return new Unlock403Operation(this).execute(options);
-  }
-
-  async joinFamily(inviterEmail: string): Promise<import("./types.ts").JoinFamilyResult> {
-    const { JoinFamilyOperation } = await import("./operations/join-family.ts");
-    return new JoinFamilyOperation(this).execute(inviterEmail);
-  }
-
-  async enableFamilySharing(): Promise<import("./types.ts").EnableSharingResult> {
-    const { EnableSharingOperation } = await import("./operations/enable-sharing.ts");
-    return new EnableSharingOperation(this).execute();
-  }
-
-  async oauthAuthorize(
-    service: string,
-    oauthUrl?: string | null,
-    oauthUrls?: Record<string, string>,
-  ): Promise<import("./types.ts").OAuthResult> {
-    const { OAuthOperation } = await import("./operations/oauth.ts");
-    return new OAuthOperation(this, oauthUrls).execute(service, oauthUrl);
   }
 }

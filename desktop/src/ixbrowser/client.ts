@@ -16,7 +16,6 @@ import {
   type IxProfile,
   type IxProfileListData,
   type IxProfileListQuery,
-  type IxProxyConfig,
 } from "./types.ts";
 
 /** HTTP 状态码非 200 */
@@ -200,12 +199,6 @@ export class IxBrowserClient {
   /** 删除窗口 */
   async deleteProfile(profileId: number): Promise<boolean> {
     await this.call("profile-delete", { profile_id: profileId });
-    return true;
-  }
-
-  /** 更新窗口代理 */
-  async updateProfileProxy(profileId: number, proxy: IxProxyConfig): Promise<boolean> {
-    await this.call("profile-update", { profile_id: profileId, proxy_config: proxy });
     return true;
   }
   /**

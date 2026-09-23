@@ -1,2 +1,2 @@
-import { GoogleURLs, Timeouts, LoginKeywords, ProKeywords, FamilyKeywords } from "./constants.ts";
-process.stdout.write(JSON.stringify({ GoogleURLs, Timeouts, LoginKeywords, ProKeywords, FamilyKeywords }));
+import { GoogleURLs, Timeouts, LoginKeywords } from "./constants.ts";
+process.stdout.write(JSON.stringify({ GoogleURLs, Timeouts, LoginKeywords }));
