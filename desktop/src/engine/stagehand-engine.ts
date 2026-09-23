@@ -76,6 +76,7 @@ interface PageLike {
   content?(): Promise<string>;
   locator?(selector: string): LocatorLike;
   keyboard?: { type(text: string): Promise<void> };
+  evaluate?<R = unknown>(fn: string | ((arg?: unknown) => R | Promise<R>), arg?: unknown): Promise<R>;
 }
 
 export class StagehandGoogleEngine {
@@ -114,6 +115,39 @@ export class StagehandGoogleEngine {
     const engine = new StagehandGoogleEngine(options);
     await engine.connect(profileId);
     return engine;
+  }
+
+  /**
+   * 直接从 CDP WebSocket 端点接入。
+   * 对标 Python 的 engine.connect_cdp(ws_endpoint)——不经过 ixBrowser API，
+   * 用于「窗口已经开着，只要接管」的场景（如 pro_status_detector 复用现有连接）。
+   */
+  static async connectCdp(
+    wsEndpoint: string,
+    options: EngineOptions,
+  ): Promise<StagehandGoogleEngine> {
+    const engine = new StagehandGoogleEngine(options);
+    await engine.connectViaCdp(wsEndpoint);
+    return engine;
+  }
+
+  /** 复用 CDP 端点建立 Stagehand 会话（内部实现，供 connectCdp 调用） */
+  async connectViaCdp(wsEndpoint: string): Promise<void> {
+    setupProviderEnvVars(this.options.modelName, this.options.apiKey);
+
+    const sh = new Stagehand({
+      env: "LOCAL",
+      localBrowserLaunchOptions: { cdpUrl: wsEndpoint },
+      model: {
+        modelName: this.options.modelName,
+        clientOptions: { apiKey: this.options.apiKey },
+      },
+      verbose: this.options.verbose ?? 0,
+    } as never) as unknown as V3Like;
+
+    await sh.init();
+    this.sh = sh;
+    this.page = await sh.context.awaitActivePage(15_000);
   }
 
   async connect(profileId: number | string): Promise<void> {
@@ -180,14 +214,40 @@ export class StagehandGoogleEngine {
     return page.url();
   }
 
+  /**
+   * 获取页面**可见文本**。
+   *
+   * 为什么不用 page.content()（HTML）：关键词检测（Pro 状态、家庭组角色）依赖
+   * 可见文本做子串匹配。HTML 里标签名、class 属性、内联脚本都会误命中
+   * （例如 class="upgrade-banner" 会让页面被判为非订阅），且跨标签文本
+   * （<span>Manage</span> <span>membership</span>）匹配不到。
+   *
+   * 与 Python 的两条路径语义一致：
+   *   - BrowserUse 路径用 page.inner_text("body")
+   *   - Stagehand 路径用 AI extract "all visible text"
+   * 这里走浏览器原生 innerText：更快、不消耗额度、结果确定。
+   */
   async getPageContent(): Promise<string> {
     const { page } = this.ensureReady();
-    if (typeof page.content !== "function") return "";
-    try {
-      return await page.content();
-    } catch {
-      return "";
+    if (typeof page.evaluate === "function") {
+      try {
+        const text = await page.evaluate<string>(
+          "document.body ? document.body.innerText : ''",
+        );
+        return typeof text === "string" ? text : "";
+      } catch {
+        /* 落到下面的 HTML 回退 */
+      }
     }
+    // 回退：拿不到 evaluate 能力时退回 HTML（调用方需自行容忍噪声）
+    if (typeof page.content === "function") {
+      try {
+        return await page.content();
+      } catch {
+        return "";
+      }
+    }
+    return "";
   }
 
   /**
