@@ -40,8 +40,15 @@ export function base32Decode(input: string): Buffer {
   return Buffer.from(out);
 }
 
-/** 生成指定时间点的 TOTP 码 */
+/**
+ * 生成指定时间点的 TOTP 码。
+ *
+ * 有意偏差（真机测试发现）：Google 设置页显示的密钥是「每 4 位一组、用空格分隔」的小写形式，
+ * 用户照抄进账号数据后，pyotp.TOTP(secret) 会抛 `Non-base32 digit found`，Python 版登录直接失败。
+ * 这里先去掉所有空白字符再解码，其余行为（大小写不敏感、补齐 padding、非法字符抛错）不变。
+ */
 export function generateTotp(secret: string, atMs: number = Date.now()): string {
+  secret = secret.replace(/\s+/g, "");
   const counter = Math.floor(atMs / 1000 / PERIOD_SECONDS);
 
   // 计数器转 8 字节大端（超过 2^32 的时间点也要正确）

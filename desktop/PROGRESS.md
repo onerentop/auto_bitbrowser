@@ -272,6 +272,7 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 - 停止后「开始」要等任务真正结束才可用（修 Python 基类立即复位的缺陷）；开始前加确认框（原版直接执行，但均为破坏性操作）；Python 从不自动加载，这里也不自动加载
 - `modify_auth` 的「已修改密钥.txt」写到数据根目录
 - TOTP：二维码在渲染层异步识别（Python 在 UI 线程同步识别会卡死）；jsQR 每张图只识别一个码（pyzbar 可多个）；导入支持停止（Python 无）；导入以数据库当前状态重新匹配，库中无该账号记失败；写库返回 false 计失败
+- `generateTotp` 先去掉密钥中的全部空白（真机测试发现：Google 设置页显示的密钥为每 4 位空格分隔的小写形式，pyotp 对此抛 `Non-base32 digit found`，Python 版登录直接失败）
 
 **实机验证**（`ABB_DATA_ROOT=scratch`）：导航顺序 / 文案与 Python 一致，6 个新页面均渲染；AI 页「加载数据」读到真实 ixBrowser 374 个窗口（只读，未点「开始」）；TOTP 文本模式解析 2 条 → 匹配 scratch 库测试账号 → 导入成功（密钥、密码写入，设置→账号数据可见）；关窗无残留。
 
