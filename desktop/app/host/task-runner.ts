@@ -30,6 +30,8 @@ export interface TaskApi {
   readonly taskId: number;
   log(message: string): void;
   progress(current: number, total: number): void;
+  /** 单个条目的状态变化（对标 Python AI Worker 的 progress(email, status, message)） */
+  item(key: string, status: string, message: string): void;
   /** 是否已请求停止（对标 Python 的 should_stop()） */
   shouldStop(): boolean;
   /** 注册停止钩子；已请求停止时立即执行 */
@@ -101,6 +103,10 @@ export class TaskRunner {
         info.current = current;
         info.total = total;
         this.emit(IPC.event.taskProgress, { taskId: info.id, type, current, total });
+      },
+      item: (key, status, message) => {
+        if (this.running !== task) return;
+        this.emit(IPC.event.taskItem, { taskId: info.id, type, key, status, message });
       },
       shouldStop: () => info.stopRequested,
       onStop: (hook) => {

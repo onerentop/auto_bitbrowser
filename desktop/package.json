@@ -37,6 +37,7 @@
     "@browserbasehq/stagehand": "3.7.3",
     "ai": "^7.0.111",
     "antd": "^5.29.3",
+    "jsqr": "^1.4.0",
     "playwright-core": "^1.63.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

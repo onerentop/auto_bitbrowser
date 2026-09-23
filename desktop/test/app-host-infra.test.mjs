@@ -105,6 +105,23 @@ test("TaskRunner：已请求停止后注册的钩子立即执行", async () => {
   assert.equal(called, true);
 });
 
+test("TaskRunner：item() 推送条目状态事件；任务结束后的迟到调用被丢弃", async () => {
+  const { runner, events, finished } = recorder();
+  let late;
+  runner.start("ai_task", "替换手机号", async (api) => {
+    api.item("a@x.com", "处理中", "");
+    api.item("a@x.com", "成功", "已替换");
+    late = api;
+  });
+  await finished;
+  late.item("a@x.com", "错误", "迟到");
+  const items = events.filter(([c]) => c === IPC.event.taskItem).map(([, p]) => p);
+  assert.deepEqual(items, [
+    { taskId: 1, type: "ai_task", key: "a@x.com", status: "处理中", message: "" },
+    { taskId: 1, type: "ai_task", key: "a@x.com", status: "成功", message: "已替换" },
+  ]);
+});
+
 test("TaskRunner：任务抛错 → failed，带错误信息", async () => {
   const { runner, finished } = recorder();
   runner.start("x", "X", async () => {

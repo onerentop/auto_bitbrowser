@@ -11,6 +11,8 @@ import { createTaskHandlers } from "./task.ts";
 import { createSettingsHandlers } from "./settings.ts";
 import { createHomeHandlers } from "./home.ts";
 import { createAccountsHandlers } from "./accounts.ts";
+import { createAiTasksHandlers } from "./ai-tasks.ts";
+import { createTotpHandlers } from "./totp.ts";
 
 export function mergeHandlers(...tables: HostHandlerTable[]): HostHandlerTable {
   const merged: Record<string, HostHandlerTable[string]> = {};
@@ -32,5 +34,7 @@ export function createHostHandlers(ctx: HostContext): HostHandlerTable {
     createSettingsHandlers(ctx),
     createHomeHandlers(ctx),
     createAccountsHandlers(ctx),
+    createAiTasksHandlers(ctx),
+    createTotpHandlers(ctx),
   );
 }

@@ -29,6 +29,9 @@ importers:
       antd:
         specifier: ^5.29.3
         version: 5.29.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      jsqr:
+        specifier: ^1.4.0
+        version: 1.4.0
       playwright-core:
         specifier: ^1.63.0
         version: 1.63.0
@@ -1522,6 +1525,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  jsqr@1.4.0:
+    resolution: {integrity: sha512-dxLob7q65Xg2DvstYkRpkYtmKm2sPJ9oFhrhmudT1dZvNFFTlroai3AWSpLey/w5vMcLBXRgOJsbXpdN9HzU/A==}
 
   jwa@2.0.1:
     resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
@@ -3832,6 +3838,8 @@ snapshots:
       string-convert: 0.2.1
 
   json5@2.2.3: {}
+
+  jsqr@1.4.0: {}
 
   jwa@2.0.1:
     dependencies:

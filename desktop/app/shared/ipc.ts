@@ -15,6 +15,8 @@ import type { Envelope } from "./envelope.ts";
 import { ACCOUNTS_INVOKE, type AccountsInvokeMap } from "./channels/accounts.ts";
 import { HOME_INVOKE, type HomeInvokeMap } from "./channels/home.ts";
 import { SETTINGS_INVOKE, type SettingsInvokeMap } from "./channels/settings.ts";
+import { AI_TASKS_INVOKE, type AiTasksInvokeMap } from "./channels/ai-tasks.ts";
+import { TOTP_INVOKE, type TotpInvokeMap } from "./channels/totp.ts";
 
 // ==================== 通道表 ====================
 
@@ -38,6 +40,8 @@ export const IPC = {
     ...SETTINGS_INVOKE,
     ...HOME_INVOKE,
     ...ACCOUNTS_INVOKE,
+    ...AI_TASKS_INVOKE,
+    ...TOTP_INVOKE,
   },
   event: {
     /** 后端进程状态变化推送 */
@@ -48,6 +52,8 @@ export const IPC = {
     taskProgress: "abb/task/event/progress",
     /** 任务结束（成功 / 失败 / 已停止） */
     taskFinished: "abb/task/event/finished",
+    /** 任务中单个条目的状态（逐行更新表格） */
+    taskItem: "abb/task/event/item",
   },
 } as const;
 
@@ -191,13 +197,33 @@ export interface TaskFinishedEvent {
   finishedAt: number;
 }
 
+/**
+ * 任务中单个条目（账号 / 窗口）的状态变化。
+ * 对标 Python AI 任务 Worker 的 progress(email, status, message) 信号，
+ * 渲染层据此逐行更新表格的「状态 / 消息」列。
+ */
+export interface TaskItemEvent {
+  taskId: number;
+  type: string;
+  /** 条目键（由任务自定，通常是 email 或窗口 ID） */
+  key: string;
+  /** 处理中 / 成功 / 失败 / 错误 等 */
+  status: string;
+  message: string;
+}
+
 // ==================== 通道 → 类型 ====================
 
 /**
  * invoke 通道的参数元组与返回类型。
  * 业务领域的通道类型分散在 channels/*.ts，这里通过 extends 合并。
  */
-export interface InvokeMap extends SettingsInvokeMap, HomeInvokeMap, AccountsInvokeMap {
+export interface InvokeMap
+  extends SettingsInvokeMap,
+    HomeInvokeMap,
+    AccountsInvokeMap,
+    AiTasksInvokeMap,
+    TotpInvokeMap {
   "abb/app/getVersion": { args: []; result: AppVersionInfo };
   "abb/host/getStatus": { args: []; result: HostStatus };
   "abb/host/restart": { args: []; result: HostStatus };
@@ -213,6 +239,7 @@ export interface EventMap {
   "abb/task/event/log": TaskLogEvent;
   "abb/task/event/progress": TaskProgressEvent;
   "abb/task/event/finished": TaskFinishedEvent;
+  "abb/task/event/item": TaskItemEvent;
 }
 
 export type InvokeArgs<C extends InvokeChannel> = InvokeMap[C]["args"];

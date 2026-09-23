@@ -7,19 +7,42 @@
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Layout, Menu, Typography } from "antd";
-import { DashboardOutlined, HomeOutlined, SettingOutlined, TeamOutlined } from "@ant-design/icons";
+import {
+  DashboardOutlined,
+  DisconnectOutlined,
+  HomeOutlined,
+  KeyOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  QrcodeOutlined,
+  SafetyOutlined,
+  SettingOutlined,
+  TeamOutlined,
+} from "@ant-design/icons";
 import { TaskDock } from "./components/TaskDock.tsx";
 import { StatusPage } from "./pages/StatusPage.tsx";
 import { HomePage } from "./pages/HomePage.tsx";
 import { AccountsPage } from "./pages/AccountsPage.tsx";
 import { SettingsPage } from "./pages/SettingsPage.tsx";
+import { AiTaskPage } from "./pages/AiTaskPage.tsx";
+import { TotpImportPage } from "./pages/TotpImportPage.tsx";
 import { useIsDark } from "./stores/theme.ts";
 import { useHostStatus } from "./stores/host-status.ts";
 import { initThemeFromConfig } from "./pages/settings/theme-init.ts";
 
 const { Sider, Content } = Layout;
 
-type PageKey = "home" | "accounts" | "settings" | "status";
+type PageKey =
+  | "home"
+  | "ai_replace_phone"
+  | "ai_replace_email"
+  | "ai_modify_2sv"
+  | "ai_modify_auth"
+  | "ai_kick_devices"
+  | "accounts"
+  | "totp"
+  | "settings"
+  | "status";
 
 interface PageDef {
   key: PageKey;
@@ -28,9 +51,41 @@ interface PageDef {
   render: () => ReactElement;
 }
 
+/** 导航顺序与文案照搬 gui/main_window_fluent.py:89-149（首页 → Google 专区 5 项 → 账号管理 → 导入 TOTP → 设置） */
 const PAGES: PageDef[] = [
   { key: "home", label: "首页", icon: <HomeOutlined />, render: () => <HomePage /> },
+  {
+    key: "ai_replace_phone",
+    label: "替换手机号",
+    icon: <PhoneOutlined />,
+    render: () => <AiTaskPage kind="replace_phone" label="替换手机号" />,
+  },
+  {
+    key: "ai_replace_email",
+    label: "替换辅助邮箱",
+    icon: <MailOutlined />,
+    render: () => <AiTaskPage kind="replace_email" label="替换辅助邮箱" />,
+  },
+  {
+    key: "ai_modify_2sv",
+    label: "修改 2SV 手机",
+    icon: <SafetyOutlined />,
+    render: () => <AiTaskPage kind="modify_2sv" label="修改 2SV 手机" />,
+  },
+  {
+    key: "ai_modify_auth",
+    label: "修改验证器",
+    icon: <KeyOutlined />,
+    render: () => <AiTaskPage kind="modify_auth" label="修改验证器" />,
+  },
+  {
+    key: "ai_kick_devices",
+    label: "踢出设备",
+    icon: <DisconnectOutlined />,
+    render: () => <AiTaskPage kind="kick_devices" label="踢出设备" />,
+  },
   { key: "accounts", label: "账号管理", icon: <TeamOutlined />, render: () => <AccountsPage /> },
+  { key: "totp", label: "导入 TOTP", icon: <QrcodeOutlined />, render: () => <TotpImportPage /> },
   { key: "settings", label: "设置", icon: <SettingOutlined />, render: () => <SettingsPage /> },
   { key: "status", label: "运行状态", icon: <DashboardOutlined />, render: () => <StatusPage /> },
 ];

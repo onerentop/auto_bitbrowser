@@ -7,7 +7,7 @@
  * 后端进程重启后任务必然丢失：订阅 hostStatus，进入 ready 时重新拉一次当前任务。
  */
 import { useSyncExternalStore } from "react";
-import type { TaskFinishedEvent, TaskInfo } from "../../../shared/ipc.ts";
+import type { TaskFinishedEvent, TaskInfo, TaskItemEvent } from "../../../shared/ipc.ts";
 import { IPC, invoke, on } from "../lib/ipc.ts";
 
 export const LOG_LIMIT = 2000;
@@ -128,4 +128,12 @@ export function onTaskFinished(fn: (e: TaskFinishedEvent) => void): () => void {
   ensureStarted();
   finishedListeners.add(fn);
   return () => finishedListeners.delete(fn);
+}
+
+/**
+ * 订阅任务条目状态（逐行更新表格，对标 Python AI Worker 的 progress(email, status, message)）。
+ * 直接订阅 IPC 事件：条目状态只对发起页面有意义，不进全局 store。返回取消函数。
+ */
+export function onTaskItem(fn: (e: TaskItemEvent) => void): () => void {
+  return on(IPC.event.taskItem, fn);
 }
