@@ -10,6 +10,9 @@ import { Layout, Menu, Typography } from "antd";
 import { DashboardOutlined, HomeOutlined, SettingOutlined, TeamOutlined } from "@ant-design/icons";
 import { TaskDock } from "./components/TaskDock.tsx";
 import { StatusPage } from "./pages/StatusPage.tsx";
+import { HomePage } from "./pages/HomePage.tsx";
+import { AccountsPage } from "./pages/AccountsPage.tsx";
+import { SettingsPage } from "./pages/SettingsPage.tsx";
 import { useIsDark } from "./stores/theme.ts";
 
 const { Sider, Content } = Layout;
@@ -23,14 +26,10 @@ interface PageDef {
   render: () => ReactElement;
 }
 
-function Placeholder({ name }: { name: string }): ReactElement {
-  return <Typography.Text type="secondary">{name}（开发中）</Typography.Text>;
-}
-
 const PAGES: PageDef[] = [
-  { key: "home", label: "首页", icon: <HomeOutlined />, render: () => <Placeholder name="窗口管理" /> },
-  { key: "accounts", label: "账号管理", icon: <TeamOutlined />, render: () => <Placeholder name="账号管理" /> },
-  { key: "settings", label: "设置", icon: <SettingOutlined />, render: () => <Placeholder name="设置" /> },
+  { key: "home", label: "首页", icon: <HomeOutlined />, render: () => <HomePage /> },
+  { key: "accounts", label: "账号管理", icon: <TeamOutlined />, render: () => <AccountsPage /> },
+  { key: "settings", label: "设置", icon: <SettingOutlined />, render: () => <SettingsPage /> },
   { key: "status", label: "运行状态", icon: <DashboardOutlined />, render: () => <StatusPage /> },
 ];
 

@@ -12,6 +12,9 @@
  * 本文件是纯 TS，不依赖 electron。
  */
 import type { Envelope } from "./envelope.ts";
+import { ACCOUNTS_INVOKE, type AccountsInvokeMap } from "./channels/accounts.ts";
+import { HOME_INVOKE, type HomeInvokeMap } from "./channels/home.ts";
+import { SETTINGS_INVOKE, type SettingsInvokeMap } from "./channels/settings.ts";
 
 // ==================== 通道表 ====================
 
@@ -31,6 +34,10 @@ export const IPC = {
     taskGetCurrent: "abb/task/getCurrent",
     /** 请求停止当前任务（协作式） */
     taskStop: "abb/task/stop",
+    // 业务领域通道（定义见 channels/*.ts）
+    ...SETTINGS_INVOKE,
+    ...HOME_INVOKE,
+    ...ACCOUNTS_INVOKE,
   },
   event: {
     /** 后端进程状态变化推送 */
@@ -186,8 +193,11 @@ export interface TaskFinishedEvent {
 
 // ==================== 通道 → 类型 ====================
 
-/** invoke 通道的参数元组与返回类型 */
-export interface InvokeMap {
+/**
+ * invoke 通道的参数元组与返回类型。
+ * 业务领域的通道类型分散在 channels/*.ts，这里通过 extends 合并。
+ */
+export interface InvokeMap extends SettingsInvokeMap, HomeInvokeMap, AccountsInvokeMap {
   "abb/app/getVersion": { args: []; result: AppVersionInfo };
   "abb/host/getStatus": { args: []; result: HostStatus };
   "abb/host/restart": { args: []; result: HostStatus };

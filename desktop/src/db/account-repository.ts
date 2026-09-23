@@ -374,6 +374,77 @@ export class AccountRepository {
     }
   }
 
+  /** 按邮箱删除账号。对标 delete_account()：删到行返回 true，出错返回 false */
+  deleteAccount(email: string): boolean {
+    try {
+      const info = this.db.prepare("DELETE FROM accounts WHERE email = ?").run(email);
+      return Number(info.changes ?? 0) > 0;
+    } catch (error) {
+      console.error(`[DB] 删除账号失败: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * 绑定账号到浏览器窗口。对标 bind_account_to_browser()。
+   * 传空字符串即解绑（Python 的 GUI 解绑也是这样调用的）。
+   */
+  bindAccountToBrowser(email: string, browserProfileId: string): boolean {
+    try {
+      const info = this.db
+        .prepare("UPDATE accounts SET browser_profile_id = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?")
+        .run(browserProfileId, email);
+      const affected = Number(info.changes ?? 0);
+      if (affected > 0) console.log(`[DB] 绑定账号到窗口: ${email} -> ${browserProfileId}`);
+      return affected > 0;
+    } catch (error) {
+      console.error(`[DB ERROR] bind_account_to_browser 失败: ${error}`);
+      return false;
+    }
+  }
+
+  /** 需要解锁 403 的账号。对标 get_accounts_needing_unlock()，SQL 逐字一致 */
+  getAccountsNeedingUnlock(): AccountRow[] {
+    try {
+      return this.db
+        .prepare(
+          `
+                    SELECT * FROM accounts
+                    WHERE unlock_status IN ('needs_unlock', 'unlock_failed')
+                    AND validation_url IS NOT NULL
+                    AND validation_url != ''
+                    `,
+        )
+        .all() as AccountRow[];
+    } catch (error) {
+      console.error(`[DB ERROR] get_accounts_needing_unlock 失败: ${error}`);
+      return [];
+    }
+  }
+
+  /** 可邀请家庭成员的普通 Pro 账号（含 available_slots）。对标 get_available_pro_accounts()，SQL 逐字一致 */
+  getAvailableProAccounts(): AccountRow[] {
+    try {
+      return this.db
+        .prepare(
+          `
+                    SELECT *, (6 - COALESCE(family_member_count, 0)) as available_slots
+                    FROM accounts
+                    WHERE is_pro = 'yes'
+                    AND COALESCE(family_member_count, 0) < 6
+                    AND login_status = 'logged_in'
+                    AND browser_profile_id IS NOT NULL
+                    AND browser_profile_id != ''
+                    ORDER BY family_member_count ASC
+                    `,
+        )
+        .all() as AccountRow[];
+    } catch (error) {
+      console.error(`[DB ERROR] get_available_pro_accounts 失败: ${error}`);
+      return [];
+    }
+  }
+
   /** 总数 */
   count(): number {
     const row = this.db.prepare("SELECT COUNT(*) AS n FROM accounts").get() as { n: number };

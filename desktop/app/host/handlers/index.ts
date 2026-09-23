@@ -8,6 +8,9 @@ import type { HostHandlerTable } from "../dispatch.ts";
 import type { HostContext } from "../context.ts";
 import { createHealthHandlers } from "./health.ts";
 import { createTaskHandlers } from "./task.ts";
+import { createSettingsHandlers } from "./settings.ts";
+import { createHomeHandlers } from "./home.ts";
+import { createAccountsHandlers } from "./accounts.ts";
 
 export function mergeHandlers(...tables: HostHandlerTable[]): HostHandlerTable {
   const merged: Record<string, HostHandlerTable[string]> = {};
@@ -23,5 +26,11 @@ export function mergeHandlers(...tables: HostHandlerTable[]): HostHandlerTable {
 }
 
 export function createHostHandlers(ctx: HostContext): HostHandlerTable {
-  return mergeHandlers(createHealthHandlers(), createTaskHandlers(ctx.tasks));
+  return mergeHandlers(
+    createHealthHandlers(),
+    createTaskHandlers(ctx.tasks),
+    createSettingsHandlers(ctx),
+    createHomeHandlers(ctx),
+    createAccountsHandlers(ctx),
+  );
 }
