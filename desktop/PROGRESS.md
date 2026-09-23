@@ -1,6 +1,6 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-24（「替换手机号」真机验证跑通：修掉三处缺陷——失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、以及在核对前从不点最终的保存） ｜ 分支 `dev_ai`
+> 最后更新：2026-09-24（「替换手机号」与「替换辅助邮箱」两个 AI 任务都已真机跑通并修掉同源缺陷：失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、不点最终保存、把可选的邮箱验证码当成失败） ｜ 分支 `dev_ai`
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -381,7 +381,23 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 
 - 凭据处理与 `login.ts` 一致：**只经 `fill` 写入，不进 AI 指令**（AI 指令里出现密码即为泄漏点），回归用例对此有断言
 - 回归用例 `desktop/test/engine-replace-phone.test.mjs`（5 条）：缺陷 1/2 在修复前把 operation 换回 HEAD 版本时为 3 红 1 绿；缺陷 3 在移掉保存步骤时单独变红；修复后 **5/5 绿**
-- 同类风险（本次未验证、未改动）：`RECOVERY_EMAIL` 是否同样失效**未判定**（只读核对时它跳到了「请先验证您的身份」而不是 404）；替换辅助邮箱 / 修改 2SV 手机的 operation 有同样的登录态判定，且「最终保存 / 提交」这一步是否完整也**未验证**
+- 同类风险（本次未验证、未改动）：修改 2SV 手机 / 修改验证器的 operation 有同样的登录态判定，且「最终保存 / 提交」这一步是否完整也**未验证**（`RECOVERY_EMAIL` 的疑问已在下一节判定：地址有效）
+
+### 替换辅助邮箱的真机缺陷与修复（2026-09-24）
+
+在同一个测试号上验证「替换辅助邮箱」（新邮箱 `renw93606@gmail.com`）时又暴露两处 **Python 同源**缺陷，均已修复并真机跑通。
+完整证据见 `.trellis/tasks/09-24-replace-email-real-run/real-run-log.md`。
+
+| 项 | 真机证据 | 处理 |
+|---|---|---|
+| 页面地址 | `GoogleURLs.RECOVERY_EMAIL`（`myaccount.google.com/recovery/email`）落点**就是**辅助邮箱设置页，与手机号那个 404 常量不同 | **不需要改地址**（只读核对确认） |
+| 「重新验证身份」被误判为未登录 | 真机形态是**直接要身份验证器验证码**（`/v3/signin/challenge/totp`），该 URL 命中 `url.includes("accounts.google.com") && url.includes("signin")` → 假失败「需要先登录账号」 | 新增 `passReauthIfRequired` / `completeReauth`：**有验证码框先填验证码、否则填密码**（真机形态是直接验证码），最多两轮；凭据经 `execute(..., credentials)` 由 automation 层传入，仍只经 `fill` 写入、不进 AI 指令 |
+| 「请输入新邮箱验证码」被当成失败 | 点完「下一步」后 Google 弹「请输入已发送至新邮箱的 6 位数验证码」；实测点「取消」后页面**已经显示新邮箱**（带一个可选的「验证辅助邮箱」入口）——即那是可选校验，不是没做完 | 没有取码服务时不再返回失败，改由 `verifyReplacement` 的结果核对定论（真没生效仍会如实报失败） |
+
+- 回归用例 `desktop/test/engine-replace-email.test.mjs`（6 条）：换回 HEAD 版时 3 红 2 绿；缺陷 2 的用例单独先红；修复后 6/6 绿
+- 复跑结果：一次运行成功（63.4s），独立只读复查显示「您的辅助邮箱 `renw93606@gmail.com`（上次更新：6 分钟前）」
+- 用户决定：**新邮箱的可选验证不做**（页面保留「验证辅助邮箱」入口）
+- 已知：AI 任务只改 Google 账号、不写库（`accounts.db.recovery_email` 仍为 `NULL`，与 Python 一致）；修改 2SV 手机 / 修改验证器仍未验证
 
 ### Electron 骨架的架构约定与审查修正
 
@@ -425,7 +441,7 @@ pnpm verify:selectors
    - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号**已完成真机端到端验证——三处缺陷修复后一次运行即替换成功（账号恢复手机号已换成用户给的新号，独立只读复查核对一致），详见 `.trellis/tasks/09-24-replace-phone-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号**与**替换辅助邮箱**都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、独立只读复查与账号真实状态一致），详见 `.trellis/tasks/09-24-replace-{phone,email}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 

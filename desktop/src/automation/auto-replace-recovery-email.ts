@@ -19,7 +19,11 @@ export async function autoReplaceRecoveryEmail(
     browserId,
     { ...options, closeAfter: options.closeAfter ?? false },
     async (engine) => {
-      const result = await engine.replaceRecoveryEmail(newEmail);
+      // 真机：恢复邮箱页会要求 Google 的「重新验证身份」，凭据从数据库账号取
+      const result = await engine.replaceRecoveryEmail(newEmail, null, {
+        password: String(accountInfo["password"] ?? ""),
+        totpSecret: String(accountInfo["secret_key"] ?? ""),
+      });
       if (result.success) return [true, "辅助邮箱替换成功", null] as Result3;
       // 失败时把 error 作为 error_type 带回，与 Python 一致
       return [false, result.message, result.error ?? null] as Result3;

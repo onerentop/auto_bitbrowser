@@ -552,9 +552,10 @@ export class StagehandGoogleEngine {
   async replaceRecoveryEmail(
     newEmail: string,
     emailService: import("./operations/replace-email.ts").EmailCodeService | null = null,
+    credentials: import("./operations/replace-email.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ReplaceEmailResult> {
     const { ReplaceEmailOperation } = await import("./operations/replace-email.ts");
-    return new ReplaceEmailOperation(this).execute(newEmail, emailService);
+    return new ReplaceEmailOperation(this).execute(newEmail, emailService, credentials);
   }
 
   async replaceRecoveryPhone(
