@@ -2,6 +2,75 @@
 
 > 最后更新：2026-09-23 ｜ 分支 `dev_ai` ｜ 全部已提交推送
 
+## 零、接续开发指引（清空上下文后先读这里）
+
+### 第一步：让新会话恢复认知
+
+把下面这段直接粘给新会话：
+
+```
+读 desktop/PROGRESS.md 与 desktop/ENGINE_SLICE_REPORT.md 恢复上下文。
+
+本项目正在把 Python 的 ixBrowser 自动化工具重写成 Node/TypeScript，
+代码在 desktop/ 目录。Python 侧保持原样作为对拍基准与回退方案。
+
+当前进度：services 层与 engine 层已完成，automation 层 12/15。
+下一步按 PROGRESS.md 第五章的依赖顺序继续（首先 BrowserUse 引擎）。
+
+注意事项：
+- Stagehand 必须锁 3.7.3，不可升级（原因见 PROGRESS.md 第三章）
+- 改动提示词或选择器后必须跑 pnpm verify:prompts 与 pnpm verify:selectors
+- 所有移植以「与 Python 逐字对齐」为准，不要"优化"提示词或判定顺序
+```
+
+### 第二步：验证环境没坏
+
+```powershell
+cd D:\workspace\projects\auto_bitbrowser2\desktop
+pnpm install            # 若 node_modules 丢失
+pnpm typecheck          # 应无输出
+pnpm test               # 应 111/111 通过
+pnpm verify:prompts     # 应 100%（依赖 scratch 里的 ops_spec.json，见下方说明）
+pnpm verify:selectors   # 应 0 缺失
+```
+
+四项全绿说明代码与文档一致，可以放心继续。
+
+### 第三步：确认 Python 侧基线
+
+```powershell
+cd D:\workspace\projects\auto_bitbrowser2
+.\.venv\Scripts\python.exe -m pytest -q
+# 基线：70 passed, 5 failed（那 5 个是 HEAD 上既有的，不是回归）
+```
+
+### 若 scratch 已被清理
+
+`pnpm verify:prompts` 依赖 `$env:PI_SCRATCH_DIR/ops_spec.json`。
+该文件随 scratch 清理会消失，用仓库内的脚本重建：
+
+```powershell
+# 在项目根目录执行
+.\.venv\Scripts\python.exe desktop\scripts\extract-ops-spec.py <输出路径>
+cd desktop
+node scripts/verify-prompts.mjs <输出路径>
+```
+
+### 工作目录速查
+
+| 位置 | 内容 |
+|---|---|
+| `desktop/PROGRESS.md` | 本文件——进度、决策、坑 |
+| `desktop/ENGINE_SLICE_REPORT.md` | 引擎切片验证报告（Stagehand 版本约束的原始依据） |
+| `desktop/src/services/` | services 层（已完成） |
+| `desktop/src/engine/` | 引擎层（已完成） |
+| `desktop/src/automation/` | 业务流程层（进行中） |
+| `desktop/scripts/` | 三个校验/提取脚本 |
+| `desktop/test/` | 111 个单测 |
+| Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
+
+---
+
 ## 一、当前状态速览
 
 | 层 | 进度 | 文件 | 行数 |
