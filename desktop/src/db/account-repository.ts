@@ -252,6 +252,77 @@ export class AccountRepository {
   }
 
   /**
+   * 更新账号会员信息（刷新家庭组信息专用）。对标 update_membership_info()。
+   *
+   * 一次性覆盖 9 个字段，并把 family_info_refreshed_at / updated_at 刷成 CURRENT_TIMESTAMP。
+   * 参数用单个对象承载（字段名保持 snake_case，与 Python 位置参数一一对应）。
+   */
+  updateMembershipInfo(fields: {
+    /** 账号邮箱 */
+    email: string;
+    /** Pro 状态 (yes/no/family_yes/detection_failed) */
+    is_pro: string;
+    /** Pro 计划名称 */
+    pro_plan_name: string;
+    /** 家庭组角色 (manager/member/none/unknown) */
+    family_role: string;
+    /** 家庭组管理员邮箱 */
+    family_manager_email: string;
+    /** 是否有家庭组 (yes/no/unknown) */
+    has_family_group: string;
+    /** 家庭成员数量 */
+    family_member_count: number;
+    /** 剩余家庭组位置 */
+    family_slots_left: number;
+    /** 账户所属国家 */
+    account_country: string;
+    /** 刷新错误信息 */
+    error_message: string | null;
+  }): boolean {
+    try {
+      const info = this.db
+        .prepare(
+          `UPDATE accounts SET
+                        is_pro = ?,
+                        pro_plan_name = ?,
+                        family_role = ?,
+                        family_manager_email = ?,
+                        has_family_group = ?,
+                        family_member_count = ?,
+                        family_slots_left = ?,
+                        account_country = ?,
+                        family_info_refresh_error = ?,
+                        family_info_refreshed_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE email = ?`,
+        )
+        .run(
+          fields.is_pro,
+          fields.pro_plan_name,
+          fields.family_role,
+          fields.family_manager_email,
+          fields.has_family_group,
+          fields.family_member_count,
+          fields.family_slots_left,
+          fields.account_country,
+          fields.error_message,
+          fields.email,
+        );
+      const affected = Number(info.changes ?? 0);
+
+      if (affected > 0) {
+        console.log(
+          `[DB] 更新会员信息: ${fields.email} -> is_pro=${fields.is_pro}, role=${fields.family_role}`,
+        );
+      }
+      return affected > 0;
+    } catch (error) {
+      console.error(`[DB ERROR] update_membership_info 失败: ${error}`);
+      return false;
+    }
+  }
+
+  /**
    * 更新解锁状态。对标 update_unlock_status()。
    * validation_url 只在传入时才写入（动态拼字段，与 Python 一致）。
    */

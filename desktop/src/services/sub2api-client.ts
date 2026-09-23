@@ -218,4 +218,144 @@ export class Sub2ApiClient {
       useAdmin: true,
     });
   }
+
+  /**
+   * 测试账号连接 (SSE 流式接口)。对标 test_account_connection()。
+   *
+   * POST /api/v1/admin/accounts/{account_id}/test
+   *
+   * 这是一个 SSE 流式接口，用于测试账号是否能正常发送请求。
+   * 当账号需要 403 验证时，会在响应中返回错误信息。
+   *
+   * 返回 success=true 表示账号正常；success=false 时可能带 403 验证信息
+   * （data.needs_unlock / data.validation_url / data.account_id / data.raw_error）。
+   *
+   * 不走 request()：SSE 响应体不是 JSON，需要按原始文本逐行解析。
+   */
+  async testAccountConnection(accountId: number, modelId: string = ""): Promise<Sub2ApiResponse> {
+    const url = `${this.baseUrl}/api/v1/admin/accounts/${accountId}/test`;
+    const headers = this.headers(true);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const data: Record<string, unknown> = {};
+      if (modelId) data["model_id"] = modelId;
+
+      const res = await this.fetchImpl(url, {
+        method: "POST",
+        headers,
+        // 对标 `json=data if data else None`：空对象时不带请求体
+        body: Object.keys(data).length > 0 ? JSON.stringify(data) : undefined,
+        signal: controller.signal,
+      });
+      const statusCode = res.status;
+
+      // 读取 SSE 流式响应
+      const content = await res.text();
+
+      // 解析 SSE 事件
+      const events = this.parseSseEvents(content);
+
+      // 检查是否有错误事件
+      for (const event of events) {
+        if (event["type"] === "error") {
+          const errorMsg = (event["error"] as string) ?? "Unknown error";
+
+          // 检测 403 VALIDATION_REQUIRED 错误
+          if (errorMsg.includes("403") || errorMsg.includes("VALIDATION_REQUIRED")) {
+            const validationUrl = this.extractValidationUrlFromError(errorMsg);
+            return {
+              success: false,
+              data: {
+                needs_unlock: true,
+                validation_url: validationUrl,
+                account_id: accountId,
+                raw_error: errorMsg,
+              },
+              error: "VALIDATION_REQUIRED",
+              statusCode: 403,
+            };
+          }
+
+          return { success: false, error: errorMsg, statusCode };
+        }
+
+        if (event["type"] === "test_complete" && event["success"]) {
+          return { success: true, data: { account_id: accountId, status: "ok" }, statusCode };
+        }
+      }
+
+      // 没有明确结果，检查 HTTP 状态码
+      if (statusCode >= 400) {
+        return {
+          success: false,
+          error: `HTTP ${statusCode}: ${content.slice(0, 200)}`,
+          statusCode,
+        };
+      }
+
+      return { success: true, data: { account_id: accountId, status: "ok" }, statusCode };
+    } catch (err) {
+      // Python 分 aiohttp.ClientError / asyncio.TimeoutError / Exception 三支；
+      // Node 只能靠 AbortError 区分超时，其余统一落到「网络请求失败」（与 request() 一致）。
+      const msg = err instanceof Error ? err.message : String(err);
+      const isAbort = err instanceof Error && err.name === "AbortError";
+      return { success: false, error: isAbort ? "请求超时" : `网络请求失败: ${msg}`, statusCode: 0 };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** 解析 SSE 事件流。对标 _parse_sse_events() */
+  private parseSseEvents(content: string): Record<string, unknown>[] {
+    const events: Record<string, unknown>[] = [];
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (line.startsWith("data:")) {
+        const jsonStr = line.slice(5).trim();
+        if (jsonStr) {
+          try {
+            events.push(JSON.parse(jsonStr) as Record<string, unknown>);
+          } catch {
+            // 对标 `except json.JSONDecodeError: pass`
+          }
+        }
+      }
+    }
+    return events;
+  }
+
+  /** 从错误消息中提取验证 URL。对标 _extract_validation_url_from_error() */
+  private extractValidationUrlFromError(errorMsg: string): string {
+    // 方法1: 尝试从 JSON 结构中提取 (更精确)
+    // 错误消息格式: "API 返回 403: {JSON}"
+    const jsonMatch = /\{[\s\S]*\}/.exec(errorMsg);
+    if (jsonMatch) {
+      try {
+        const errorJson = JSON.parse(jsonMatch[0] ?? "") as Record<string, unknown>;
+        // 从 error.details[0].metadata.validation_url 提取
+        const errorNode = (errorJson["error"] ?? {}) as Record<string, unknown>;
+        const details = errorNode["details"] ?? [];
+        if (Array.isArray(details) && details.length > 0) {
+          const metadata = ((details[0] ?? {}) as Record<string, unknown>)["metadata"] ?? {};
+          const url = (metadata as Record<string, unknown>)["validation_url"];
+          if (url) {
+            return String(url);
+          }
+        }
+      } catch {
+        // 对标 `except (json.JSONDecodeError, KeyError, IndexError): pass`
+      }
+    }
+
+    // 方法2: 用正则提取 URL (后备方案)
+    const urlPattern = /https?:\/\/accounts\.google\.com\/signin\/continue[^\s"'<>\\]+/;
+    const match = urlPattern.exec(errorMsg);
+    if (match) {
+      return match[0] ?? "";
+    }
+    return "";
+  }
 }

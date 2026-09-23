@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 220/220 通过
+pnpm test               # 应 465/465 通过
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
 ```
@@ -77,7 +77,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/src/browseruse/` | BrowserUse 引擎层（已完成） |
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
-| `desktop/test/` | 220 个单测 |
+| `desktop/test/` | 465 个单测 |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -86,17 +86,18 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 
 | 层 | 进度 | 文件 | 行数 |
 |---|---|---|---|
-| `services`（数据与服务） | ✅ 完成 | 12 | ~3000 |
+| `core`（配置 / 重试 / 并发 / 解析） | ✅ 完成 | 5 | ~1500 |
+| `services`（数据与服务） | ✅ 完成 | 13 | ~3400 |
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
 | `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
-| `automation`（业务流程） | 🟡 12/15 | 14 | ~2900 |
+| `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
 | 前端界面 | ❌ 未开始 | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 220/220 通过
+pnpm test               # 465/465 通过
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
 pnpm verify:selectors   # 选择器缺失 0（197/197）
@@ -173,8 +174,20 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `auto-antigravity-oauth.ts` | ✅（含批量） |
 | `pro-status-detector.ts` | ✅（含二次验证 4 分支） |
 | `auto-replace-email.ts` / `auto-replace-phone.ts` | ✅（Playwright 选择器直连） |
-| `auto-join-family.ts` | ❌ 待做（BrowserUse 依赖已就绪） |
-| `batch_account_processor.ts` | ❌ 依赖汇聚点，最后做 |
+| `auto-join-family.ts` | ⏭️ 用户要求跳过（BrowserUse 依赖已就绪，随时可做） |
+| `batch/types.ts` | ✅ batch 的两个结果 dataclass |
+| `batch/pro-detection.ts` | ✅ batch L1008-1424 的 4 个页面检测方法 |
+| `batch/membership-detect.ts` | ✅ batch L1751-2244 的 2 个 BrowserUse 检测方法 |
+| `batch-account-processor.ts` | ✅ 主类 1463 行（六个 batch_* 入口 + 两个便捷函数） |
+
+### 5. core 层（本轮新增）
+
+| 文件 | 说明 |
+|---|---|
+| `config-manager.ts` | 对标 `core/config_manager.py`；敏感字段加解密与 Python **字节级互通**（18 组对拍） |
+| `retry-helper.ts` | 对标 `core/retry_helper.py`；`execute_sync` 未移植（Node 无同步阻塞） |
+| `semaphore.ts` | `asyncio.Semaphore` / `gather(return_exceptions=True)` 的 Node 等价物 |
+| `data-parser.ts` | 账号行解析（早先已完成） |
 
 ## 三、关键决策与坑（重要，勿改）
 
@@ -242,6 +255,20 @@ TOTP 是标准算法，`totp.ts` 40 行即可对齐 `pyotp`，已对拍 24 组�
 
 Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisible`（对应 Python 的 `.last`）。
 
+### batch 移植的审查修正（3 处严重 + 2 处能力缺口）
+
+代码审查发现「依赖注入的默认值把 Python 必走分支静默跳过」，已逐条修掉：
+
+| 问题 | 后果 | 修法 |
+|---|---|---|
+| `accountRepo` / `refreshTaskRepo` 默认 null，而 Python 的 `DBManager` 是无条件调用 | `batchLoginAndOauth` 的「按 login_status 筛选」永远筛不出账号 → **阶段 2 永不执行**；「已关联则跳过」失效；Pro 与解锁状态不落库 | 新增 `deps.db` 注入口（给了就自动构造两个仓储）；两者都缺时构造函数打 `⚠️ 未注入` 告警，不再静默 |
+| 三个默认适配器漏传 `accountRepo` | 下游 `auto_*` 的 `login_status` / `sub2api_status` / `unlock_status` 永远不写库 | 改成 `makeDefaultLoginFn(repo)` 等工厂，构造时绑定 |
+| `AccountRepository.updateMembershipInfo` Node 侧缺失 | 会员信息刷新的写库整块被跳过 | 补齐该方法（SQL 与 Python 逐字一致），接口从可选改必需 |
+| `Sub2ApiClient.testAccountConnection` Node 侧缺失 | 403 解锁的「重新检测拿最新 validation_url」整段被跳过，已解锁账号会被推进解锁流程并计入失败 | 补齐该方法及 `parseSseEvents` / `extractValidationUrlFromError`，恢复 Python 的原始控制流 |
+
+> ⚠️ Node 侧**没有** Python 那种 `DBManager` 全局单例（打开哪个库必须由调用方决定），
+> 所以仓储不能在构造函数里默认 `openDb()`。生产路径请注入 `deps.db`。
+
 ### 本轮代码审查修掉的 4 处（对照 Python 后修正）
 
 | 位置 | 问题 | 修法 |
@@ -277,13 +304,16 @@ pnpm verify:selectors
 
 `ops_spec.json` 由 `scripts/extract-ops-spec.py` 从 Python 侧生成（重建命令见第零章）。
 
-## 五、下一步（按依赖顺序）
+## 五、下一步
 
-1. **`auto-join-family.ts`**（Python 292 行）—— BrowserUse 依赖已就绪，可直接做
+1. **`auto-join-family.ts`**（Python 292 行）—— 用户要求跳过，BrowserUse 依赖已就绪，随时可做
    - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
    - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
-2. **`batch_account_processor.ts`**（2261 行）—— Stagehand + BrowserUse + Playwright 三者汇聚点
-3. **前端界面** —— Electron + React 19 + TypeScript，UI 库倾向 Ant Design 5
+2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
+3. **前端界面** —— 剩下唯一未开始的部分。Electron + React 19 + TypeScript，UI 库倾向 Ant Design 5
+   - 后端接口形状已定型（`BatchAccountProcessor` 六个 batch_* 入口、各引擎门面、仓储层），
+     可以开始设计 IPC/渲染进程的调用边界
+   - **真机回归仍未做**：全部是离线等价移植，开始联调前建议先跑一轮真实 ixBrowser 窗口的冒烟测试
 
 **真机回归尚未做**：本轮与前几轮都是离线等价移植，`ENGINE_SLICE_REPORT.md` 里
 只验证了 Stagehand 的管道层。BrowserUse 的 Agent 循环、DOM 注入脚本、LLM 适配
