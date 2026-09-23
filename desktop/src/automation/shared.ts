@@ -6,6 +6,7 @@
  * Python 侧是复制粘贴到每个文件的，这里抽成一处，行为保持一致。
  */
 import { StagehandGoogleEngine } from "../engine/stagehand-engine.ts";
+import { getStagehandConfig } from "../engine/stagehand-config.ts";
 
 /** provider 名称到 Stagehand 模型前缀的映射（Python 各文件里重复定义的那张表） */
 export const PROVIDER_MAP: Record<string, string> = {
@@ -50,17 +51,29 @@ export interface ConnectOptions extends CommonOptions {
 /**
  * 连接 ixBrowser 窗口并返回引擎。
  * 对应 Python 里每个 auto_* 函数开头那段「构建 model_name + connect_to_ixbrowser」。
+ *
+ * model / key 的回落顺序对标 Python StagehandGoogleEngine.__init__ → get_stagehand_config()：
+ *   显式参数 → 调用方给的 default* → ConfigManager（宿主注册的来源）→ 环境变量 → 默认模型。
+ * 早期版本在这里直接用空串兜底，调用方不传参数时会以空 model/key 连 Stagehand。
  */
 export async function connectEngine(
   browserId: string | number,
   options: ConnectOptions,
 ): Promise<StagehandGoogleEngine> {
-  const modelName = buildModelName(options.model, options.provider) ?? options.defaultModel ?? "";
-  const apiKey = options.apiKey ?? options.defaultApiKey ?? "";
+  const resolved = getStagehandConfig({
+    modelName: buildModelName(options.model, options.provider) ?? options.defaultModel ?? null,
+    apiKey: options.apiKey ?? options.defaultApiKey ?? null,
+  });
+  if (!resolved.apiKey) {
+    // 对标 Python engine.py:163-167 的告警（Python 也只告警不抛错）
+    process.stderr.write(
+      "[automation] 未配置 API Key。请在设置界面配置 AI Agent，或传入 apiKey 参数，或设置环境变量 MODEL_API_KEY\n",
+    );
+  }
 
   return StagehandGoogleEngine.connectToIxBrowser(browserId, {
-    modelName,
-    apiKey,
+    modelName: resolved.modelName,
+    apiKey: resolved.apiKey ?? "",
     closeBrowserOnExit: options.closeAfter ?? false,
   });
 }

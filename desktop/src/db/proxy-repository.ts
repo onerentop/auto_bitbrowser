@@ -229,4 +229,30 @@ export class ProxyRepository {
     const row = this.db.prepare("SELECT COUNT(*) AS n FROM proxies").get() as { n: number };
     return row.n;
   }
+
+  /**
+   * 对标 Python 版 get_proxy_bindings（services/repositories/proxy_repository.py:151-166）：
+   * 返回绑定表整行（id / proxy_id / browser_id / email / bound_at），按 bound_at 倒序，出错返回 []。
+   * 已有的 getProxyBindings 只取 browser_id / email 两列，行为保持不变；设置页「详情」用本方法。
+   */
+  getProxyBindingDetails(proxyId: number): ProxyBindingRow[] {
+    try {
+      return this.db
+        .prepare("SELECT * FROM proxy_window_bindings WHERE proxy_id = ? ORDER BY bound_at DESC")
+        .all(proxyId) as ProxyBindingRow[];
+    } catch (error) {
+      console.error(`[DB ERROR] get_proxy_bindings 失败: ${error}`);
+      return [];
+    }
+  }
+}
+
+/** proxy_window_bindings 表的一行 */
+export interface ProxyBindingRow {
+  id: number;
+  proxy_id: number;
+  browser_id: string;
+  email: string | null;
+  bound_at: string | null;
+  [key: string]: unknown;
 }

@@ -5,7 +5,7 @@
  * 不引路由库：页面只有几个，用 state 切换即可；切走的页面保持挂载（display:none），
  * 避免表格筛选、滚动位置等状态在切换时丢失（对标 Qt 的 StackedWidget）。
  */
-import { useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Layout, Menu, Typography } from "antd";
 import { DashboardOutlined, HomeOutlined, SettingOutlined, TeamOutlined } from "@ant-design/icons";
 import { TaskDock } from "./components/TaskDock.tsx";
@@ -14,6 +14,8 @@ import { HomePage } from "./pages/HomePage.tsx";
 import { AccountsPage } from "./pages/AccountsPage.tsx";
 import { SettingsPage } from "./pages/SettingsPage.tsx";
 import { useIsDark } from "./stores/theme.ts";
+import { useHostStatus } from "./stores/host-status.ts";
+import { initThemeFromConfig } from "./pages/settings/theme-init.ts";
 
 const { Sider, Content } = Layout;
 
@@ -37,6 +39,16 @@ export function App(): ReactElement {
   const [page, setPage] = useState<PageKey>("home");
   const [visited, setVisited] = useState<Set<PageKey>>(() => new Set(["home"]));
   const dark = useIsDark();
+  const hostReady = useHostStatus()?.state === "ready";
+
+  // 对标 Python 启动时读取 theme（main_window_fluent.py:151-160）。
+  // 只在后端首次就绪时读一次：之后的重启不再覆盖用户在设置页里尚未保存的主题选择。
+  const themeLoaded = useRef(false);
+  useEffect(() => {
+    if (!hostReady || themeLoaded.current) return;
+    themeLoaded.current = true;
+    void initThemeFromConfig();
+  }, [hostReady]);
 
   const go = (key: PageKey): void => {
     setPage(key);

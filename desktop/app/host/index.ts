@@ -18,6 +18,7 @@ import { createHostHandlers } from "./handlers/index.ts";
 import { DATA_ROOT_ENV, createHostContext } from "./context.ts";
 import { ERROR_CODES, errEnvelope } from "../shared/envelope.ts";
 import { isHostRequestMessage, type HostOutboundMessage } from "../shared/ipc.ts";
+import { registerStagehandConfigSource } from "../../src/engine/stagehand-config.ts";
 
 /** utilityProcess 里 process.parentPort 的最小形状 */
 interface ParentPortLike {
@@ -57,6 +58,9 @@ const ctx = createHostContext({
 });
 
 const dispatch = createDispatcher(createHostHandlers(ctx));
+
+// Stagehand 引擎在调用方未传 model/key 时回落到这份配置（对标 Python get_stagehand_config 的 ConfigManager 来源）
+registerStagehandConfigSource(() => ctx.config());
 
 port.on("message", (event) => {
   const message = event.data;

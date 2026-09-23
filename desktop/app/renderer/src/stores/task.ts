@@ -34,6 +34,15 @@ const finishedListeners = new Set<(e: TaskFinishedEvent) => void>();
 let started = false;
 let logKey = 0;
 
+/**
+ * 已结束的任务 id。
+ * 跨进程时「任务结束事件」可能先于「启动请求的返回值」到达渲染层（瞬时完成的任务，
+ * 两者走同一条 port 但响应要多经过几层 async）。markTaskStarted 据此忽略已结束的任务，
+ * 否则 running 会被重新置为非空，页面按钮永远禁用。
+ * 后端重启后任务 id 从 1 重新计数，因此后端状态变化时清空。
+ */
+const finishedIds = new Set<number>();
+
 function set(next: Partial<TaskState>): void {
   state = { ...state, ...next };
   for (const l of listeners) l();
@@ -47,7 +56,7 @@ function appendLog(message: string, at: number): void {
 
 function refreshCurrent(): void {
   invoke(IPC.invoke.taskGetCurrent).then(
-    (running) => set({ running }),
+    (running) => set({ running: running && finishedIds.has(running.id) ? null : running }),
     () => set({ running: null }),
   );
 }
@@ -64,11 +73,16 @@ function ensureStarted(): void {
   });
 
   on(IPC.event.taskFinished, (e) => {
-    set({ running: null, lastFinished: e });
+    finishedIds.add(e.taskId);
+    // 只清除对应的那个任务（旧任务迟到的结束事件不应清掉新任务）
+    const running = state.running && state.running.id !== e.taskId ? state.running : null;
+    set({ running, lastFinished: e });
     for (const fn of finishedListeners) fn(e);
   });
 
   on(IPC.event.hostStatus, (s) => {
+    // 后端（重）启动后任务 id 重新从 1 计数，旧的已结束集合作废
+    if (s.state !== "ready") finishedIds.clear();
     if (s.state === "ready") refreshCurrent();
     else set({ running: null });
   });
@@ -90,6 +104,8 @@ export function useTaskState(): TaskState {
 export function markTaskStarted(info: TaskInfo): void {
   ensureStarted();
   appendLog(`▶ 开始任务：${info.label}`, info.startedAt);
+  // 结束事件已先到：任务已经跑完，不能再标记为运行中
+  if (finishedIds.has(info.id)) return;
   set({ running: info });
 }
 

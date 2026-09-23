@@ -5,7 +5,7 @@
  * 只是 ProxyRepository 之上的一层薄封装 + ixBrowser 配置格式转换。
  * Python 侧通过 DBManager 门面调用，这里直接依赖仓储。
  */
-import type { ProxyRepository, ProxyRow, ProxyUsageStat } from "../db/proxy-repository.ts";
+import type { ProxyBindingRow, ProxyRepository, ProxyRow, ProxyUsageStat } from "../db/proxy-repository.ts";
 
 /** 传给 ixBrowser 建窗口用的代理配置。注意键名与库表字段不同 */
 export interface BrowserProxyConfig {
@@ -58,6 +58,14 @@ export class ProxyAllocator {
 
   getProxyBindings(proxyId: number): { browser_id: string; email: string | null }[] {
     return this.repo.getProxyBindings(proxyId);
+  }
+
+  /**
+   * 对标 Python ProxyAllocator.get_proxy_bindings（services/proxy_allocator.py:82-92）的完整返回：
+   * [{id, proxy_id, browser_id, email, bound_at}]。已有的 getProxyBindings 只返回两列，保持不变。
+   */
+  getProxyBindingDetails(proxyId: number): ProxyBindingRow[] {
+    return this.repo.getProxyBindingDetails(proxyId);
   }
 
   /** 剩余可分配窗口总数：未满代理的剩余额度之和 */

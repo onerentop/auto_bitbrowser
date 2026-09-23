@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 546/546 通过
+pnpm test               # 应 684/684 通过
 pnpm typecheck:app      # Electron 骨架，应无输出
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
@@ -79,7 +79,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
 | `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
-| `desktop/test/` | 546 个单测（含 `app-*.test.mjs`） |
+| `desktop/test/` | 684 个单测（含 `app-*.test.mjs`） |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -93,13 +93,13 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
 | `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
 | `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
-| 前端界面 | 🟡 骨架 + 业务基建完成，页面进行中 | — | — |
+| 前端界面 | 🟡 骨架 + 首页 / 账号管理 / 设置完成，其余页面未开始 | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 546/546 通过
+pnpm test               # 684/684 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
@@ -216,7 +216,7 @@ pnpm typecheck:app  # tsconfig.node.json + tsconfig.web.json
 实机验证（Electron 44.4.5 / Chrome 152 / Node 24.21）：窗口「ixBrowser 窗口管理工具」打开，后端 `starting → ready`，
 ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → starting → ready` 且 PID 更换；关窗后无残留 electron 进程。
 
-### 7. 业务页面（进行中，计划见 `.pi/plan/第一批业务页面-*.md`）
+### 7. 业务页面（第一批完成，计划见 `.pi/plan/第一批业务页面-*.md`）
 
 **阶段 0 后端基建 ✅**
 
@@ -228,6 +228,32 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 | `app/host/task-runner.ts` | 全局单任务互斥（`TASK_BUSY`）、协作式停止钩子、日志→进度解析照搬 orchestrator.py:417-424 |
 | `app/shared/ipc.ts` | 路由改为「`LOCAL_CHANNELS` 之外全部转后端」；新增 `task/getCurrent`、`task/stop` 与三个任务事件 |
 | 渲染层 | 左导航外壳（首页 / 账号管理 / 设置 / 运行状态）、底部 `TaskDock`（进度 + 停止 + 日志抽屉 + 结果弹窗）、深浅色主题 store |
+
+**阶段 1-3 页面 ✅**（三页由子代理并行实现，之后各做一轮只读审查并修复）
+
+| 页面 | 通道（`abb/<领域>/*`） | 后台任务 |
+|---|---|---|
+| 设置（配置 / 代理 / 账号数据） | `settings/load·save·setDataDir·getTheme·testAi`、`proxies*`（增删改查、导入、绑定详情、解绑）、`accounts*`（增改查、导入） | `settings_delete_accounts`（逐个找窗口→删窗口→删账号） |
+| 首页（ixBrowser 窗口管理） | `home/getConfig·saveConfig·listGroups·listBrowsers` | `home_open_browsers`、`home_delete_browsers` |
+| 账号管理 | `accounts/list·getDefaults·precheck·start·bindCandidates·bind·unbind·deleteOne` | `login` `oauth` `login_and_oauth` `detect_pro` `refresh_membership_info` `unlock_403` `batch_bind` `batch_delete` `detect_403` `enable_family_sharing` |
+
+新增后端模块：`src/application/{settings-service,settings-data,test-ai-connection,home-tree,account-manager-service,account-task-orchestrator}.ts`、`src/ixbrowser/{window,groups}.ts`、`src/engine/stagehand-config.ts`。
+
+**与 Python 的有意偏差**（代码里均有注释）：
+- 首页「打开 / 删除选中」接上真实实现（原版 TODO 桩）；「创建窗口」「停止任务」保持禁用
+- 账号管理「绑定窗口」改为下拉选择未被占用的窗口（原版总是绑第一个）
+- 删除 / 登录等所有批量操作的窗口 ID **以数据库为准**，界面数据过期时跳过并提示刷新，不误删他人窗口
+- 批量绑定：同一窗口一批内只绑第一个匹配账号，执行时再查一次占用；写库返回 false 计为失败
+- 批量删除改为先删账号、成功后再删窗口；非数字窗口 ID 不调用 ixBrowser
+- 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）
+- 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖 Python 同时写入的其它键）；越界数值加载时夹紧（对标 QSpinBox）
+- `data_dir` 用输入框 +「应用」（尚无文件夹对话框通道）；测试 AI 连接 HTTP 超时 25s（避开主进程 30s 转发超时）
+- 代理详情显示 browser_id + 邮箱、解绑用 `unbind_window`（原版读不存在的字段 / 调不存在的方法）；同批导入按 host:port 去重
+- 首页配置失焦即写回（原版关窗时写）；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层
+- Stagehand 模型配置补上 `get_stagehand_config` 的回落链（显式参数 → 配置 → 环境变量 → 默认模型），由后端启动时注册 ConfigManager 来源
+- 页面自动加载等后端首次 ready；任务结束事件可能先于启动返回值到达，store 用已结束 id 集合防止界面卡在「运行中」
+
+**实机验证**（`ABB_DATA_ROOT=scratch`）：运行状态页显示 scratch 路径；首页读取真实 ixBrowser 列表（15 组 / 374 窗口，只读）；设置→账号数据批量导入 2 个测试账号成功，账号管理页列出这 2 个；关窗后无残留 electron 进程。
 
 > ⚠️ **实机验证一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
 > 「运行状态」页会显示当前数据目录，启动后先确认。
@@ -372,11 +398,11 @@ pnpm verify:selectors
    - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
    - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
 2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
-3. **前端界面** —— Electron 骨架 ✅ 已完成（见「二、6」）。下一步是业务页面：
-   - 先验证 `node:sqlite` 能在 Electron `utilityProcess`（Node 24.21）里加载，再接账号/仓储相关通道
-   - 新通道按 `abb/领域/动作` 登记进 `app/shared/ipc.ts`，后端实现放 `app/host/handlers/`，同步加入 `HOST_ROUTED_CHANNELS`
-   - 批量任务进度走已预留的 `HostEventMessage`（后端 → 主进程 → `webContents.send`）
-   - **真机回归仍未做**：全部是离线等价移植，开始联调前建议先跑一轮真实 ixBrowser 窗口的冒烟测试
+3. **前端界面** —— 骨架 ✅、第一批业务页面（首页 / 账号管理 / 设置）✅（见「二、7」）。后续：
+   - 其余 Python 页面（替换手机号 / 替换辅助邮箱 / 修改 2SV / 修改验证器 / 踢出设备 / TOTP 导入）
+   - 家庭组加入（`auto-join-family.ts`，用户要求暂跳过，相关按钮禁用）
+   - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
+   - **真机回归仍未做**：批量登录 / OAuth / 403 / Pro 检测都只有离线 + 假依赖测试，开始联调前先用测试账号冒烟
 
 **真机回归尚未做**：本轮与前几轮都是离线等价移植，`ENGINE_SLICE_REPORT.md` 里
 只验证了 Stagehand 的管道层。BrowserUse 的 Agent 循环、DOM 注入脚本、LLM 适配
