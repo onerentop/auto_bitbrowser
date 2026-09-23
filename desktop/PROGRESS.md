@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 684/684 通过
+pnpm test               # 应 728/728 通过
 pnpm typecheck:app      # Electron 骨架，应无输出
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
@@ -79,7 +79,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
 | `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
-| `desktop/test/` | 684 个单测（含 `app-*.test.mjs`） |
+| `desktop/test/` | 728 个单测（含 `app-*.test.mjs`） |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -93,13 +93,13 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
 | `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
 | `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
-| 前端界面 | 🟡 骨架 + 首页 / 账号管理 / 设置完成，其余页面未开始 | — | — |
+| 前端界面 | ✅ 骨架 + 全部页面（首页 / 5 个 AI 任务页 / 账号管理 / 导入 TOTP / 设置） | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 684/684 通过
+pnpm test               # 728/728 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
@@ -255,6 +255,26 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 
 **实机验证**（`ABB_DATA_ROOT=scratch`）：运行状态页显示 scratch 路径；首页读取真实 ixBrowser 列表（15 组 / 374 窗口，只读）；设置→账号数据批量导入 2 个测试账号成功，账号管理页列出这 2 个；关窗后无残留 electron 进程。
 
+**第二批页面 ✅**（5 个 AI 批量任务页 + 导入 TOTP）
+
+| 页面 | 通道 | 后台任务 |
+|---|---|---|
+| 替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备（一个通用 `AiTaskPage` 按 `kind` 驱动） | `abb/aitasks/load`（分组→窗口树 + 数据库状态，只读）、`abb/aitasks/start` | `ai_replace_phone` `ai_replace_email` `ai_modify_2sv` `ai_modify_auth` `ai_kick_devices` |
+| 导入 TOTP（QR / 文本） | `abb/totp/parseUris·parseText·match·import` | `import_totp` |
+
+- 新增事件 `abb/task/event/item`（`TaskApi.item()`），对标 Python AI Worker 的 `progress(email, status, message)`，逐行更新「状态 / 消息」列
+- 新增模块：`src/application/{ai-task-runner,totp-import}.ts`、`src/core/totp-extractor/*`（migration protobuf 手写解析，零依赖）；渲染层二维码识别用 `jsqr`（canvas 取像素）
+- **与 Python 对拍**：`test/fixtures/totp-python-parity.json` 由 Python 生成（migration 4 组覆盖多账号 / SHA256·512 / 8 位 / HOTP / 中文名 / 未知字段号 / 去填充 base64，标准 URI 6 组），另 6 组异常输入逐条比对，全部一致
+
+**与 Python 的有意偏差**：
+- AI 任务**执行前按 profileId 重新读取窗口名，必须等于 email 才执行**，否则跳过记失败（Python 的 email 就是窗口名，二者天然绑定；这里防止界面数据过期时用 A 的密码操作 B 的窗口）
+- 并发数照搬 Python：界面可调但**串行执行**（Python 5 个 Worker 从不读该值）；`modify_2sv` 照搬 `close_after=True`（任务结束关闭窗口）
+- 停止后「开始」要等任务真正结束才可用（修 Python 基类立即复位的缺陷）；开始前加确认框（原版直接执行，但均为破坏性操作）；Python 从不自动加载，这里也不自动加载
+- `modify_auth` 的「已修改密钥.txt」写到数据根目录
+- TOTP：二维码在渲染层异步识别（Python 在 UI 线程同步识别会卡死）；jsQR 每张图只识别一个码（pyzbar 可多个）；导入支持停止（Python 无）；导入以数据库当前状态重新匹配，库中无该账号记失败；写库返回 false 计失败
+
+**实机验证**（`ABB_DATA_ROOT=scratch`）：导航顺序 / 文案与 Python 一致，6 个新页面均渲染；AI 页「加载数据」读到真实 ixBrowser 374 个窗口（只读，未点「开始」）；TOTP 文本模式解析 2 条 → 匹配 scratch 库测试账号 → 导入成功（密钥、密码写入，设置→账号数据可见）；关窗无残留。
+
 > ⚠️ **实机验证一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
 > 「运行状态」页会显示当前数据目录，启动后先确认。
 
@@ -398,8 +418,8 @@ pnpm verify:selectors
    - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
    - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
 2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
-3. **前端界面** —— 骨架 ✅、第一批业务页面（首页 / 账号管理 / 设置）✅（见「二、7」）。后续：
-   - 其余 Python 页面（替换手机号 / 替换辅助邮箱 / 修改 2SV / 修改验证器 / 踢出设备 / TOTP 导入）
+3. **前端界面** —— 骨架 ✅、第一批（首页 / 账号管理 / 设置）✅、第二批（5 个 AI 任务页 / 导入 TOTP）✅，Python GUI 的全部页面已移植。后续：
+   - 5 个 AI 页接入 SMS-Bus / IMAP 验证码（Python GUI 本身也没接，触发验证码即失败）
    - 家庭组加入（`auto-join-family.ts`，用户要求暂跳过，相关按钮禁用）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
    - **真机回归仍未做**：批量登录 / OAuth / 403 / Pro 检测都只有离线 + 假依赖测试，开始联调前先用测试账号冒烟

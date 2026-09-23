@@ -1,0 +1,156 @@
+{
+ "migration": [
+  {
+   "uri": "otpauth-migration://offline?data=CiwKCkhlbGxvV29ybGQSEHRlc3RAZXhhbXBsZS5jb20aBkdvb2dsZSABKAEwAhABGAEgACi5YA",
+   "accounts": [
+    {
+     "secret": "JBSWY3DPK5XXE3DE",
+     "name": "test@example.com",
+     "issuer": "Google",
+     "algorithm": "SHA1",
+     "digits": 6,
+     "otp_type": "totp",
+     "counter": 0,
+     "email": "test@example.com"
+    }
+   ]
+  },
+  {
+   "uri": "otpauth-migration://offline?data=CisKAwECAxIWR29vZ2xlOkFsaWNlQEdtYWlsLmNvbRoGR29vZ2xlIAIoAjACCisKB2FiY2RlZmcSGGJvYkBleGFtcGxlLmNvbSAoR29vZ2xlKSADKAAwATgqCiMKAWsSFuW8oOS4iTp6aGFuZ0DkvovlrZAuY24aBuiwt%2BatjBABGAEgACi5YA",
+   "accounts": [
+    {
+     "secret": "AEBAG",
+     "name": "Google:Alice@Gmail.com",
+     "issuer": "Google",
+     "algorithm": "SHA256",
+     "digits": 8,
+     "otp_type": "totp",
+     "counter": 0,
+     "email": "alice@gmail.com"
+    },
+    {
+     "secret": "MFRGGZDFMZTQ",
+     "name": "bob@example.com (Google)",
+     "issuer": "",
+     "algorithm": "SHA512",
+     "digits": 6,
+     "otp_type": "hotp",
+     "counter": 42,
+     "email": "bob@example.com"
+    },
+    {
+     "secret": "NM",
+     "name": "张三:zhang@例子.cn",
+     "issuer": "谷歌",
+     "algorithm": "SHA1",
+     "digits": 6,
+     "otp_type": "totp",
+     "counter": 0,
+     "email": "zhang@例子.cn"
+    }
+   ]
+  },
+  {
+   "uri": "otpauth-migration://offline?data=Ci4KDHp6enp6enp6enp6ehIHbm9lbWFpbBoBWCAJKAcwBUkAAAAAAAAAAFUAAAAAEAEYASAAKLlg",
+   "accounts": [
+    {
+     "secret": "PJ5HU6T2PJ5HU6T2PJ5A",
+     "name": "noemail",
+     "issuer": "X",
+     "algorithm": "SHA1",
+     "digits": 6,
+     "otp_type": "totp",
+     "counter": 0,
+     "email": null
+    }
+   ]
+  },
+  {
+   "uri": "otpauth-migration://offline?data=CiEKEDEyMzQ1Njc4OTAxMjM0NTYSDXBsYWluQHRlc3QuaW8QARgBIAAouWA=",
+   "accounts": [
+    {
+     "secret": "GEZDGNBVGY3TQOJQGEZDGNBVGY",
+     "name": "plain@test.io",
+     "issuer": "",
+     "algorithm": "SHA1",
+     "digits": 6,
+     "otp_type": "totp",
+     "counter": 0,
+     "email": "plain@test.io"
+    }
+   ]
+  }
+ ],
+ "standard": [
+  {
+   "uri": "otpauth://totp/Google:user%40gmail.com?secret=jbswy3dpehpk3pxp&issuer=Google",
+   "account": {
+    "secret": "JBSWY3DPEHPK3PXP",
+    "name": "user@gmail.com",
+    "issuer": "Google",
+    "algorithm": "SHA1",
+    "digits": 6,
+    "otp_type": "totp",
+    "counter": 0,
+    "email": "user@gmail.com"
+   }
+  },
+  {
+   "uri": "otpauth://totp/user@gmail.com?secret=JBSWY3DP&algorithm=sha256&digits=8",
+   "account": {
+    "secret": "JBSWY3DP",
+    "name": "user@gmail.com",
+    "issuer": "",
+    "algorithm": "SHA256",
+    "digits": 8,
+    "otp_type": "totp",
+    "counter": 0,
+    "email": "user@gmail.com"
+   }
+  },
+  {
+   "uri": "otpauth://hotp/Acme:me@acme.com?secret=ABC&counter=7",
+   "account": {
+    "secret": "ABC",
+    "name": "me@acme.com",
+    "issuer": "Acme",
+    "algorithm": "SHA1",
+    "digits": 6,
+    "otp_type": "hotp",
+    "counter": 7,
+    "email": "me@acme.com"
+   }
+  },
+  {
+   "uri": "otpauth://totp/NoSecret?issuer=Foo",
+   "account": {
+    "secret": "",
+    "name": "NoSecret",
+    "issuer": "Foo",
+    "algorithm": "SHA1",
+    "digits": 6,
+    "otp_type": "totp",
+    "counter": 0,
+    "email": null
+   }
+  },
+  {
+   "uri": "otpauth://totp/Lbl:%E5%BC%A0%E4%B8%89?secret=AAAA&issuer=Real",
+   "account": {
+    "secret": "AAAA",
+    "name": "张三",
+    "issuer": "Real",
+    "algorithm": "SHA1",
+    "digits": 6,
+    "otp_type": "totp",
+    "counter": 0,
+    "email": null
+   }
+  },
+  {
+   "uri": "https://example.com/x",
+   "account": null
+  }
+ ],
+ "_note": "由 Python core/totp_extractor/migration_decoder.py 生成（对拍基准），勿手改"
+}
