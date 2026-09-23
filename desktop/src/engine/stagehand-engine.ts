@@ -69,6 +69,11 @@ interface V3Like {
 interface LocatorLike {
   fill(value: string): Promise<void>;
   type(text: string): Promise<void>;
+  first?(): LocatorLike;
+  isVisible?(): Promise<boolean>;
+  click?(): Promise<void>;
+  /** 直接在元素上派发 click 事件，不依赖坐标命中（窗口不在前台时也有效） */
+  sendClickEvent?(): Promise<void>;
 }
 
 interface PageLike {
@@ -77,7 +82,27 @@ interface PageLike {
   content?(): Promise<string>;
   locator?(selector: string): LocatorLike;
   keyboard?: { type(text: string): Promise<void> };
+  /** Stagehand V3 Page 没有 keyboard 对象，直接提供 type / keyPress */
+  type?(text: string): Promise<void>;
+  keyPress?(key: string): Promise<void>;
   evaluate?<R = unknown>(fn: string | ((arg?: unknown) => R | Promise<R>), arg?: unknown): Promise<R>;
+  sendCDP?<T = unknown>(method: string, params?: object): Promise<T>;
+}
+
+/**
+ * 页面内复核脚本：首个匹配元素需有非零尺寸，且自身与祖先都没被隐藏。
+ * 返回 null 表示主文档里查不到该元素。导出供单测校验。
+ */
+export function renderedCheckScript(selector: string): string {
+  return `(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    return typeof el.checkVisibility === "function"
+      ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      : true;
+  })()`;
 }
 
 export class StagehandGoogleEngine {
@@ -249,16 +274,24 @@ export class StagehandGoogleEngine {
     return "";
   }
 
+  /** 选择器匹配多个元素时取第一个（V3 Locator 的 first() 是方法） */
+  private firstLocator(selector: string): LocatorLike | null {
+    const { page } = this.ensureReady();
+    if (typeof page.locator !== "function") return null;
+    const loc = page.locator(selector);
+    return typeof loc.first === "function" ? loc.first() : loc;
+  }
+
   /**
    * 按选择器填充输入框。
    * 对标 Python 的 engine.page.fill()——用于 act() 输入失败时的降级路径。
    * 拿不到 locator 能力时返回 false，由调用方决定后续。
    */
   async fill(selector: string, value: string): Promise<boolean> {
-    const { page } = this.ensureReady();
-    if (typeof page.locator !== "function") return false;
     try {
-      await page.locator(selector).fill(value);
+      const loc = this.firstLocator(selector);
+      if (!loc) return false;
+      await loc.fill(value);
       return true;
     } catch {
       return false;
@@ -266,27 +299,120 @@ export class StagehandGoogleEngine {
   }
 
   /**
-   * 直接敲键盘输入文本。
+   * 选择器对应的元素是否存在且可见；出错（含元素不存在）一律视为不可见。
+   *
+   * Stagehand 的 isVisible 只看元素自身的 display / visibility / opacity，
+   * 不看祖先是否 display:none、也不看尺寸。Google 密码页 DOM 里常驻一个
+   * 隐藏容器内的 0×0 `#captchaimg`，会被它误判为可见 → 把密码页当成人机验证。
+   * 所以 Stagehand 判可见后再在页面里复核一次盒子尺寸与 checkVisibility()。
+   */
+  async isVisible(selector: string): Promise<boolean> {
+    try {
+      const loc = this.firstLocator(selector);
+      if (!loc || typeof loc.isVisible !== "function") return false;
+      if (!(await loc.isVisible())) return false;
+    } catch {
+      return false;
+    }
+    const { page } = this.ensureReady();
+    if (typeof page.evaluate !== "function") return true;
+    try {
+      // null：主文档里查不到（可能在 shadow DOM 里），沿用 Stagehand 的结论
+      const rendered = await page.evaluate<boolean | null>(renderedCheckScript(selector));
+      return rendered !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  /** 按选择器点击；元素不存在或不可点击时返回 false */
+  async click(selector: string): Promise<boolean> {
+    try {
+      const loc = this.firstLocator(selector);
+      if (!loc || typeof loc.click !== "function") return false;
+      await loc.click();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 在元素上直接派发 click 事件（不按坐标命中）。
+   * 窗口里有多个标签页、当前页不在前台时，坐标点击可能落空，用它兜底。
+   */
+  async jsClick(selector: string): Promise<boolean> {
+    try {
+      const loc = this.firstLocator(selector);
+      if (!loc || typeof loc.sendClickEvent !== "function") return false;
+      await loc.sendClickEvent();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 把当前页切到浏览器前台（CDP Page.bringToFront）；不支持时静默跳过 */
+  async bringToFront(): Promise<void> {
+    const { page } = this.ensureReady();
+    if (typeof page.sendCDP !== "function") return;
+    try {
+      await page.sendCDP("Page.bringToFront");
+    } catch {
+      /* 切前台失败不影响后续操作 */
+    }
+  }
+
+  /** 按下一个键（如 "Enter"）；V3 Page 用 keyPress */
+  async pressKey(key: string): Promise<boolean> {
+    const { page } = this.ensureReady();
+    if (typeof page.keyPress !== "function") return false;
+    try {
+      await page.keyPress(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 页面完整 HTML（含 aria-label 等属性，innerText 看不到），取不到返回空串 */
+  async getPageHtml(): Promise<string> {
+    const { page } = this.ensureReady();
+    try {
+      if (typeof page.evaluate === "function") {
+        const html = await page.evaluate<string>("document.documentElement ? document.documentElement.outerHTML : ''");
+        if (typeof html === "string") return html;
+      }
+      if (typeof page.content === "function") return await page.content();
+    } catch {
+      /* 取不到就当空 */
+    }
+    return "";
+  }
+
+  /**
+   * 直接敲键盘输入文本（输入到当前焦点元素）。
    * 对标 Python 的 engine.page.keyboard.type()——act() 与 fill() 都失败时的最后手段。
+   * Stagehand V3 的 Page 没有 keyboard 对象，改用 page.type()。
    */
   async typeText(text: string): Promise<boolean> {
     const { page } = this.ensureReady();
-    if (page.keyboard && typeof page.keyboard.type === "function") {
-      try {
+    try {
+      if (page.keyboard && typeof page.keyboard.type === "function") {
         await page.keyboard.type(text);
         return true;
-      } catch {
-        return false;
       }
-    }
-    // 回退：尝试对当前焦点元素用 locator 输入
-    if (typeof page.locator === "function") {
-      try {
+      if (typeof page.type === "function") {
+        await page.type(text);
+        return true;
+      }
+      // 回退：尝试对当前焦点元素用 locator 输入
+      if (typeof page.locator === "function") {
         await page.locator("input:focus").type(text);
         return true;
-      } catch {
-        return false;
       }
+    } catch {
+      return false;
     }
     return false;
   }
@@ -396,6 +522,8 @@ export class StagehandGoogleEngine {
     password: string;
     totpSecret?: string | null;
     recoveryEmail?: string | null;
+    /** 步骤日志（不会包含密码、密钥与验证码） */
+    log?: ((msg: string) => void) | null;
   }): Promise<import("./types.ts").LoginResult> {
     const { LoginOperation } = await import("./operations/login.ts");
     return new LoginOperation(this).execute(options);
@@ -432,8 +560,9 @@ export class StagehandGoogleEngine {
   async replaceRecoveryPhone(
     newPhone: string,
     smsService: import("./operations/replace-phone.ts").SmsCodeService | null = null,
+    credentials: import("./operations/replace-phone.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ModifyPhoneResult> {
     const { ReplacePhoneOperation } = await import("./operations/replace-phone.ts");
-    return new ReplacePhoneOperation(this).execute(newPhone, smsService);
+    return new ReplacePhoneOperation(this).execute(newPhone, smsService, credentials);
   }
 }

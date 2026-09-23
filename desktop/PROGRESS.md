@@ -1,6 +1,6 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-23（按用户要求删除账号管理的 OAuth / Pro / 家庭组 / 403 / Sub2API 等功能及 BrowserUse 引擎） ｜ 分支 `dev_ai`
+> 最后更新：2026-09-24（「替换手机号」真机验证跑通：修掉三处缺陷——失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、以及在核对前从不点最终的保存） ｜ 分支 `dev_ai`
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -367,6 +367,22 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 - `browseruse/agent/service.ts` 的 `run()` 入口会复位 `_stopRequested`，因此 `run()` 之前调 `stop()` 无效
 - `dom/service.ts` 的 `extractDom` 捕获异常后返回空树，但**不清空**上一次快照
 
+### 替换手机号的真机缺陷与修复（2026-09-24）
+
+在真实 ixBrowser 窗口 + 真实 Google 账号（profile 7）上验证「替换手机号」AI 任务时，暴露两处 **Python 同源**缺陷；
+两处都只修 desktop，Python 保持原样（如需同步修 Python 请另行安排）。完整证据见
+`.trellis/tasks/09-24-replace-phone-real-run/real-run-log.md`。
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| `GoogleURLs.RECOVERY_PHONE`（`myaccount.google.com/recovery/phone`）已失效 | 真机打开是 `404. That's an error.`；完成身份重新验证后再访问**仍是 404**；同会话访问 `RECOVERY_PHONE_SETTINGS` 才是真实的辅助电话号码设置页。原实现整个流程（extract / act 全部提示词）都跑在 404 页上 | `operations/replace-phone.ts` 改用 `RECOVERY_PHONE_SETTINGS`（Python 的 `auto_replace_phone.py` 与 desktop 的 Playwright 版用的都是它） |
+| 该页面要求「请先验证您的身份」，其 URL 是 `accounts.google.com/v3/signin/challenge/pwd`，正好命中登录态判定 `url.includes("accounts.google.com") && url.includes("signin")` | 任务会以 `success=false / message="需要先登录账号" / error="未登录"` 直接失败——**假失败**，账号其实已登录。且该要求**每次导航都会重新出现**，而该 operation 有两次导航（开头一次、核对替换结果时一次） | 新增 `passReauthIfRequired` / `completeReauth`（`fill` 密码 → 提交 → 若出现验证码框则 `fill` TOTP → 提交 → 等回到设置页）；凭据经 `execute(..., credentials)` 由 automation 层从账号行传入，门面 `replaceRecoveryPhone` 同步加参数 |
+| 点完「下一步 / 获取验证码」后从不点最终的保存 | 真机端到端运行：流程全部走到（点编辑 → 清空 → 输入新号 → 下一步），但**账号上的号码没变**、核对仍读到旧号；补上保存后一次运行即替换成功，独立复查确认页面显示新号 | 在核对之前补一次保存点击（`点击 '保存' 或 'Save' 或 '完成' 或 'Done' 或 '确认' 或 'Confirm' 按钮…`）。旁证：无调用方的 Playwright 版里有 `PHONE_SAVE_SELECTORS`（「最终保存」），Stagehand 版从未移植 |
+
+- 凭据处理与 `login.ts` 一致：**只经 `fill` 写入，不进 AI 指令**（AI 指令里出现密码即为泄漏点），回归用例对此有断言
+- 回归用例 `desktop/test/engine-replace-phone.test.mjs`（5 条）：缺陷 1/2 在修复前把 operation 换回 HEAD 版本时为 3 红 1 绿；缺陷 3 在移掉保存步骤时单独变红；修复后 **5/5 绿**
+- 同类风险（本次未验证、未改动）：`RECOVERY_EMAIL` 是否同样失效**未判定**（只读核对时它跳到了「请先验证您的身份」而不是 404）；替换辅助邮箱 / 修改 2SV 手机的 operation 有同样的登录态判定，且「最终保存 / 提交」这一步是否完整也**未验证**
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -409,7 +425,7 @@ pnpm verify:selectors
    - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号**已完成真机端到端验证——三处缺陷修复后一次运行即替换成功（账号恢复手机号已换成用户给的新号，独立只读复查核对一致），详见 `.trellis/tasks/09-24-replace-phone-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 
