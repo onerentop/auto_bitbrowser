@@ -1,0 +1,211 @@
+/**
+ * IPC 通道表 —— 三端共用的单一事实来源
+ *
+ * 对标 PI-Desktop 的 `IPC = { invoke, event }` 结构：
+ *   - 命名 `abb/领域/动作`；事件额外带 `/event/` 段
+ *   - 预加载层与主进程都用 IPC_WHITELIST 校验，任何未登记的通道一律拒绝
+ *   - InvokeMap / EventMap 把「通道 → 参数/返回类型」绑定起来，
+ *     渲染层 `invoke(IPC.invoke.xxx)` 可自动推出返回类型
+ *
+ * 同时定义主进程 ⇄ 后端进程（utilityProcess）之间的消息协议 HostMessage。
+ *
+ * 本文件是纯 TS，不依赖 electron。
+ */
+import type { Envelope } from "./envelope.ts";
+
+// ==================== 通道表 ====================
+
+export const IPC = {
+  invoke: {
+    /** 应用与运行时版本（主进程本地） */
+    appGetVersion: "abb/app/getVersion",
+    /** 后端进程当前状态（主进程本地） */
+    hostGetStatus: "abb/host/getStatus",
+    /** 手动重启后端进程（主进程本地） */
+    hostRestart: "abb/host/restart",
+    /** 后端进程往返探活（转给后端进程） */
+    hostPing: "abb/host/ping",
+    /** ixBrowser 本地服务可达性（转给后端进程） */
+    ixbrowserPing: "abb/ixbrowser/ping",
+  },
+  event: {
+    /** 后端进程状态变化推送 */
+    hostStatus: "abb/host/event/status",
+  },
+} as const;
+
+export type InvokeChannel = (typeof IPC.invoke)[keyof typeof IPC.invoke];
+export type EventChannel = (typeof IPC.event)[keyof typeof IPC.event];
+export type Channel = InvokeChannel | EventChannel;
+
+/** 白名单：预加载层与主进程共同使用 */
+export const IPC_WHITELIST: ReadonlySet<string> = new Set<string>([
+  ...Object.values(IPC.invoke),
+  ...Object.values(IPC.event),
+]);
+
+export function isAllowedChannel(channel: unknown): channel is Channel {
+  return typeof channel === "string" && IPC_WHITELIST.has(channel);
+}
+
+export function isEventChannel(channel: unknown): channel is EventChannel {
+  return (
+    typeof channel === "string" &&
+    (Object.values(IPC.event) as readonly string[]).includes(channel)
+  );
+}
+
+export function isInvokeChannel(channel: unknown): channel is InvokeChannel {
+  return (
+    typeof channel === "string" &&
+    (Object.values(IPC.invoke) as readonly string[]).includes(channel)
+  );
+}
+
+/**
+ * 需要转给后端进程处理的通道（对标 PI 的 backendRouter）。
+ * 不在此集合中的 invoke 通道由主进程本地执行。
+ */
+export const HOST_ROUTED_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
+  IPC.invoke.hostPing,
+  IPC.invoke.ixbrowserPing,
+]);
+
+// ==================== 数据类型 ====================
+
+export interface AppVersionInfo {
+  appName: string;
+  appVersion: string;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  arch: string;
+}
+
+/** 后端进程状态机：stopped → starting → ready → (crashed | stopped) */
+export type HostState = "stopped" | "starting" | "ready" | "crashed";
+
+export interface HostStatus {
+  state: HostState;
+  /** 后端进程 pid（未运行时为 null） */
+  pid: number | null;
+  /** 最近一次状态变化的时间戳（毫秒） */
+  since: number;
+  /**
+   * 单调递增的状态序号。渲染层用它判断新旧，而不是 since：
+   * since 是墙钟时间，系统时钟被回拨（手动修改 / NTP 校正）后会让新状态看起来比旧状态更早。
+   */
+  seq: number;
+  /** 进入 crashed 状态时的退出码或错误原因 */
+  detail: string | null;
+}
+
+export interface HostPingResult {
+  /** 后端进程自报的 pid */
+  pid: number;
+  /** 后端进程里的 Node 版本（证明跑在 Electron 自带的 Node 上） */
+  node: string;
+  /** 后端进程已运行时长（秒） */
+  uptimeSec: number;
+  /** 后端处理本次请求时的时间戳（毫秒） */
+  at: number;
+}
+
+export interface IxBrowserPingResult {
+  reachable: boolean;
+  /** 服务地址（便于界面提示用户检查） */
+  endpoint: string;
+  /** 本次请求取回的窗口条数（limit=1，所以只是 0 或 1） */
+  sampleCount: number | null;
+  /** 不可达时的原因 */
+  error: string | null;
+  elapsedMs: number;
+}
+
+// ==================== 通道 → 类型 ====================
+
+/** invoke 通道的参数元组与返回类型 */
+export interface InvokeMap {
+  "abb/app/getVersion": { args: []; result: AppVersionInfo };
+  "abb/host/getStatus": { args: []; result: HostStatus };
+  "abb/host/restart": { args: []; result: HostStatus };
+  "abb/host/ping": { args: []; result: HostPingResult };
+  "abb/ixbrowser/ping": { args: []; result: IxBrowserPingResult };
+}
+
+/** event 通道的载荷类型 */
+export interface EventMap {
+  "abb/host/event/status": HostStatus;
+}
+
+export type InvokeArgs<C extends InvokeChannel> = InvokeMap[C]["args"];
+export type InvokeResult<C extends InvokeChannel> = InvokeMap[C]["result"];
+export type EventPayload<C extends EventChannel> = EventMap[C];
+
+/** 预加载层暴露给渲染层的 API 形状（window.abb） */
+export interface AbbBridge {
+  invoke<C extends InvokeChannel>(channel: C, ...args: InvokeArgs<C>): Promise<Envelope<InvokeResult<C>>>;
+  on<C extends EventChannel>(channel: C, listener: (payload: EventPayload<C>) => void): () => void;
+  channels: typeof IPC;
+  platform: string;
+}
+
+// ==================== 主进程 ⇄ 后端进程 消息协议 ====================
+
+/** 主进程 → 后端进程：请求 */
+export interface HostRequestMessage {
+  type: "request";
+  id: number;
+  channel: string;
+  args: unknown[];
+}
+
+/** 后端进程 → 主进程：响应（按 id 与请求配对） */
+export interface HostResponseMessage {
+  type: "response";
+  id: number;
+  envelope: Envelope<unknown>;
+}
+
+/** 后端进程 → 主进程：启动完成 */
+export interface HostReadyMessage {
+  type: "ready";
+  pid: number;
+}
+
+/** 后端进程 → 主进程：主动推送的事件（为以后的任务进度预留） */
+export interface HostEventMessage {
+  type: "event";
+  channel: string;
+  payload: unknown;
+}
+
+export type HostInboundMessage = HostRequestMessage;
+export type HostOutboundMessage = HostResponseMessage | HostReadyMessage | HostEventMessage;
+
+export function isHostOutboundMessage(value: unknown): value is HostOutboundMessage {
+  if (value === null || typeof value !== "object") return false;
+  const o = value as Record<string, unknown>;
+  switch (o["type"]) {
+    case "response":
+      return typeof o["id"] === "number" && typeof o["envelope"] === "object" && o["envelope"] !== null;
+    case "ready":
+      return typeof o["pid"] === "number";
+    case "event":
+      return typeof o["channel"] === "string";
+    default:
+      return false;
+  }
+}
+
+export function isHostRequestMessage(value: unknown): value is HostRequestMessage {
+  if (value === null || typeof value !== "object") return false;
+  const o = value as Record<string, unknown>;
+  return (
+    o["type"] === "request" &&
+    typeof o["id"] === "number" &&
+    typeof o["channel"] === "string" &&
+    Array.isArray(o["args"])
+  );
+}

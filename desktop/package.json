@@ -13,11 +13,21 @@
     "probe:ix": "node --experimental-strip-types src/ixbrowser/probe.ts",
     "probe:db": "node --experimental-strip-types --experimental-sqlite src/db/probe.ts",
     "verify:prompts": "node scripts/verify-prompts.mjs",
-    "verify:selectors": "node scripts/verify-selectors.mjs"
+    "verify:selectors": "node scripts/verify-selectors.mjs",
+    "dev": "electron-vite dev",
+    "build:app": "electron-vite build",
+    "preview:app": "electron-vite preview",
+    "typecheck:app": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "typescript": "~5.9.0"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.4.5",
+    "electron-vite": "^5.0.0",
+    "typescript": "~5.9.0",
+    "vite": "^7.3.6"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.60",
@@ -25,7 +35,11 @@
     "@ai-sdk/openai": "^4.0.72",
     "@browserbasehq/stagehand": "3.7.3",
     "ai": "^7.0.111",
+    "antd": "^5.29.3",
     "playwright-core": "^1.63.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "zod": "^4.6.5"
-  }
+  },
+  "main": "./out/main/index.js"
 }

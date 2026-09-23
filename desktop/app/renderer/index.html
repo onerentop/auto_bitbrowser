@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      CSP 照 PI-Desktop 的写法：只允许加载本应用自身的资源。
+      script-src 不含 'unsafe-inline'：生产构建只输出外链 <script src>，不需要内联脚本；
+        开发模式下 React Fast Refresh 需要内联前导脚本，由 electron.vite.config.ts 里
+        仅在 dev server 生效的插件临时放开，生产包里不会出现。
+      style-src 需要 'unsafe-inline'：Ant Design 5 用 CSS-in-JS 注入内联样式。
+      connect-src 'self'：渲染层不直接发任何网络请求，一律经 IPC 走后端进程。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none';"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ixBrowser 窗口管理工具</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

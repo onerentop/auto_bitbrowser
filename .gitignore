@@ -92,3 +92,6 @@ nul
 
 # PI-Desktop 目标契约产物（本地会话用，不入库）
 .pi/
+
+# electron-vite 构建产物
+desktop/out/

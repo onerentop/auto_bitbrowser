@@ -29,7 +29,8 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 465/465 通过
+pnpm test               # 应 532/532 通过
+pnpm typecheck:app      # Electron 骨架，应无输出
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
 ```
@@ -77,7 +78,8 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/src/browseruse/` | BrowserUse 引擎层（已完成） |
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
-| `desktop/test/` | 465 个单测 |
+| `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
+| `desktop/test/` | 532 个单测（含 `app-*.test.mjs` 67 个） |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -91,13 +93,14 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
 | `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
 | `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
-| 前端界面 | ❌ 未开始 | — | — |
+| 前端界面 | 🟡 Electron 骨架完成，业务页面未开始 | 20 | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 465/465 通过
+pnpm test               # 532/532 通过
+pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
 pnpm verify:selectors   # 选择器缺失 0（197/197）
@@ -188,6 +191,30 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `retry-helper.ts` | 对标 `core/retry_helper.py`；`execute_sync` 未移植（Node 无同步阻塞） |
 | `semaphore.ts` | `asyncio.Semaphore` / `gather(return_exceptions=True)` 的 Node 等价物 |
 | `data-parser.ts` | 账号行解析（早先已完成） |
+
+### 6. Electron 骨架（本轮新增，`desktop/app/`）
+
+对标 PI-Desktop：薄壳主进程 + `utilityProcess` 后端进程 + 单表 IPC。不含业务页面。
+
+| 目录 | 说明 |
+|---|---|
+| `app/shared/` | `ipc.ts` 通道表（`abb/领域/动作`）+ 白名单 + `InvokeMap` 类型；`envelope.ts` 信封与 `wrap()`。纯 TS |
+| `app/main/` | 生命周期、单实例、窗口安全选项、导航守卫、IPC 注册器、后端路由、`host-client`（请求 id 配对 / 30s 超时 / 崩溃检测 / 串行生命周期） |
+| `app/host/` | 后端进程入口（`parentPort` 收发）+ 纯函数分发表；`handlers/health.ts` 实现 `host/ping`、`ixbrowser/ping` |
+| `app/preload/` | `contextBridge` 暴露 `window.abb`，invoke/event 通道分别校验白名单；打包为 `.cjs`（开 sandbox 必需） |
+| `app/renderer/` | React 19 + antd 5 状态页：版本、后端状态（订阅事件）+ Ping / 重启、ixBrowser 可达性 |
+
+运行：
+```powershell
+cd desktop
+pnpm dev            # 开发（HMR）
+pnpm build:app      # 产出 out/main/{index,host}.js、out/preload/index.cjs、out/renderer/index.html
+pnpm preview:app    # 以生产产物启动
+pnpm typecheck:app  # tsconfig.node.json + tsconfig.web.json
+```
+
+实机验证（Electron 44.4.5 / Chrome 152 / Node 24.21）：窗口「ixBrowser 窗口管理工具」打开，后端 `starting → ready`，
+ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → starting → ready` 且 PID 更换；关窗后无残留 electron 进程。
 
 ## 三、关键决策与坑（重要，勿改）
 
@@ -287,6 +314,25 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 - `browseruse/agent/service.ts` 的 `run()` 入口会复位 `_stopRequested`，因此 `run()` 之前调 `stop()` 无效
 - `dom/service.ts` 的 `extractDom` 捕获异常后返回空树，但**不清空**上一次快照
 
+### Electron 骨架的架构约定与审查修正
+
+- **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
+- **业务后端跑在 `utilityProcess`**（`out/main/host.js`），崩溃只影响后端，窗口不受影响；本轮无自动重启，只有手动「重启后端」
+- 信封 `{ok,data} | {ok:false,error:{code,message}}`；错误码 `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`
+- `ixbrowser/ping` 只走 HTTP，刻意没碰 `node:sqlite`（其在 Electron 中的兼容性留到业务页面阶段验证）
+
+代码审查后修掉的问题：
+
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `main/host/host-client.ts` | 并发 stop/restart 竞态；停止中迟到的 ready 会把状态改回 ready；退出时可能被重新拉起 | 生命周期串行队列 `enqueue`、每代独立 `GenerationState`、`shutdown()` 后拒绝 start、超时 `forceKill`；`HostStatus` 新增单调 `seq` |
+| `main/window.ts` 导航守卫 | `startsWith("file:")` 放行任意本地 html，该页面会拿到 `window.abb` | 新增 `navigation.ts` `isAppUrl`：dev 同源 / 生产精确匹配渲染层入口；禁 webview |
+| `main/ipc/registrar.ts` | IPC 不校验来源 frame | `isTrustedSender` + `senderFrameUrl`，拒绝返回 `FORBIDDEN` |
+| `main/host/spawn-utility.ts` | 子进程 `error` 事件无监听会让主进程崩溃 | 加 `child.on("error")` |
+| `host/index.ts` | 返回值不可结构化克隆时 postMessage 抛错，请求永远挂起 | 捕获后回 `INTERNAL` 信封 |
+| 渲染层 CSP | 含 `script-src 'unsafe-inline'` | 移除，补 `object-src/base-uri/form-action 'none'`；仅 dev 由 `devRelaxCsp()` 放宽 |
+| `renderer/stores/host-status.ts` | 按 `since` 墙钟去重，时钟回拨会丢状态 | 改按 `seq` |
+
 ## 四、自动化校验工具（务必使用）
 
 改动提示词或选择器后必须跑：
@@ -310,9 +356,10 @@ pnpm verify:selectors
    - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
    - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
 2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
-3. **前端界面** —— 剩下唯一未开始的部分。Electron + React 19 + TypeScript，UI 库倾向 Ant Design 5
-   - 后端接口形状已定型（`BatchAccountProcessor` 六个 batch_* 入口、各引擎门面、仓储层），
-     可以开始设计 IPC/渲染进程的调用边界
+3. **前端界面** —— Electron 骨架 ✅ 已完成（见「二、6」）。下一步是业务页面：
+   - 先验证 `node:sqlite` 能在 Electron `utilityProcess`（Node 24.21）里加载，再接账号/仓储相关通道
+   - 新通道按 `abb/领域/动作` 登记进 `app/shared/ipc.ts`，后端实现放 `app/host/handlers/`，同步加入 `HOST_ROUTED_CHANNELS`
+   - 批量任务进度走已预留的 `HostEventMessage`（后端 → 主进程 → `webContents.send`）
    - **真机回归仍未做**：全部是离线等价移植，开始联调前建议先跑一轮真实 ixBrowser 窗口的冒烟测试
 
 **真机回归尚未做**：本轮与前几轮都是离线等价移植，`ENGINE_SLICE_REPORT.md` 里
