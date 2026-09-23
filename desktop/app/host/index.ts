@@ -14,7 +14,8 @@
  * 主进程只会把状态标成 crashed，窗口照常可用，并可手动重启。
  */
 import { createDispatcher } from "./dispatch.ts";
-import { createHealthHandlers } from "./handlers/health.ts";
+import { createHostHandlers } from "./handlers/index.ts";
+import { DATA_ROOT_ENV, createHostContext } from "./context.ts";
 import { ERROR_CODES, errEnvelope } from "../shared/envelope.ts";
 import { isHostRequestMessage, type HostOutboundMessage } from "../shared/ipc.ts";
 
@@ -35,9 +36,27 @@ if (!parentPort) {
 const port = parentPort;
 const send = (message: HostOutboundMessage): void => port.postMessage(message);
 
-const dispatch = createDispatcher({
-  ...createHealthHandlers(),
+const dataRoot = process.env[DATA_ROOT_ENV];
+if (!dataRoot) {
+  // 数据根目录必须由主进程给出：猜错路径会读写到错误的 accounts.db
+  process.stderr.write(`[abb-host] 缺少环境变量 ${DATA_ROOT_ENV}（应由主进程传入）\n`);
+  process.exit(1);
+}
+
+const ctx = createHostContext({
+  dataRoot,
+  // 任务日志 / 进度 / 结束事件推给主进程，由主进程按白名单转发给渲染层
+  emit: (channel, payload) => {
+    try {
+      send({ type: "event", channel, payload });
+    } catch (error) {
+      process.stderr.write(`[abb-host] 事件无法发送（${channel}）: ${String(error)}\n`);
+    }
+  },
+  log: (m) => process.stdout.write(`${m}\n`),
 });
+
+const dispatch = createDispatcher(createHostHandlers(ctx));
 
 port.on("message", (event) => {
   const message = event.data;

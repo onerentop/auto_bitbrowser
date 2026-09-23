@@ -13,7 +13,8 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { IPC, type AppVersionInfo, type HostStatus } from "../shared/ipc.ts";
+import { IPC, isEventChannel, type AppVersionInfo, type HostStatus } from "../shared/ipc.ts";
+import { resolveDataRoot } from "./data-root.ts";
 import { HostClient } from "./host/host-client.ts";
 import { createBackendRouter } from "./host/router.ts";
 import { createUtilitySpawner } from "./host/spawn-utility.ts";
@@ -47,8 +48,17 @@ function bootstrap(): void {
   };
   const appOrigin = resolveAppOrigin(windowOptions);
 
+  // 数据根目录只在这里决定一次，经环境变量交给后端进程
+  const dataRoot = resolveDataRoot({
+    env: process.env,
+    isPackaged: app.isPackaged,
+    exePath: process.execPath,
+    appPath: app.getAppPath(),
+  });
+  log(`数据目录: ${dataRoot}`);
+
   const host = new HostClient({
-    spawn: createUtilitySpawner({ entry: HOST_ENTRY }),
+    spawn: createUtilitySpawner({ entry: HOST_ENTRY, env: { ABB_DATA_ROOT: dataRoot } }),
     log: (m) => log(`host: ${m}`),
     // stop 超时后补一刀，避免不响应的后端进程残留
     forceKill: (pid) => process.kill(pid, "SIGKILL"),
@@ -59,6 +69,16 @@ function bootstrap(): void {
     log(`后端状态 → ${status.state}${status.detail ? `（${status.detail}）` : ""}`);
     const wc = mainWindow?.webContents;
     if (wc && !wc.isDestroyed()) wc.send(IPC.event.hostStatus, status);
+  });
+
+  /** 后端主动推送的事件（任务日志 / 进度 / 结束）：只转发白名单里的事件通道 */
+  host.onEvent((channel, payload) => {
+    if (!isEventChannel(channel)) {
+      log(`丢弃后端推送的未登记事件: ${channel}`);
+      return;
+    }
+    const wc = mainWindow?.webContents;
+    if (wc && !wc.isDestroyed()) wc.send(channel, payload);
   });
 
   const registrar = createIpcRegistrar(ipcMain, createBackendRouter(host), {
@@ -75,6 +95,7 @@ function bootstrap(): void {
       node: process.versions.node,
       platform: process.platform,
       arch: process.arch,
+      dataRoot,
     }),
     host: {
       getStatus: () => host.getStatus(),

@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 532/532 通过
+pnpm test               # 应 546/546 通过
 pnpm typecheck:app      # Electron 骨架，应无输出
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
@@ -79,7 +79,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
 | `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
-| `desktop/test/` | 532 个单测（含 `app-*.test.mjs` 67 个） |
+| `desktop/test/` | 546 个单测（含 `app-*.test.mjs`） |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -93,13 +93,13 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
 | `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
 | `automation`（业务流程） | 🟡 12/15 + batch 三块 | 17 | ~4300 |
-| 前端界面 | 🟡 Electron 骨架完成，业务页面未开始 | 20 | — |
+| 前端界面 | 🟡 骨架 + 业务基建完成，页面进行中 | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 532/532 通过
+pnpm test               # 546/546 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
@@ -215,6 +215,22 @@ pnpm typecheck:app  # tsconfig.node.json + tsconfig.web.json
 
 实机验证（Electron 44.4.5 / Chrome 152 / Node 24.21）：窗口「ixBrowser 窗口管理工具」打开，后端 `starting → ready`，
 ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → starting → ready` 且 PID 更换；关窗后无残留 electron 进程。
+
+### 7. 业务页面（进行中，计划见 `.pi/plan/第一批业务页面-*.md`）
+
+**阶段 0 后端基建 ✅**
+
+| 文件 | 说明 |
+|---|---|
+| `src/db/schema.ts` | `init_db` 逐字移植（5 表 + 22 列迁移）；与 Python 在临时库上对拍 `sqlite_master` **8/8 一致**。差异：只吞「列已存在」错误，其它错误照常抛 |
+| `app/main/data-root.ts` | 数据根目录：`ABB_DATA_ROOT` > 打包时 exe 目录 > 开发时仓库根；经 env 传给后端进程 |
+| `app/host/context.ts` | 后端单例容器，DB / 配置**惰性**打开（首次访问执行 `initDb`） |
+| `app/host/task-runner.ts` | 全局单任务互斥（`TASK_BUSY`）、协作式停止钩子、日志→进度解析照搬 orchestrator.py:417-424 |
+| `app/shared/ipc.ts` | 路由改为「`LOCAL_CHANNELS` 之外全部转后端」；新增 `task/getCurrent`、`task/stop` 与三个任务事件 |
+| 渲染层 | 左导航外壳（首页 / 账号管理 / 设置 / 运行状态）、底部 `TaskDock`（进度 + 停止 + 日志抽屉 + 结果弹窗）、深浅色主题 store |
+
+> ⚠️ **实机验证一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
+> 「运行状态」页会显示当前数据目录，启动后先确认。
 
 ## 三、关键决策与坑（重要，勿改）
 

@@ -16,6 +16,7 @@ import {
 } from "../app/shared/envelope.ts";
 import {
   HOST_ROUTED_CHANNELS,
+  LOCAL_CHANNELS,
   IPC,
   IPC_WHITELIST,
   isAllowedChannel,
@@ -26,6 +27,8 @@ import {
 } from "../app/shared/ipc.ts";
 import { createDispatcher, listChannels } from "../app/host/dispatch.ts";
 import { createHealthHandlers } from "../app/host/handlers/health.ts";
+import { createHostHandlers } from "../app/host/handlers/index.ts";
+import { createHostContext } from "../app/host/context.ts";
 import { ROUTE_LOCAL, createBackendRouter } from "../app/main/host/router.ts";
 import { createIpcRegistrar, senderFrameUrl } from "../app/main/ipc/registrar.ts";
 import { registerAppHandlers } from "../app/main/ipc/app-handlers.ts";
@@ -181,8 +184,21 @@ test("分发：handler 同步抛错与异步拒绝都被包成信封", async () 
 });
 
 test("分发表与路由表一致：后端实现的通道 = 主进程转发的通道", () => {
-  const implemented = new Set(listChannels(createHealthHandlers({ ixClient: { getProfileList: async () => [] } })));
+  const ctx = createHostContext({
+    dataRoot: "C:/nonexistent-abb-test",
+    emit: () => {},
+    log: () => {},
+    openDatabase: () => {
+      throw new Error("本测试不应打开数据库");
+    },
+  });
+  const implemented = new Set(listChannels(createHostHandlers(ctx)));
   assert.deepEqual(implemented, new Set(HOST_ROUTED_CHANNELS));
+});
+
+test("路由表：本地通道与后端通道互斥，且合起来覆盖全部 invoke 通道", () => {
+  for (const c of LOCAL_CHANNELS) assert.equal(HOST_ROUTED_CHANNELS.has(c), false);
+  assert.equal(LOCAL_CHANNELS.size + HOST_ROUTED_CHANNELS.size, invokeNames.length);
 });
 
 // ==================== 健康检查 handler ====================

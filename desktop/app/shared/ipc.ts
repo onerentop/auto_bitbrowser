@@ -27,10 +27,20 @@ export const IPC = {
     hostPing: "abb/host/ping",
     /** ixBrowser 本地服务可达性（转给后端进程） */
     ixbrowserPing: "abb/ixbrowser/ping",
+    /** 当前运行中的任务（无则 null） */
+    taskGetCurrent: "abb/task/getCurrent",
+    /** 请求停止当前任务（协作式） */
+    taskStop: "abb/task/stop",
   },
   event: {
     /** 后端进程状态变化推送 */
     hostStatus: "abb/host/event/status",
+    /** 任务日志（一行一条） */
+    taskLog: "abb/task/event/log",
+    /** 任务进度 current/total */
+    taskProgress: "abb/task/event/progress",
+    /** 任务结束（成功 / 失败 / 已停止） */
+    taskFinished: "abb/task/event/finished",
   },
 } as const;
 
@@ -63,13 +73,19 @@ export function isInvokeChannel(channel: unknown): channel is InvokeChannel {
 }
 
 /**
- * 需要转给后端进程处理的通道（对标 PI 的 backendRouter）。
- * 不在此集合中的 invoke 通道由主进程本地执行。
+ * 由主进程本地执行的通道。其余 invoke 通道一律转给后端进程（对标 PI 的 backendRouter）。
+ * 用「本地白名单」而不是「后端白名单」：业务通道会越来越多，而本地通道只有这几个。
  */
-export const HOST_ROUTED_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
-  IPC.invoke.hostPing,
-  IPC.invoke.ixbrowserPing,
+export const LOCAL_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
+  IPC.invoke.appGetVersion,
+  IPC.invoke.hostGetStatus,
+  IPC.invoke.hostRestart,
 ]);
+
+/** 需要转给后端进程处理的通道 */
+export const HOST_ROUTED_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>(
+  (Object.values(IPC.invoke) as InvokeChannel[]).filter((c) => !LOCAL_CHANNELS.has(c)),
+);
 
 // ==================== 数据类型 ====================
 
@@ -81,6 +97,8 @@ export interface AppVersionInfo {
   node: string;
   platform: string;
   arch: string;
+  /** 数据根目录（accounts.db / config.json 所在处） */
+  dataRoot: string;
 }
 
 /** 后端进程状态机：stopped → starting → ready → (crashed | stopped) */
@@ -123,6 +141,49 @@ export interface IxBrowserPingResult {
   elapsedMs: number;
 }
 
+// ==================== 任务 ====================
+
+/** 正在运行的任务 */
+export interface TaskInfo {
+  id: number;
+  /** 任务类型，如 login / oauth / batch_delete（与 Python task_type 同名） */
+  type: string;
+  /** 展示用名称 */
+  label: string;
+  startedAt: number;
+  stopRequested: boolean;
+  current: number;
+  total: number;
+}
+
+export interface TaskLogEvent {
+  taskId: number;
+  type: string;
+  message: string;
+  at: number;
+}
+
+export interface TaskProgressEvent {
+  taskId: number;
+  type: string;
+  current: number;
+  total: number;
+}
+
+export type TaskOutcome = "succeeded" | "failed" | "stopped";
+
+export interface TaskFinishedEvent {
+  taskId: number;
+  type: string;
+  label: string;
+  outcome: TaskOutcome;
+  /** 任务返回值（形状照搬 Python 各任务的 finished dict），失败时为 null */
+  result: unknown;
+  error: string | null;
+  startedAt: number;
+  finishedAt: number;
+}
+
 // ==================== 通道 → 类型 ====================
 
 /** invoke 通道的参数元组与返回类型 */
@@ -132,11 +193,16 @@ export interface InvokeMap {
   "abb/host/restart": { args: []; result: HostStatus };
   "abb/host/ping": { args: []; result: HostPingResult };
   "abb/ixbrowser/ping": { args: []; result: IxBrowserPingResult };
+  "abb/task/getCurrent": { args: []; result: TaskInfo | null };
+  "abb/task/stop": { args: []; result: boolean };
 }
 
 /** event 通道的载荷类型 */
 export interface EventMap {
   "abb/host/event/status": HostStatus;
+  "abb/task/event/log": TaskLogEvent;
+  "abb/task/event/progress": TaskProgressEvent;
+  "abb/task/event/finished": TaskFinishedEvent;
 }
 
 export type InvokeArgs<C extends InvokeChannel> = InvokeMap[C]["args"];

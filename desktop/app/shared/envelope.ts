@@ -22,6 +22,10 @@ export const ERROR_CODES = {
   INTERNAL: "INTERNAL",
   /** 请求来源不可信（非本应用渲染层页面发起的 IPC） */
   FORBIDDEN: "FORBIDDEN",
+  /** 已有任务在运行（全局单任务互斥，对标 check_task_conflicts） */
+  TASK_BUSY: "TASK_BUSY",
+  /** 参数不合法（校验失败） */
+  INVALID_ARGUMENT: "INVALID_ARGUMENT",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES] | (string & {});

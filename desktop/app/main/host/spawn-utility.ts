@@ -10,6 +10,8 @@ import type { HostProcessHandle } from "./host-client.ts";
 export interface SpawnUtilityOptions {
   /** 打包后的后端入口（out/main/host.js）的绝对路径 */
   entry: string;
+  /** 额外的环境变量（与主进程环境合并后传给后端进程） */
+  env?: Record<string, string>;
   log?: (line: string) => void;
 }
 
@@ -20,6 +22,7 @@ export function createUtilitySpawner(options: SpawnUtilityOptions): () => HostPr
     const child = utilityProcess.fork(options.entry, [], {
       serviceName: "abb-host",
       stdio: "pipe",
+      env: { ...process.env, ...options.env },
     });
 
     child.stdout?.on("data", (chunk: Buffer) => log(`[host] ${chunk.toString().trimEnd()}`));
