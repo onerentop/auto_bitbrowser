@@ -13,6 +13,7 @@
 import { Stagehand } from "@browserbasehq/stagehand";
 import { IxBrowserClient } from "../ixbrowser/client.ts";
 import { Timeouts } from "./constants.ts";
+import { createCompatPage, type CompatPage } from "./playwright-compat.ts";
 
 /** provider → 该 provider 的 AI SDK 环境变量名 */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -377,6 +378,16 @@ export class StagehandGoogleEngine {
       };
     }
   }
+  /**
+   * 取 Playwright 兼容页对象。
+   * 供 auto_replace_email / auto_replace_phone 这类确定性选择器脚本使用——
+   * 它们不用 AI，直接按选择器操作，复用同一条 CDP 连接。
+   */
+  asPlaywrightPage(): CompatPage {
+    const { page } = this.ensureReady();
+    return createCompatPage(page as never);
+  }
+
   // ==================== operation 门面 ====================
   // 对标 Python engine.py 上同名方法。用动态 import 避免
   // engine ↔ operations 的循环依赖（operations 需要 engine 类型）。
