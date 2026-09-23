@@ -1,6 +1,6 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-23 ｜ 分支 `dev_ai` ｜ 全部已提交推送
+> 最后更新：2026-09-23（BrowserUse 引擎移植完成） ｜ 分支 `dev_ai` ｜ 全部已提交推送
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -14,8 +14,8 @@
 本项目正在把 Python 的 ixBrowser 自动化工具重写成 Node/TypeScript，
 代码在 desktop/ 目录。Python 侧保持原样作为对拍基准与回退方案。
 
-当前进度：services 层与 engine 层已完成，automation 层 12/15。
-下一步按 PROGRESS.md 第五章的依赖顺序继续（首先 BrowserUse 引擎）。
+当前进度：services / engine(Stagehand) / browseruse 三层完成，automation 层 12/15。
+下一步按 PROGRESS.md 第五章的依赖顺序继续（auto-join-family → batch_account_processor）。
 
 注意事项：
 - Stagehand 必须锁 3.7.3，不可升级（原因见 PROGRESS.md 第三章）
@@ -29,12 +29,17 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install            # 若 node_modules 丢失
 pnpm typecheck          # 应无输出
-pnpm test               # 应 111/111 通过
-pnpm verify:prompts     # 应 100%（依赖 scratch 里的 ops_spec.json，见下方说明）
+pnpm test               # 应 220/220 通过
+pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（223/223）
 pnpm verify:selectors   # 应 0 缺失
 ```
 
 四项全绿说明代码与文档一致，可以放心继续。
+
+> ⚠️ 已知环境坑：本机某些 shell 会话里，`pnpm typecheck` / `pnpm test` 会拉起一个
+> cmd.exe 横幅并吞掉脚本输出、掩盖非零退出码。拿不准时直接跑底层命令：
+> `npx tsc -p tsconfig.json --noEmit` 与
+> `node --test --experimental-strip-types --experimental-sqlite test/*.test.mjs`。
 
 ### 第三步：确认 Python 侧基线
 
@@ -46,15 +51,20 @@ cd D:\workspace\projects\auto_bitbrowser2
 
 ### 若 scratch 已被清理
 
-`pnpm verify:prompts` 依赖 `$env:PI_SCRATCH_DIR/ops_spec.json`。
-该文件随 scratch 清理会消失，用仓库内的脚本重建：
+`pnpm verify:prompts` 需要一个 `ops_spec.json` 路径参数。该文件随 scratch 清理会消失，
+用仓库内的脚本重建：
 
 ```powershell
 # 在项目根目录执行
-.\.venv\Scripts\python.exe desktop\scripts\extract-ops-spec.py <输出路径>
+.\.venv\Scripts\python.exe desktop\scripts\extract-ops-spec.py "$env:PI_SCRATCH_DIR\ops_spec.json"
 cd desktop
-node scripts/verify-prompts.mjs <输出路径>
+node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```
+
+产出的 JSON 含四段：
+`stagehand`（92 条提示词）、`browseruse`（131 条）、
+`browseruse_constants`（3 个 URL + 5 组关键词，共 33 条）、
+`browseruse_prompt_files`（两份系统提示词 md 的 sha256）。
 
 ### 工作目录速查
 
@@ -62,11 +72,12 @@ node scripts/verify-prompts.mjs <输出路径>
 |---|---|
 | `desktop/PROGRESS.md` | 本文件——进度、决策、坑 |
 | `desktop/ENGINE_SLICE_REPORT.md` | 引擎切片验证报告（Stagehand 版本约束的原始依据） |
-| `desktop/src/services/` | services 层（已完成） |
-| `desktop/src/engine/` | 引擎层（已完成） |
+| `desktop/src/services/` `src/db/` | services 层（已完成） |
+| `desktop/src/engine/` | Stagehand 引擎层（已完成） |
+| `desktop/src/browseruse/` | BrowserUse 引擎层（已完成） |
 | `desktop/src/automation/` | 业务流程层（进行中） |
 | `desktop/scripts/` | 三个校验/提取脚本 |
-| `desktop/test/` | 111 个单测 |
+| `desktop/test/` | 220 个单测 |
 | Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
 
 ---
@@ -77,16 +88,17 @@ node scripts/verify-prompts.mjs <输出路径>
 |---|---|---|---|
 | `services`（数据与服务） | ✅ 完成 | 12 | ~3000 |
 | `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
+| `browseruse`（BrowserUse 引擎） | ✅ 完成 | 26 | 5713 |
 | `automation`（业务流程） | 🟡 12/15 | 14 | ~2900 |
-| `browseruse_engine` | ❌ 未开始 | — | (4303 行待移植) |
 | 前端界面 | ❌ 未开始 | — | — |
 
 **质量门（全绿）**：
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 111/111 通过
-pnpm verify:prompts     # 引擎提示词覆盖率 100%（92/92）
+pnpm test               # 220/220 通过
+pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
+                        # 提示词 223/223 = 100%，常量 33/33，md 字节 2/2
 pnpm verify:selectors   # 选择器缺失 0（197/197）
 ```
 
@@ -109,7 +121,7 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 
 **对拍验证**：综合查询 8008 个字段与 Python 逐字段零差异。
 
-### 2. engine 层（全部）
+### 2. engine 层（Stagehand，全部）
 
 | 模块 | 说明 |
 |---|---|
@@ -120,9 +132,33 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `playwright-compat.ts` | 把 V3 Page 适配成 Playwright 接口 |
 | `operations/*.ts` × 12 | 全部 operation |
 
-**提示词一致性**：92/92 与 Python 逐字一致（`verify:prompts` 校验）。
+**提示词一致性**：92/92 与 Python 逐字一致。
 
-### 3. automation 层（12/15）
+### 3. browseruse 层（BrowserUse 引擎，全部｜本轮新增）
+
+对标 `core/browseruse_engine/`（22 文件 / 4303 行）→ `desktop/src/browseruse/`（26 文件 / 5713 行）。
+
+| 模块 | 说明 |
+|---|---|
+| `protocol.ts` | `EngineProtocol` + 6 个结果类型与工厂 |
+| `types.ts` | 动作模型归一化、`parseAgentOutput`、DOM/历史的文本序列化 |
+| `constants.ts` | 3 个 URL、8 个超时/步数、5 组关键词（与 Python 逐条对齐） |
+| `page.ts` | Playwright Page 的结构化子集 `BrowserPageLike` + `LogFn` |
+| `playwright-cdp.ts` | 可注入的 `CdpConnector`，默认惰性加载 `playwright-core` |
+| `llm/base.ts` `llm/adapters.ts` | 消息类型 + OpenAI/Anthropic/Google 三家适配器 |
+| `dom/views.ts` `serializer.ts` `service.ts` | 注入 JS 提取可交互元素、索引→选择器/坐标映射 |
+| `tools/registry.ts` `executor.ts` `actions.ts` | 动作注册表 + 执行器 + 10 个动作 |
+| `agent/service.ts` `message-manager.ts` `prompts.ts` | Agent 循环、消息窗口、提示词加载 |
+| `agent/prompts/*.md` | 两份系统提示词，**与 Python 侧字节一致**（sha256 校验） |
+| `operations/join-family.ts` | `sendInvite` / `acceptInvite` + 4 段 Agent 提示词 |
+| `engine.ts` | 主引擎：CDP 接管、四原语、`run`、`sendFamilyInvite` / `joinFamily` |
+| `index.ts` | 统一出口 + **编译期协议一致性断言** |
+
+**协议一致性**：`index.ts` 的 `assertEngineConformance()` 在编译期证明
+`BrowserUseEngine` 同时满足 `EngineProtocol` 与 `pro-status-detector.ts` 的 `ProDetectEngine`，
+签名一旦漂移 `pnpm typecheck` 立刻失败。
+
+### 4. automation 层（12/15）
 
 | 文件 | 状态 |
 |---|---|
@@ -137,7 +173,7 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `auto-antigravity-oauth.ts` | ✅（含批量） |
 | `pro-status-detector.ts` | ✅（含二次验证 4 分支） |
 | `auto-replace-email.ts` / `auto-replace-phone.ts` | ✅（Playwright 选择器直连） |
-| `auto-join-family.ts` | ❌ 待 BrowserUse |
+| `auto-join-family.ts` | ❌ 待做（BrowserUse 依赖已就绪） |
 | `batch_account_processor.ts` | ❌ 依赖汇聚点，最后做 |
 
 ## 三、关键决策与坑（重要，勿改）
@@ -155,68 +191,108 @@ Extensions.getExtensions     不支持 ('wasn't found')
 Extensions.loadUnpacked      不支持 (Method not available)
 ```
 
+### 本轮新增依赖
+
+| 依赖 | 用途 |
+|---|---|
+| `playwright-core` | BrowserUse 的 CDP 连接（`connectOverCDP`）。**惰性动态 import**，模块顶层不加载 |
+| `ai` + `@ai-sdk/openai` / `@ai-sdk/anthropic` / `@ai-sdk/google` | LLM 适配层的底座。同样惰性加载，未装也不影响 typecheck 与单测 |
+
+**刻意没引入** `openai` / `@anthropic-ai/sdk` / `@google/generative-ai` 三家官方 SDK。
+
 ### 自研 TOTP 而非 otplib
 
-otplib 13.x 的导出结构与 12.x 完全不同（`TOTP` 类与 functional API 并存），且该库有跨版本破坏先例。TOTP 是标准算法，`totp.ts` 40 行即可对齐 `pyotp`，已对拍 24 组零差异。
+otplib 13.x 的导出结构与 12.x 完全不同（`TOTP` 类与 functional API 并存），且该库有跨版本破坏先例。
+TOTP 是标准算法，`totp.ts` 40 行即可对齐 `pyotp`，已对拍 24 组零差异。
 
 **当时的坑**：第一版误用 `Buffer.from(s, "base64")` 解码 base32，对拍才发现。
 
 ### Stagehand API 差异（Python 3.5.0 → Node 3.7.3）
 
 - **没有 `sh.page`** —— act/extract/observe 在 V3 顶层，页面对象走 `sh.context.awaitActivePage()`
-- **`model.clientOptions.apiKey` 不生效** —— 必须设 provider 环境变量（`GOOGLE_GENERATIVE_AI_API_KEY`），等价于 Python 的 `_setup_provider_env_vars()`
+- **`model.clientOptions.apiKey` 不生效** —— 必须设 provider 环境变量（`GOOGLE_GENERATIVE_AI_API_KEY`）
 
 ### 行为修正：getPageContent 用 innerText 而非 HTML
 
-关键词检测（Pro 状态、家庭组角色）依赖可见文本做子串匹配。原先用 `page.content()` 返回 HTML 会导致误命中（`class="upgrade-banner"` 让页面被判为非订阅），且跨标签文本匹配不到。
-
+关键词检测（Pro 状态、家庭组角色）依赖可见文本做子串匹配。原先用 `page.content()` 返回 HTML
+会导致误命中（`class="upgrade-banner"` 让页面被判为非订阅），且跨标签文本匹配不到。
 已改为 `evaluate("document.body.innerText")`，与 Python 的 `page.inner_text("body")` 语义一致。
 
-### 刻意保留的可疑行为
+### BrowserUse 移植的取舍（本轮）
 
-`operations/login.ts` 的 `enterPassword` 中，`act()` 成功后**仍会执行键盘输入**，密码可能被输两次。这是照搬 Python 的（指令里不含密码值，AI 无从输入，该分支实际不会触发）。已加注释，真机验证后可安全移除。
+| 决策 | 说明 |
+|---|---|
+| Page 抽象 | 不 import playwright 类型，声明结构化子集 `BrowserPageLike`（字段名对齐 Playwright JS API），真实 Page 可直接赋值，测试用假 Page |
+| CDP 连接 | 抽成 `CdpConnector` 接口，默认实现惰性 `import("playwright-core")` |
+| LLM 调用 | 抽成 `LlmTransport` 接口，默认实现惰性加载 ai-sdk；三家的**消息格式转换是导出的纯函数**，可离线断言 |
+| `create_llm_from_config` | Python 依赖 `ConfigManager`；Node 侧改为注入 `LlmConfigProvider`，传 null 等价 Python 的 ImportError 分支（回退环境变量） |
+| 同步 `invoke()` | 不移植（Python 是 `asyncio.run`，Node 无等价物），只保留 `ainvoke` |
+| `ProDetectEngine` 接口 | `data?: T` 放宽为 `data?: T | null`，让照搬 Python `Optional` 的 BrowserUse 结果类型能被直接接纳；Stagehand 侧不受影响 |
+| 计时 | Python `time.time()*1000` → `Date.now()`，字段名保持 `duration_ms` |
 
-### 判定顺序不可调换的两处
+### 判定顺序不可调换的三处
 
 | 位置 | 约束 |
 |---|---|
-| `operations/unlock-403.ts` | `disabled` 必须排在 `sign in` 之前——封号页面通常也含 "sign in"，顺序颠倒会把封号误判为「无需解锁」 |
-| `operations/modify-auth.ts` | 密钥解析先匹配裸 Base32，再匹配带标签形式 |
+| `engine/operations/unlock-403.ts` | `disabled` 必须排在 `sign in` 之前——封号页面通常也含 "sign in" |
+| `engine/operations/modify-auth.ts` | 密钥解析先匹配裸 Base32，再匹配带标签形式 |
+| `browseruse/types.ts` 的 `ACTION_TYPE_ORDER` | 动作类型检测顺序与 Python `get_action_type()` 的列表一致 |
 
 ### Playwright 兼容层的一个细节
 
-Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisible`（对应 Python 的 `.last`）。用 `first` 会点到左侧无关元素。
+Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisible`（对应 Python 的 `.last`）。
 
-## 四、自动化校验工具（新增，务必使用）
+### 本轮代码审查修掉的 4 处（对照 Python 后修正）
 
-这两个脚本是防回归的核心，改动提示词或选择器后必须跑：
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `browseruse/types.ts` 的 `normalizeActionModel` | 只认严格类型，而 Python 的 pydantic 走 **lax 模式**会把 `"3"` 强制成 `3`；更糟的是 `wait.milliseconds="5000"` 会被静默换成默认值 1000 | 补 `coerceNum` / `coerceBool`，字段存在但不可转换时返回 null（等价 ValidationError） |
+| `browseruse/types.ts` 的 `formatActionParams` | 用 `JSON.stringify` 输出 `{"url":"x"}`，与 Python dict repr `{'url': 'x'}` **字节不同**，而这段文本会进 `<agent_history>` 提示词 | 新增 `pythonRepr()` 复刻 dict repr |
+| `browseruse/playwright-cdp.ts` 的 `connect()` | `connectOverCDP` 成功但取页面失败时，browser 句柄没交出去也没关掉 → ixBrowser 窗口被占死 | 取页面包 try/catch，失败就地 `browser.close()` 后 rethrow |
+| `browseruse/engine.ts` 的 `start()` / `withEngine()` | `start()` 被写成「有 page 就不拉浏览器」，而 Python 是**无条件** launch；`withEngine` 又漏了 `__aenter__` 的初始化 | `start()` 改回无条件；新增 `enter()` 对标 `__aenter__`，`withEngine` 先调它 |
+
+### 刻意保留的可疑行为（照搬 Python，勿"顺手修")
+
+- `engine/operations/login.ts` 的 `enterPassword`：`act()` 成功后仍执行键盘输入，密码可能被输两次
+- `browseruse/operations/join-family.ts` 的 `sendInvite`/`acceptInvite`：`timeout` 形参**未被函数体使用**
+- 同文件末尾两条返回分支都设 `invite_sent: true`，「没看到已发送关键词」也算已发送
+- `checkInviteSent` 把 `"pending"` 当作「邀请已发送」，无关页面可能误命中
+- `browseruse/agent/service.ts` 的 `run()` 入口会复位 `_stopRequested`，因此 `run()` 之前调 `stop()` 无效
+- `dom/service.ts` 的 `extractDom` 捕获异常后返回空树，但**不清空**上一次快照
+
+## 四、自动化校验工具（务必使用）
+
+改动提示词或选择器后必须跑：
 
 ```powershell
 cd desktop
-pnpm verify:prompts     # 引擎 92 条提示词与 Python 逐字比对
-pnpm verify:selectors   # auto_replace_* 的 197 个选择器比对
+pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
+pnpm verify:selectors
 ```
 
-生成这两个脚本用的中间产物在 `$env:PI_SCRATCH_DIR`：
-- `ops_spec.json` —— 由 `extract_ops.py` 从 Python 提取的提示词清单
-- 若 scratch 被清理，需重新提取（脚本已提交在 `desktop/scripts/`）
+`verify:prompts` 现在做三件事：
+1. 提示词逐条比对：stagehand 92 条 + browseruse 131 条 = **223 条**
+2. BrowserUse 常量比对：3 个 URL + 5 组关键词 = **33 条**，必须出现在 `browseruse/constants.ts`
+3. 两份系统提示词 md 的 **sha256 字节比对**
 
-> ⚠️ `verify:prompts` 依赖 `ops_spec.json`，该文件在 scratch 目录。若丢失，
-> 需重新从 Python 侧提取（见 `scripts/verify-prompts.mjs` 的用法说明）。
+`ops_spec.json` 由 `scripts/extract-ops-spec.py` 从 Python 侧生成（重建命令见第零章）。
 
 ## 五、下一步（按依赖顺序）
 
-1. **BrowserUse 引擎**（4303 行）→ 解锁 `auto_join_family`
-   - 结构：`engine.py` 934 行 + `agent/` `dom/` `llm/` `tools/` 四层
-   - 入口是 `send_family_invite` 与 `join_family` 两个 operation
-   - `pro-status-detector.ts` 已预留引擎无关接口（`ProDetectEngine`），可无缝接入
-2. **`batch_account_processor.ts`**（2261 行）—— 依赖全部就绪后再做
-3. **前端界面** —— 接口形状取决于上面全部定型后的样子
+1. **`auto-join-family.ts`**（Python 292 行）—— BrowserUse 依赖已就绪，可直接做
+   - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
+   - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
+2. **`batch_account_processor.ts`**（2261 行）—— Stagehand + BrowserUse + Playwright 三者汇聚点
+3. **前端界面** —— Electron + React 19 + TypeScript，UI 库倾向 Ant Design 5
+
+**真机回归尚未做**：本轮与前几轮都是离线等价移植，`ENGINE_SLICE_REPORT.md` 里
+只验证了 Stagehand 的管道层。BrowserUse 的 Agent 循环、DOM 注入脚本、LLM 适配
+**一次真机都没跑过**，全量测试时要留足账号预算。
 
 ## 六、Python 侧现状（勿动）
 
 Python 代码**保持原样可用**，是当前的对拍基准与回退方案：
-- `core/` `services/` `automation/` 全部未修改
+- `core/` `services/` `automation/` `application/` `gui/` 全部未修改
 - `pytest -q` 基线：70 passed / 5 failed（5 个失败是 HEAD 上既有的）
 - ixBrowser 依赖服务端口 53200
 
@@ -232,3 +308,4 @@ Python 代码**保持原样可用**，是当前的对拍基准与回退方案：
 **已知告警（可忽略）**：
 - `node:sqlite` 与类型剥离都还是 experimental，会打警告
 - Stagehand 连接 ixBrowser 时 ixBrowser 侧会打印 `Extensions.* not found` 探测日志（3.7.3 会尝试后回退，不影响功能）
+- `pnpm add` 时会提示 `openai@4.104.0` 的 peer `zod@^3` 与仓库里的 zod 4 不匹配——Stagehand 自带副本，实测不影响

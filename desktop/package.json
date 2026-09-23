@@ -20,7 +20,12 @@
     "typescript": "~5.9.0"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.60",
+    "@ai-sdk/google": "^4.0.77",
+    "@ai-sdk/openai": "^4.0.72",
     "@browserbasehq/stagehand": "3.7.3",
+    "ai": "^7.0.111",
+    "playwright-core": "^1.63.0",
     "zod": "^4.6.5"
   }
 }

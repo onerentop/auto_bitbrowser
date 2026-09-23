@@ -89,3 +89,6 @@ node_modules/
 
 # 临时文件
 nul
+
+# PI-Desktop 目标契约产物（本地会话用，不入库）
+.pi/

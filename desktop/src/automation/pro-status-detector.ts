@@ -17,10 +17,16 @@
  */
 import type { StagehandGoogleEngine } from "../engine/stagehand-engine.ts";
 
-/** 检测所需的最小引擎能力 */
+/**
+ * 检测所需的最小引擎能力。
+ *
+ * data 允许为 null：BrowserUseEngine 的结果类型照搬 Python 的 Optional（用 null 表达），
+ * StagehandGoogleEngine 侧用 undefined，两者都能满足本接口。
+ * 下游 unwrapExtractData() 内部已用 `raw ?? {}` 兜底，不受影响。
+ */
 export interface ProDetectEngine {
-  navigate(url: string, options?: { timeoutMs?: number }): Promise<{ success: boolean; error?: string }>;
-  extract<T = unknown>(instruction: string, schema?: unknown): Promise<{ success: boolean; data?: T; error?: string }>;
+  navigate(url: string, options?: { timeoutMs?: number }): Promise<{ success: boolean; error?: string | null }>;
+  extract<T = unknown>(instruction: string, schema?: unknown): Promise<{ success: boolean; data?: T | null; error?: string | null }>;
   getPageContent(): Promise<string>;
 }
 
