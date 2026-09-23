@@ -22,15 +22,37 @@ function formatTime(ms: number): string {
   return d.toTimeString().slice(0, 8);
 }
 
-/** 把任务结果对象平铺成「键: 值」行，列表字段只显示条数 */
+/** 常见结果字段的中文名；未列出的字段原样显示键名 */
+const RESULT_LABELS: Record<string, string> = {
+  total: "总数",
+  total_count: "总数",
+  success_count: "成功",
+  failed_count: "失败",
+  fail_count: "失败",
+  failed_ids: "失败窗口",
+  failed_list: "失败列表",
+  warning_list: "警告",
+  skipped_count: "跳过",
+  results: "明细",
+  deleted_accounts: "已删除账号",
+  deleted_windows: "已删除窗口",
+  password_count: "写入密码",
+  bind_count: "绑定窗口",
+  ix_update_count: "更新窗口备注",
+  already_enabled_count: "已开启",
+  family_created_count: "创建家庭组",
+};
+
+/** 把任务结果对象平铺成「字段: 值」行，列表字段只显示条数 */
 function summarize(result: unknown): Array<[string, string]> {
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     return result === null || result === undefined ? [] : [["结果", JSON.stringify(result)]];
   }
   return Object.entries(result as Record<string, unknown>).map(([k, v]) => {
-    if (Array.isArray(v)) return [k, `${v.length} 项`];
-    if (v !== null && typeof v === "object") return [k, JSON.stringify(v)];
-    return [k, String(v)];
+    const label = RESULT_LABELS[k] ?? k;
+    if (Array.isArray(v)) return [label, `${v.length} 项`];
+    if (v !== null && typeof v === "object") return [label, JSON.stringify(v)];
+    return [label, String(v)];
   });
 }
 
