@@ -83,6 +83,37 @@ const REMOVED_STAGEHAND_OPS = new Set([
   "unlock_403.py",
 ]);
 
+/**
+ * 有意删除的单条提示词（Python 文件名 → 提示词原文），不参与比对，输出里单独列出。
+ * - login.py「在密码输入框中输入密码」：指令不含密码，AI 会自行往密码框填内容，
+ *   Python 随后又 keyboard.type(password)，导致密码写两次或写错。TS 改为按选择器只写入一次
+ *   （见 src/engine/operations/login.ts 头注释第 4 条、PROGRESS.md）。
+ */
+const REMOVED_PROMPTS = {
+  "login.py": ["在密码输入框中输入密码"],
+  // 真机（2026-09-24）：2SV 首页**没有**「更改手机号 / Add a phone」按钮，只有一个「电话号码 <号>」条目，
+  // 点它才进 /two-step-verification/phone-numbers；且 AI act 在该页会「报成功但页面毫无变化」、
+  // 原本「先删旧号」的 observe 流程会把后续步骤全部带偏，结果核对也不能再靠 AI 摘要（实测会假成功）。
+  // 因此这几条按真机改写（见 src/engine/operations/modify-2sv.ts 的同名注释），不再与 Python 逐字一致。
+  "modify_2sv.py": [
+    "点击 'Change phone' 或 '更改手机号' 或 'Edit' 或 '编辑' 按钮",
+    "查找页面上的手机号输入框或删除现有手机的选项",
+    "点击 'Add a phone' 或 '添加手机号' 按钮",
+    // 这条是多行 f-string（extract-ops-spec 把变量位置写成 {…}），必须逐行录入：
+    // 比对用的是 normalize(p.text) 后的整串相等，只写首行匹配不上。
+    `检查页面是否显示修改成功的标志：
+1. 显示新的手机号 {…}
+2. "Success" 或 "成功" 提示
+3. "Phone added" 或 "已添加手机号"
+也检查错误信息：
+4. "Invalid number" 或 "无效号码"
+5. "Error" 或 "错误"`,
+    "点击移除或删除现有手机号的按钮",
+    "确认删除",
+  ],
+};
+const removedSkipped = [];
+
 /** 归一化：去掉首尾空白、统一换行、压缩内部连续空白行 */
 function normalize(s) {
   return s
@@ -147,8 +178,13 @@ function checkGroup(files, resolveTs, label) {
     const missing = [];
 
     for (const p of info.prompts) {
-      totalPy += 1;
       const target = normalize(p.text);
+      // 有意删除的提示词单独计数（不能靠 TS 注释里恰好出现原文来「匹配」）
+      if ((REMOVED_PROMPTS[pyFile] ?? []).includes(target)) {
+        removedSkipped.push(`${pyFile}: ${target}`);
+        continue;
+      }
+      totalPy += 1;
       if (!target) continue;
 
       // 含 f-string 变量的提示词，按前半段固定文本匹配
@@ -188,6 +224,8 @@ console.log("=".repeat(64));
 console.log(`Python 侧提示词总数 : ${totalPy}`);
 console.log(`TS 侧已匹配        : ${totalFound}`);
 console.log(`缺失               : ${totalMissing}`);
+console.log(`有意删除（不比对） : ${removedSkipped.length}`);
+for (const r of removedSkipped) console.log(`    - ${r}`);
 console.log("");
 
 for (const [f, items] of Object.entries(missingByFile)) {

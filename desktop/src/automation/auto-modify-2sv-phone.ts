@@ -18,7 +18,11 @@ export async function autoModify2svPhone(
     // Python 侧此函数 close_after 默认为 True
     { ...options, closeAfter: options.closeAfter ?? true },
     async (engine) => {
-      const result = await engine.modify2svPhone(newPhone);
+      // 真机：2SV 设置页会要求 Google 的「重新验证身份」，凭据从数据库账号取
+      const result = await engine.modify2svPhone(newPhone, null, {
+        password: String(accountInfo["password"] ?? ""),
+        totpSecret: String(accountInfo["secret_key"] ?? ""),
+      });
       if (result.success) return [true, "2SV 手机号修改成功"] as Result2;
       return [false, result.message] as Result2;
     },

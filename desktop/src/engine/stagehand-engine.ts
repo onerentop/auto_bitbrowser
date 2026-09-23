@@ -105,6 +105,57 @@ export function renderedCheckScript(selector: string): string {
   })()`;
 }
 
+/**
+ * 页面内「按可见文本点击」脚本。
+ *
+ * 为什么需要它：stagehand 的选择器引擎不支持 Playwright 的 `:has-text()` / `text=` 伪类。
+ * 真机实测 locator(':is(a,button,[role="button"]):has-text("电话号码")').count() 恒为 0
+ * 并抛 StagehandElementNotFoundError，click() / jsClick() 只能静默返回 false。
+ * 这里改为在页面里按可见文本找元素并派发 DOM 点击（真机已验证能触发导航与弹层按钮）。
+ *
+ * 选元素顺序（每一级都是为了不点错）：
+ *   1. 只保留「可见 + 可点」且 innerText 以目标文本开头的候选；
+ *   2. 有 innerText **恰好等于**目标文本的就只在这一层里挑（否则「保存更改」会抢走「保存」）；
+ *   3. 再去掉「包含其它命中元素」的祖先（点在外层容器上事件不一定会冒泡到控件）；
+ *   4. 最后优先 `<a href>`（Google 的条目就是链接），否则取子树最小的那个。
+ * 返回 { tag, href }；找不到返回 null。导出供单测校验。
+ */
+export function textClickScript(text: string): string {
+  return `(() => {
+    const want = ${JSON.stringify(text)};
+    const isClickable = (el) => {
+      const r = el.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return false;
+      if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return false;
+      if (typeof el.checkVisibility === 'function') {
+        return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      }
+      const st = getComputedStyle(el);
+      return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+    };
+    const label = (el) => (el.innerText || '').trim();
+    const candidates = Array.from(
+      document.querySelectorAll(
+        'a[href], button, [role="button"], [role="menuitem"], [role="link"], input[type="submit"], li',
+      ),
+    ).filter((el) => isClickable(el) && label(el).startsWith(want));
+    if (candidates.length === 0) return null;
+
+    const exact = candidates.filter((el) => label(el) === want);
+    const matched = exact.length > 0 ? exact : candidates;
+    const contained = (el, other) => typeof el.contains === 'function' && el.contains(other);
+    const innermost = matched.filter(
+      (el) => !matched.some((other) => other !== el && contained(el, other)),
+    );
+    const pool = innermost.length > 0 ? innermost : matched;
+    const target =
+      pool.find((el) => el.tagName === 'A' && el.getAttribute('href')) ??
+      pool.slice().sort((a, b) => a.children.length - b.children.length)[0];
+    target.click();
+    return { tag: target.tagName, href: target.getAttribute('href') };
+  })()`;
+}
+
 export class StagehandGoogleEngine {
   private sh: V3Like | null = null;
   private page: PageLike | null = null;
@@ -352,6 +403,25 @@ export class StagehandGoogleEngine {
     }
   }
 
+  /**
+   * 按可见文本点击元素（页面内派发 DOM 点击），返回被点元素信息，没点到返回 null。
+   *
+   * 这是 `:has-text()` 在 stagehand 下失效之后的确定性点击通道：真机实测
+   * `locator(':is(a,button,[role="button"]):has-text("电话号码")').count() === 0`，
+   * 而页面内 `el.click()` 能正常触发 Google 条目的导航。
+   */
+  async clickByText(text: string): Promise<{ tag: string; href: string | null } | null> {
+    const { page } = this.ensureReady();
+    if (typeof page.evaluate !== "function") return null;
+    try {
+      const hit = await page.evaluate<{ tag: string; href: string | null } | null>(
+        textClickScript(text),
+      );
+      return hit ?? null;
+    } catch {
+      return null;
+    }
+  }
   /** 把当前页切到浏览器前台（CDP Page.bringToFront）；不支持时静默跳过 */
   async bringToFront(): Promise<void> {
     const { page } = this.ensureReady();
@@ -539,9 +609,10 @@ export class StagehandGoogleEngine {
   async modify2svPhone(
     newPhone: string,
     smsService: import("./operations/modify-2sv.ts").SmsCodeService | null = null,
+    credentials: import("./operations/modify-2sv.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ModifyPhoneResult> {
     const { Modify2SVOperation } = await import("./operations/modify-2sv.ts");
-    return new Modify2SVOperation(this).execute(newPhone, smsService);
+    return new Modify2SVOperation(this).execute(newPhone, smsService, credentials);
   }
 
   async modifyAuthenticator(

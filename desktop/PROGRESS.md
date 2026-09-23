@@ -97,10 +97,11 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 394/394 通过
+pnpm test               # 468/468 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
-                        # 提示词 49/49 = 100%
+                        # 覆盖率 95.5%：6 条 modify_2sv 改写提示词已登记「有意不比对」，
+                        # 余 2 条缺失是 login.py 的既有偏差
 pnpm verify:selectors   # 选择器缺失 0（197/197）
 ```
 
@@ -415,6 +416,29 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 - 诚实记录：缺陷 3 的第一版回归用例**没红**——假引擎的成功标记当时写成英文 `Authenticator app added`，正好命中旧词表；改成真机文案后才成立
 - 提醒：窗口备注是 fire-and-forget 异步写入，短命进程会丢（本次真机驱动就遇到，已补写）；Python 版是同步阻塞写
 
+
+### 修改 2SV 手机的真机缺陷与修复（2026-09-24）
+
+在 profile 7（`arroyovanessa87@gmail.com`）上验证「修改 2SV 手机」；第二轮用只读探针拿到真实 DOM 后定位到两个
+根因级缺陷，修完真机端到端跑通（`operation.success=true`，独立复核确认 2SV 电话号码列表出现新号
+`****4886`）。完整证据见 `.trellis/tasks/09-24-modify-2sv-real-run/real-run-log.md`。
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| **`:has-text()` 选择器在 stagehand 下恒为 0 匹配**（引擎用的是自己的选择器引擎，不是 Playwright） | `locator(':is(a,button,[role="button"]):has-text("电话号码")').count()` = 0，`isVisible()` 抛 `StagehandElementNotFoundError`；同页 `locator('a')` = 3 正常。于是 `click()` / `jsClick()` 静默返回 false，流程退回 AI act 后「报成功但页面毫无变化」，卡死在 2SV 首页 | 引擎新增 `textClickScript()` / `clickByText()`：用 `page.evaluate` 在页面内按可见文本找元素并派发 DOM 点击（真机验证能触发导航与弹层按钮） |
+| **「下一步」之后还有「确认您的电话号码」页，必须再点「保存」** | 探针 dump 到该页原文：「确认您的电话号码 / 请确认 +86 … 是您要保存的号码 / 上一步 / 保存」；不点「保存」时列表里永远没有新号 | 新增 Step 5b：`waitUntil` 等确认页出现 → `clickByText("保存")`（未命中不再盲发 AI act） |
+| 结果核对只看「页面文本含新号码」且只认尾 4 位 | 复核导航失败会停在确认页，而确认页正文里本来就有完整新号 → **假成功** | 校验复核 `navigate` 成败与落点 URL；号码匹配收紧为「完整号码或尾 7 位」 |
+| AI act 报成功但无效果（点条目、点下一步） | 第 6 次运行：`act → success=true`，页面 URL/文本完全没变 | 四处确定性点击全部改走 `clickByText()` + 页面状态复核 |
+
+- 回归用例：`desktop/test/engine-modify-2sv.test.mjs`（11 条；假引擎里「新号码进列表」与「点保存」有真实因果）、
+  新增 `desktop/test/engine-click-by-text.test.mjs`（11 条；用假 DOM 在 Node 里执行页面内脚本）
+- 代码审查（独立上下文）指出 4 类真机后果严重的问题：确认页判定过宽会在弹层上盲点「保存」、复核导航失败假成功、
+  选元素可能点到祖先 / 前缀撞名（「保存更改」抢「保存」）/ 不判 `opacity:0` 与 `disabled`、确认页只判一次。
+  均已修并补「先红后绿」用例（修前 6 红 → 修后绿）
+- 真机链路的坑（未修，记入待办）：`connect()` 对「窗口已打开」不容错（111003），而**关掉窗口会丢 Google 会话**
+  → 端到端验证只能塞进单进程；另外 Google 对频繁登录做风控后，登录页会先要求「选择验证方式」
+  （`/v3/signin/challenge/selection`），而 `LoginOperation` 只认「直接出现的验证器输入框」→ 报 `need_2fa`
+- 账号状态：2SV 电话号码 = 旧号 `****4348` + 新号 `****4886`（仍是「添加」，未删旧号）
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -457,7 +481,7 @@ pnpm verify:selectors
    - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器** 三个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机** 四个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 
