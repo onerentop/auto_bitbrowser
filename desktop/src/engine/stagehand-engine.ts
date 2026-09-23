@@ -544,9 +544,11 @@ export class StagehandGoogleEngine {
     return new Modify2SVOperation(this).execute(newPhone, smsService);
   }
 
-  async modifyAuthenticator(): Promise<import("./types.ts").ModifyAuthenticatorResult> {
+  async modifyAuthenticator(
+    credentials: import("./operations/modify-auth.ts").ReauthCredentials = {},
+  ): Promise<import("./types.ts").ModifyAuthenticatorResult> {
     const { ModifyAuthenticatorOperation } = await import("./operations/modify-auth.ts");
-    return new ModifyAuthenticatorOperation(this).execute();
+    return new ModifyAuthenticatorOperation(this).execute(credentials);
   }
 
   async replaceRecoveryEmail(

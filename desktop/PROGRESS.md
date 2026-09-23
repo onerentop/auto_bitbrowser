@@ -1,6 +1,6 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-24（「替换手机号」与「替换辅助邮箱」两个 AI 任务都已真机跑通并修掉同源缺陷：失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、不点最终保存、把可选的邮箱验证码当成失败） ｜ 分支 `dev_ai`
+> 最后更新：2026-09-24（三个 AI 任务真机跑通并修掉同源缺陷：「替换手机号」「替换辅助邮箱」「修改验证器」——失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、不点最终保存、把可选的邮箱验证码当成失败、缺「下一页」导致输码失败、成功文案「已更改」不在词表） ｜ 分支 `dev_ai`
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -399,6 +399,22 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 - 用户决定：**新邮箱的可选验证不做**（页面保留「验证辅助邮箱」入口）
 - 已知：AI 任务只改 Google 账号、不写库（`accounts.db.recovery_email` 仍为 `NULL`，与 Python 一致）；修改 2SV 手机 / 修改验证器仍未验证
 
+### 修改验证器的真机缺陷与修复（2026-09-24）
+
+在 profile 14（用户指定的测试号）上验证「修改验证器」时暴露三处 **Python 同源**缺陷；均已修复并真机跑通
+（第 3 次运行 42.0s 成功）。完整证据见 `.trellis/tasks/09-24-modify-auth-real-run/real-run-log.md`。
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| 重新验证身份被误判为未登录 | 验证器页要求「重新验证身份」，真机形态是**密码页**（`/v3/signin/challenge/pwd`），该 URL 命中登录态判定 → 假失败「需要先登录账号」 | 新增 `passReauthIfRequired` / `completeReauth`：有验证码框先填码、否则填密码；提交**先按 Enter**（先点外层 `#passwordNext` div 会把焦点带走、Enter 反而失效）；凭据只经 `fill` 写入、不进 AI 指令 |
+| 密钥视图里没有验证码输入框 | 点「更改身份验证器应用 → 无法扫描？」后面板只显示密钥文本，**必须先点「下一页」** Google 才给出验证码框；原实现直接输码 → 真机 act `success=false`、随后核对必然失败 | 在输码前补一次「下一页」点击（Step 3.5） |
+| 成功文案「身份验证器应用已更改」不在成功词表 | 第 2 次运行**真的把验证器改掉了**，但词表只有「已添加/added/成功/完成」→ 判「无法确定设置结果」；因 `saveNewSecret` 只在 success 时调用，**新密钥不落盘而账号已被改掉** → 会导致登录失败（本次已按产品同一条保存路径恢复，再复跑通过） | 成功词表补上 `已更改 / 更改 / changed` |
+
+- 回归用例 `desktop/test/engine-modify-auth.test.mjs`（7 条）：换回 HEAD 版 → 3 红 2 绿；只保留缺陷 1 修复 → 3 红 3 绿；临时还原旧词表 → 4 红 3 绿；修复后 **7/7 绿**
+- 新密钥四处落点一致：`accounts.db.secret_key` / `authenticator_modification_history` / `已修改密钥.txt` / ixBrowser 窗口备注第 4 段 + `tfa_secret`（同一指纹）
+- 诚实记录：缺陷 3 的第一版回归用例**没红**——假引擎的成功标记当时写成英文 `Authenticator app added`，正好命中旧词表；改成真机文案后才成立
+- 提醒：窗口备注是 fire-and-forget 异步写入，短命进程会丢（本次真机驱动就遇到，已补写）；Python 版是同步阻塞写
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -441,7 +457,7 @@ pnpm verify:selectors
    - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号**与**替换辅助邮箱**都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、独立只读复查与账号真实状态一致），详见 `.trellis/tasks/09-24-replace-{phone,email}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器** 三个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 

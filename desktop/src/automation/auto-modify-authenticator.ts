@@ -123,7 +123,11 @@ export async function autoModifyAuthenticator(
     browserId,
     { ...options, closeAfter: options.closeAfter ?? false },
     async (engine) => {
-      const result = await engine.modifyAuthenticator();
+      // 真机：2SV / 验证器设置页会要求 Google 的「重新验证身份」，凭据从数据库账号取
+      const result = await engine.modifyAuthenticator({
+        password: String(accountInfo["password"] ?? ""),
+        totpSecret: String(accountInfo["secret_key"] ?? ""),
+      });
 
       if (result.success) {
         const newSecret = result.secret_key ?? null;
