@@ -41,14 +41,22 @@ const RESULT_LABELS: Record<string, string> = {
   ix_update_count: "更新窗口备注",
   already_enabled_count: "已开启",
   family_created_count: "创建家庭组",
+  success_rate: "成功率",
+  duration_seconds: "耗时（秒）",
 };
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
 
 /** 把任务结果对象平铺成「字段: 值」行，列表字段只显示条数 */
 function summarize(result: unknown): Array<[string, string]> {
-  if (result === null || typeof result !== "object" || Array.isArray(result)) {
+  if (!isPlainObject(result)) {
     return result === null || result === undefined ? [] : [["结果", JSON.stringify(result)]];
   }
-  return Object.entries(result as Record<string, unknown>).map(([k, v]) => {
+  // 账号管理的批量任务返回 { type, result: {...} }，展开内层统计
+  const flat = typeof result["type"] === "string" && isPlainObject(result["result"]) ? result["result"] : result;
+  return Object.entries(flat).map(([k, v]) => {
     const label = RESULT_LABELS[k] ?? k;
     if (Array.isArray(v)) return [label, `${v.length} 项`];
     if (v !== null && typeof v === "object") return [label, JSON.stringify(v)];
