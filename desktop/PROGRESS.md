@@ -15,7 +15,7 @@
 代码在 desktop/ 目录。Python 侧保持原样作为对拍基准与回退方案。
 
 当前进度：services / engine(Stagehand) / browseruse 三层完成，automation 层 12/15。
-下一步按 PROGRESS.md 第五章的依赖顺序继续（auto-join-family → batch_account_processor）。
+下一步按 PROGRESS.md 第五章继续（家庭组加入：用户确认不需要，不移植）。
 
 注意事项：
 - Stagehand 必须锁 3.7.3，不可升级（原因见 PROGRESS.md 第三章）
@@ -177,7 +177,7 @@ pnpm verify:selectors   # 选择器缺失 0（197/197）
 | `auto-antigravity-oauth.ts` | ✅（含批量） |
 | `pro-status-detector.ts` | ✅（含二次验证 4 分支） |
 | `auto-replace-email.ts` / `auto-replace-phone.ts` | ✅（Playwright 选择器直连） |
-| `auto-join-family.ts` | ⏭️ 用户要求跳过（BrowserUse 依赖已就绪，随时可做） |
+| `auto-join-family.ts` | ❌ 用户确认不需要，不移植 |
 | `batch/types.ts` | ✅ batch 的两个结果 dataclass |
 | `batch/pro-detection.ts` | ✅ batch L1008-1424 的 4 个页面检测方法 |
 | `batch/membership-detect.ts` | ✅ batch L1751-2244 的 2 个 BrowserUse 检测方法 |
@@ -414,13 +414,11 @@ pnpm verify:selectors
 
 ## 五、下一步
 
-1. **`auto-join-family.ts`**（Python 292 行）—— 用户要求跳过，BrowserUse 依赖已就绪，随时可做
-   - 入口是 `BrowserUseEngine.sendFamilyInvite()` 与 `joinFamily()`
-   - 注意 Python 侧的 `_is_family_full_error` / `_classify_agent_invite_error` 两个分类函数
+1. **`auto-join-family.ts`** —— ❌ 用户确认不需要，不移植（Python 侧保留原样）
 2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
 3. **前端界面** —— 骨架 ✅、第一批（首页 / 账号管理 / 设置）✅、第二批（5 个 AI 任务页 / 导入 TOTP）✅，Python GUI 的全部页面已移植。后续：
    - 5 个 AI 页接入 SMS-Bus / IMAP 验证码（Python GUI 本身也没接，触发验证码即失败）
-   - 家庭组加入（`auto-join-family.ts`，用户要求暂跳过，相关按钮禁用）
+   - 家庭组加入：**用户确认不需要，不移植**（界面按钮与右键菜单已移除；BrowserUse 引擎的 join-family 操作与家庭组分配纯函数保留在后端代码中，未接线）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
    - **真机回归仍未做**：批量登录 / OAuth / 403 / Pro 检测都只有离线 + 假依赖测试，开始联调前先用测试账号冒烟
 

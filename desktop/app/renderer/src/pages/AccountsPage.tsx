@@ -7,7 +7,7 @@
  *   - 右键菜单（:638-711）
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
  *   - 任务运行中，除「停止」外所有操作禁用（:1445-1460）；任务结束后刷新列表
- *   - 「一键加入家庭组」与右键「加入家庭组」暂未移植，保持禁用
+ *   - 「一键加入家庭组」与右键「加入家庭组」：用户确认不需要，桌面版不提供（Python 侧保留）
  * 日志区与进度条由全局 TaskDock 承担。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -71,7 +71,6 @@ const ACCOUNT_TASK_TYPES = new Set([
   "enable_family_sharing",
 ]);
 
-const NOT_PORTED = "暂未移植";
 
 function toSelected(row: AccountListRow): SelectedRow {
   return { email: row.email, browserId: row.browser_profile_id };
@@ -279,10 +278,7 @@ export function AccountsPage(): ReactElement {
       { key: "login", label: "登录", disabled: busy },
       { key: "oauth", label: "OAuth", disabled: busy },
     );
-    // 对标 :685：未 Pro、已登录、已绑窗口时才出现；暂未移植，禁用
-    if ((row.is_pro === "no" || row.is_pro === "unknown") && row.login_status === "logged_in" && hasBrowser) {
-      items.push({ key: "joinFamily", label: <Tooltip title={NOT_PORTED}>加入家庭组</Tooltip>, disabled: true });
-    }
+    // Python :685 在此处还有「加入家庭组」—— 用户确认不需要该功能，桌面版不提供
     items.push(
       { type: "divider" },
       { key: "refresh", label: "刷新" },
@@ -431,9 +427,6 @@ export function AccountsPage(): ReactElement {
           {btn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
           {btn("检测 Pro", "detect_pro", "检测选中已登录账号的 Google One Pro 会员状态")}
           {btn("刷新家庭组", "refresh_membership_info", "刷新选中账号的完整会员信息（Pro状态、家庭组、国家）")}
-          <Tooltip title={NOT_PORTED}>
-            <Button disabled>一键加入家庭组</Button>
-          </Tooltip>
           {btn("开启共享", "enable_family_sharing", "为普通 Pro 账户开启家庭组共享功能")}
         </Space>
       </Card>
