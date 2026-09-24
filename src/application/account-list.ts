@@ -5,7 +5,8 @@
  * 输出：平铺行 + 分组统计。
  *   - 窗口名、分组名与首页同一规则（复用 buildBrowserList）
  *   - 账号没绑定窗口 → 伪分组「未绑定窗口」；绑定的窗口找不到 → 「窗口不存在」（窗口列表取失败时为「窗口信息获取失败」）
- *   - **只下发有 / 无与登录状态**：不带出密码、2FA 密钥、辅助邮箱原文
+ *   - 密码明文随列表下发（用户要求直接显示并可复制）；2FA 密钥与辅助邮箱原文仍不下发
+ *   - note：窗口备注（ixBrowser 里的那份，与首页同一份）；未绑定或窗口不存在时为空串
  *   - same_name_windows：与邮箱同名的窗口个数（≥2 时界面提示需要人工确认绑定）
  */
 import {
@@ -62,6 +63,7 @@ export function buildAccountRows(
     let groupId: number;
     let groupName: string;
     let windowName = "";
+    let note = "";
     if (!browserId) {
       groupId = UNBOUND_GROUP_ID;
       groupName = UNBOUND_GROUP_NAME;
@@ -71,6 +73,7 @@ export function buildAccountRows(
         groupId = node.groupId;
         groupName = node.groupName;
         windowName = node.name;
+        note = node.note;
       } else {
         groupId = MISSING_WINDOW_GROUP_ID;
         groupName = windows ? MISSING_WINDOW_GROUP_NAME : WINDOW_UNKNOWN_GROUP_NAME;
@@ -91,6 +94,8 @@ export function buildAccountRows(
       has_password: nonEmpty(a["password"]),
       has_recovery_email: nonEmpty(a["recovery_email"]),
       has_secret: nonEmpty(a["secret_key"]),
+      password: nonEmpty(a["password"]) ? String(a["password"]) : "",
+      note,
       last_login_at: nonEmpty(a["last_login_at"]) ? String(a["last_login_at"]) : null,
       same_name_windows: sameNames.get(windowNameKey(a["email"])) ?? 0,
       updated_at: str(a["updated_at"]),

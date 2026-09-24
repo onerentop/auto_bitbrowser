@@ -22,11 +22,14 @@ import {
   type AccountsPrecheckResult,
   type AccountsRunOptions,
   type SelectedRow,
+  type AccountsTfaCodes,
 } from "../../shared/channels/accounts.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
 import type { TaskApi } from "../task-runner.ts";
+import { MAX_TFA_CODE_IDS } from "../../shared/channels/home.ts";
+import { computeEmailTfaCodes } from "../../../src/application/tfa-codes.ts";
 import { planAction, staleLog, toPrecheckResult, type PlanEnv, type TaskSpec } from "../../../src/application/account-plan.ts";
 import type { WindowLike } from "../../../src/application/account-manager-service.ts";
 import {
@@ -60,9 +63,12 @@ export const CONCURRENCY_MAX = 10;
 /** 单次请求最多处理的行数（防御性上限） */
 export const MAX_ROWS = 100_000;
 
+/** 窗口备注的长度上限（超出直接拒绝，避免把 ixBrowser 写坏） */
+export const MAX_NOTE_LENGTH = 2000;
+
 export interface AccountsHandlerDeps {
   /** 批处理器工厂 */
-  createProcessor?: (options: { concurrency: number; callback: (msg: string) => void }) => WorkerProcessor;
+  createProcessor?: (options: WorkerProcessorOptions) => WorkerProcessor;
   /** 关闭窗口 */
   closeBrowser?: (browserId: string) => Promise<unknown>;
   /** 删除窗口 */
@@ -117,6 +123,21 @@ function requireRows(value: unknown, action: AccountsAction): SelectedRow[] {
     throw invalid(`${action} 需要恰好 1 行`);
   }
   return rows;
+}
+
+/** 邮箱数组（去空、去重、限长）：账号页按邮箱取验证码用 */
+function requireEmails(value: unknown, max: number): string[] {
+  if (!Array.isArray(value)) throw invalid("emails 必须是数组");
+  if (value.length > max) throw invalid(`emails 超过上限 ${max}`);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim() === "") throw invalid("emails 必须是非空字符串数组");
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
 }
 
 function requireOptions(value: unknown): AccountsRunOptions {
@@ -338,6 +359,40 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       return { ...buildAccountRows(accounts, groups, windows), windowError };
     },
 
+
+    /**
+     * 按邮箱取当前 2FA 验证码：密钥取自数据库的 secret_key（登录用的就是它），
+     * 只回验证码与本周期结束时间，**绝不回密钥**。上限与首页一致，防止误传超大数组。
+     */
+    [ACCOUNTS_INVOKE.accountsTfaCodes]: (emails: unknown): AccountsTfaCodes => {
+      const list = requireEmails(emails, MAX_TFA_CODE_IDS);
+      // 邮箱 → 数据库里的 2FA 密钥（去空白）；没有密钥的账号不进 map
+      const secrets = new Map<string, string>();
+      for (const a of repo().getAllAccounts()) {
+        const email = typeof a["email"] === "string" ? a["email"] : "";
+        const key = typeof a["secret_key"] === "string" ? a["secret_key"].replace(/\s+/g, "") : "";
+        if (email && key) secrets.set(email, key);
+      }
+      return computeEmailTfaCodes(secrets, list, Date.now());
+    },
+
+    /**
+     * 修改窗口备注：**只写 note 一个字段**（ixBrowser 的 profile-update 只发送传入的字段，
+     * 所以不会碰到 tfa_secret / name / password），也不动数据库里的任何字段。
+     *
+     * 备注是用户自己的笔记区，所有自动化任务一律不读写它；这里只由用户在账号页点击保存触发，
+     * 因此**不做 TASK_BUSY 拦截** —— 任务跑着的时候不让人记笔记只会碍事。
+     */
+    [ACCOUNTS_INVOKE.accountsUpdateNote]: async (email: unknown, note: unknown): Promise<boolean> => {
+      const e = requireEmail(email);
+      if (typeof note !== "string") throw invalid("note 必须是字符串");
+      if (note.length > MAX_NOTE_LENGTH) throw invalid(`备注最多 ${MAX_NOTE_LENGTH} 个字符`);
+      const account = repo().getAccountByEmail(e);
+      if (!account) throw invalid(`未找到账号: ${e}`);
+      const id = account.browser_profile_id ? String(account.browser_profile_id) : "";
+      if (!/^\d+$/.test(id)) throw invalid(`账号 ${e} 未绑定窗口，无法编辑窗口备注`);
+      return ctx.ix().updateProfile(Number(id), { note });
+    },
     [ACCOUNTS_INVOKE.accountsGetDefaults]: (): AccountsDefaults => {
       let n: unknown = 3;
       try {

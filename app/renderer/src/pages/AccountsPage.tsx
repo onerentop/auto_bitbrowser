@@ -2,8 +2,8 @@
  * 账号管理页（账号列表 / 添加编辑导入导出 / 绑定窗口 / 批量任务）
  *
  * 布局：PageHeader（添加 / 批量导入 / 导出选中）→ 列表面板（筛选工具栏、批量操作栏、分组标签、平铺虚拟表格）。
- *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表只显示密码 / 密钥 / 辅助邮箱有无，
- *     编辑时才按邮箱取原文
+ *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表直接带出明文密码（可复制）、
+ *     2FA 验证码（按数据库密钥算）与窗口备注（点击可编辑）；2FA 密钥与辅助邮箱原文仍只在编辑弹窗里取
  *   - 筛选全部在前端叠加（分组 / 登录状态 / 搜索）；被筛选隐藏的勾选保留，批量操作作用于全部勾选，确认前提示隐藏数
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
  *   - 任务运行中写操作禁用；停止用底部任务坞；任务结束后刷新列表
@@ -56,6 +56,7 @@ import {
   hasSameNameWindows,
   autoBindNotice,
   applyLoginItem,
+  applyNoteUpdate,
   type AccountLoginFilter,
 } from "../../../shared/logic/account-list.ts";
 import {
@@ -72,6 +73,8 @@ import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
 import { loginView } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
+import { TfaCell, useTfaCodes } from "../components/TfaCodeCell.tsx";
+import { NoteModal, type NoteTarget } from "./accounts/NoteModal.tsx";
 import { PageHeader } from "../components/PageHeader.tsx";
 import { Panel } from "../components/Section.tsx";
 import { useTokens } from "../theme/tokens.ts";
@@ -130,6 +133,10 @@ export function AccountsPage(): ReactElement {
   const tk = useTokens();
 
   const [list, setList] = useState<AccountsListResult | null>(null);
+  /** 每次列表加载成功 +1：让 2FA 验证码跟着重取 */
+  const [listVersion, setListVersion] = useState(0);
+  /** 备注编辑小窗的目标行；null = 关闭 */
+  const [noteTarget, setNoteTarget] = useState<NoteTarget | null>(null);
   const [loading, setLoading] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [concurrency, setConcurrency] = useState(3);
@@ -142,6 +149,7 @@ export function AccountsPage(): ReactElement {
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const closeBind = useCallback(() => setBindEmail(null), []);
   const closeEdit = useCallback(() => setEditEmail(null), []);
+  const closeNote = useCallback(() => setNoteTarget(null), []);
 
   // 筛选条件
   const [search, setSearch] = useState("");
@@ -162,6 +170,7 @@ export function AccountsPage(): ReactElement {
       if (seq !== loadSeq.current) return;
       if (r.windowError) logLocal(`获取窗口列表失败: ${r.windowError}`);
       setList(r);
+      setListVersion((v) => v + 1);
       // 刷新后保留仍存在账号的勾选
       const emails = new Set(r.rows.map((x) => x.email));
       setChecked((prev) => prev.filter((e) => emails.has(e)));
@@ -394,6 +403,11 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 表格列 ----------
 
+  // 验证码：密钥在后端，只问「可见行里有密钥」的账号；列表刷新后 version 变化会重新取
+  const tfaEmails = useMemo(() => visible.filter((r) => r.has_secret).map((r) => r.email), [visible]);
+  const tfa = useTfaCodes(tfaEmails, listVersion, (emails) => invoke(IPC.invoke.accountsTfaCodes, emails));
+  const invalidTfa = useMemo(() => new Set(tfa?.invalid ?? []), [tfa]);
+
   const columns: TableColumnsType<AccountListRow> = [
     { title: "邮箱", key: "email", width: 240, ellipsis: true, sorter: accountSorter("email"), render: (_, r) => r.email },
     {
@@ -439,9 +453,63 @@ export function AccountsPage(): ReactElement {
       ),
     },
     { title: "分组", key: "group", width: 120, ellipsis: true, render: (_, r) => <Tag bordered={false}>{r.group_name}</Tag> },
-    { title: "密码", key: "pw", width: 56, align: "center", render: (_, r) => <Flag on={r.has_password} label="密码" /> },
+    {
+      title: "密码",
+      key: "pw",
+      width: 170,
+      render: (_, r) =>
+        r.password ? (
+          <Typography.Text
+            className="abb-mono"
+            style={{ maxWidth: 140 }}
+            ellipsis={{ tooltip: r.password }}
+            copyable={{ text: r.password, tooltips: ["复制密码", "已复制"] }}
+          >
+            {r.password}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+    },
     { title: "辅助邮箱", key: "rec", width: 76, align: "center", render: (_, r) => <Flag on={r.has_recovery_email} label="辅助邮箱" /> },
-    { title: "2FA 密钥", key: "secret", width: 76, align: "center", render: (_, r) => <Flag on={r.has_secret} label="2FA 密钥" /> },
+    {
+      title: "验证码",
+      key: "tfaCode",
+      width: 150,
+      render: (_, r) => (
+        <TfaCell
+          hasTfa={r.has_secret}
+          code={tfa?.codes[r.email]}
+          invalid={invalidTfa.has(r.email)}
+          periodEndsAt={tfa?.periodEndsAt ?? null}
+        />
+      ),
+    },
+    {
+      title: "备注",
+      key: "note",
+      width: 220,
+      render: (_, r) => {
+        // 备注在 ixBrowser 窗口上：没绑定窗口就无从修改
+        if (!/^\d+$/.test(r.browser_profile_id)) {
+          return (
+            <Tooltip title="账号未绑定窗口，窗口备注无从修改">
+              <Typography.Text type="secondary">—</Typography.Text>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{r.note || "点击添加备注"}</span>}>
+            <span
+              onClick={() => setNoteTarget({ email: r.email, windowName: r.window_name, note: r.note })}
+              style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {r.note || <Typography.Text type="secondary">添加备注</Typography.Text>}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
     {
       title: "最后登录",
       key: "lastLogin",
@@ -633,7 +701,7 @@ export function AccountsPage(): ReactElement {
             showSorterTooltip={false}
             // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，容器更宽时各列按容器宽度补齐
             virtual
-            scroll={{ x: 1340, y: bodyHeight }}
+            scroll={{ x: 1700, y: bodyHeight }}
             locale={{
               emptyText: (
                 <Empty
@@ -693,6 +761,13 @@ export function AccountsPage(): ReactElement {
           if (bind) showAutoBind(bind);
           void load();
         }}
+      />
+      <NoteModal
+        target={noteTarget}
+        onClose={closeNote}
+        onSaved={(email, note) =>
+          setList((prev) => (prev ? { ...prev, rows: applyNoteUpdate(prev.rows, email, note) as AccountListRow[] } : prev))
+        }
       />
       <BatchImportModal
         open={importOpen}

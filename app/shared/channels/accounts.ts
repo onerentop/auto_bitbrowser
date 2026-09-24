@@ -31,8 +31,13 @@ export const ACCOUNTS_INVOKE = {
   accountsBindCandidates: "abb/accounts/bindCandidates",
   /** 绑定账号到指定窗口（有任务在跑时抛 TASK_BUSY） */
   accountsBind: "abb/accounts/bind",
- /** 删除单个账号，不删窗口（。:1631；有任务在跑时抛 TASK_BUSY） */
+  /** 删除单个账号，不删窗口（。:1631；有任务在跑时抛 TASK_BUSY） */
   accountsDeleteOne: "abb/accounts/deleteOne",
+  // ---------- 列表里的密码 / 验证码 / 备注 ----------
+  /** 按邮箱取当前 2FA 验证码（密钥只在后端，界面只拿验证码） */
+  accountsTfaCodes: "abb/accounts/tfaCodes",
+  /** 修改窗口备注（只写 note 字段；仅用户点击保存时触发，自动化任务从不读写备注） */
+  accountsUpdateNote: "abb/accounts/updateNote",
   // ---------- 账号数据（从设置页迁来） ----------
   /** 按邮箱取账号原文（编辑弹窗用） */
   accountsGet: "abb/accounts/get",
@@ -66,6 +71,10 @@ export interface AccountListRow {
   has_password: boolean;
   has_recovery_email: boolean;
   has_secret: boolean;
+  /** 明文密码（没有时为空串）。只用于界面显示与复制：不进日志 / 任务历史 / 提交 */
+  password: string;
+  /** 窗口备注（ixBrowser 里的那份，与首页同一份；未绑定窗口或窗口不存在时为空串） */
+  note: string;
   last_login_at: string | null;
   /** 与邮箱同名的窗口个数（窗口名去空白、不区分大小写；窗口列表取失败时为 0）；≥2 说明需要人工确认绑定 */
   same_name_windows: number;
@@ -227,6 +236,14 @@ export interface AccountsExportResult {
   count: number;
 }
 
+/** 2FA 验证码：codes 只含能算出码的邮箱；invalid 为密钥非法的邮箱；其余视为没有密钥 */
+export interface AccountsTfaCodes {
+  codes: Record<string, string>;
+  invalid: string[];
+  /** 本 30 秒周期结束的时间（毫秒时间戳），届时验证码会变 */
+  periodEndsAt: number;
+}
+
 // ==================== 通道 → 类型 ====================
 
 export interface AccountsInvokeMap {
@@ -245,4 +262,6 @@ export interface AccountsInvokeMap {
   "abb/accounts/update": { args: [account: AccountDetail]; result: boolean };
   "abb/accounts/import": { args: [text: string]; result: AccountsImportResult };
   "abb/accounts/exportText": { args: [emails: string[]]; result: AccountsExportResult };
+  "abb/accounts/tfaCodes": { args: [emails: string[]]; result: AccountsTfaCodes };
+  "abb/accounts/updateNote": { args: [email: string, note: string]; result: boolean };
 }

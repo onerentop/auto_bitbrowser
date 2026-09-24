@@ -177,3 +177,17 @@ export function applyLoginItem(rows: readonly AccountListRow[], e: LoginItemEven
   });
   return changed ? next : rows;
 }
+
+/**
+ * 备注保存成功后就地更新那一行（不整表刷新，省掉 3~4 秒的等待）。
+ * 邮箱不在列表里时原样返回同一个数组（调用方据此跳过重渲染）。
+ */
+export function applyNoteUpdate(rows: readonly AccountListRow[], email: string, note: string): readonly AccountListRow[] {
+  let changed = false;
+  const next = rows.map((r) => {
+    if (r.email !== email) return r;
+    changed = true;
+    return { ...r, note };
+  });
+  return changed ? next : rows;
+}

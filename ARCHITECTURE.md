@@ -167,8 +167,8 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 - **数据根目录只有一个来源**：`app/main/data-root.ts`（`ABB_DATA_ROOT` > 打包时 exe 目录 > 开发时仓库根），经环境变量 `ABB_DATA_ROOT` 传给后端（`app/main/index.ts:52,61`）；后端在 `app/host/context.ts` 据此打开 `accounts.db`、`config.json`。其它代码不得按源码位置推算数据目录。
 - **数据访问走仓储**：账号、代理、历史、任务历史都经 `src/db/*-repository.ts`；不直接写 SQL，也不直接写文本文件（`已修改密钥.txt` 这类约定输出文件除外）。
 - **配置经注入的 `ConfigManager`**：敏感字段依赖它的加解密；配置对象由组合根创建后注入，不使用按源码位置定位文件的默认实例。
-- **窗口备注（note）由用户维护，自动化一律不读写。** 改密只写数据库与窗口 `password` 字段；导入 TOTP / 修改验证器只写窗口 `tfa_secret`。
-- **凭据**：密码、TOTP 密钥只在必要时经 `fill()` 写入页面，不进 AI 指令、日志、返回值、任务历史、提交；记录里一律掩码（如 `len=20 前4=XXXX…`）。
+- **窗口备注（note）由用户维护，自动化一律不读写。** 改密只写数据库与窗口 `password` 字段；导入 TOTP / 修改验证器只写窗口 `tfa_secret`。唯一例外：用户在账号页「备注」列点保存时经 `abb/accounts/updateNote` **只写 `note` 一个字段**（用户显式操作，不是自动化）。
+- **凭据**：密码、TOTP 密钥只在必要时经 `fill()` 写入页面，不进 AI 指令、日志、任务历史、提交；记录里一律掩码（如 `len=20 前4=XXXX…`）。**唯一例外**：账号列表（`abb/accounts/list`）按用户要求下发明文密码，只用于界面显示与复制；2FA 密钥与辅助邮箱原文仍不下发（验证码走独立通道，只回 6 位码）。
 
 ## 7. 引擎约定
 

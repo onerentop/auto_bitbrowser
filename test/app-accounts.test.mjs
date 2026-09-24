@@ -21,6 +21,7 @@ import { createBatchResult } from "../src/automation/batch/types.ts";
 import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
 import {
   applyLoginItem,
+  applyNoteUpdate,
   accountSorter,
   autoBindNotice,
   countLogin,
@@ -54,12 +55,16 @@ function fakeIx(windows, { fail = false } = {}) {
     async openProfile() {
       throw new Error("测试中不应打开窗口");
     },
+    async updateProfile(profileId, fields) {
+      calls.push(["updateProfile", profileId, fields]);
+      return true;
+    },
   };
 }
 
 /**
  * 建上下文：临时数据根（不碰仓库根的 config.json / accounts.db）、:memory: 库
- * @param {{ windows?: Array<{ profile_id: number, name: string, group_id?: number }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
+ * @param {{ windows?: Array<{ profile_id: number, name: string, group_id?: number, note?: string }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
  */
 function setup({ windows = [], ixFail = false, deps = {} } = {}) {
   const events = [];
@@ -165,7 +170,7 @@ test("list：窗口名 / 分组由 browser_profile_id 映射；分组与窗口�
   ]);
 });
 
-test("list：只下发有 / 无，不含密码 / 2FA 密钥 / 辅助邮箱原文", async () => {
+test("list：下发明文密码；2FA 密钥与辅助邮箱原文仍不下发", async () => {
   const s = setup();
   s.ctx.accountRepo().upsertAccount({ email: "a@x.com", password: "PW-SECRET-1", recovery_email: "rec@y.com", secret_key: "TOTPKEYXYZ" });
   s.ctx.accountRepo().upsertAccount({ email: "b@x.com" });
@@ -173,8 +178,12 @@ test("list：只下发有 / 无，不含密码 / 2FA 密钥 / 辅助邮箱原文
   const by = Object.fromEntries(r.rows.map((x) => [x.email, x]));
   assert.deepEqual([by["a@x.com"].has_password, by["a@x.com"].has_recovery_email, by["a@x.com"].has_secret], [true, true, true]);
   assert.deepEqual([by["b@x.com"].has_password, by["b@x.com"].has_recovery_email, by["b@x.com"].has_secret], [false, false, false]);
+  // 用户要求列表直接显示密码（可复制），因此密码明文下发；没有密码时为空串
+  assert.equal(by["a@x.com"].password, "PW-SECRET-1");
+  assert.equal(by["b@x.com"].password, "");
+  // 密钥与辅助邮箱原文仍然不下发
   const json = JSON.stringify(r);
-  for (const secret of ["PW-SECRET-1", "rec@y.com", "TOTPKEYXYZ"]) assert.ok(!json.includes(secret), `不应下发 ${secret}`);
+  for (const secret of ["rec@y.com", "TOTPKEYXYZ"]) assert.ok(!json.includes(secret), `不应下发 ${secret}`);
 });
 
 test("list：窗口超过一页时翻页取全量（以前只取前 500 个）", async () => {
@@ -1046,6 +1055,8 @@ const row = (o) => ({
   has_password: false,
   has_recovery_email: false,
   has_secret: false,
+  password: "",
+  note: "",
   last_login_at: null,
   same_name_windows: 0,
   updated_at: null,
@@ -1176,4 +1187,72 @@ test("applyLoginItem：成功 / 失败 / 跳过就地更新行；未匹配或状
   assert.equal(applyLoginItem(rows, item("a@x.com", "跳过")), rows, "跳过不动那一行");
   assert.equal(applyLoginItem(rows, item("ghost@x.com", "成功")), rows, "邮箱不在列表里");
   assert.equal(applyLoginItem(rows, item("a@x.com", "怪状态")), rows, "状态不认识");
+});
+
+// ==================== 密码 / 验证码 / 备注 ====================
+
+test("list：备注来自窗口（与首页同一份）；未绑定窗口的账号为空串", async () => {
+  const s = setup({ windows: [{ profile_id: 101, name: "win-a", note: "历史密码: abc" }] });
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "101" },
+    { email: "b@x.com" },
+  ]);
+  const r = await s.call(CH.accountsList);
+  const by = Object.fromEntries(r.rows.map((x) => [x.email, x]));
+  assert.equal(by["a@x.com"].note, "历史密码: abc");
+  assert.equal(by["b@x.com"].note, "");
+});
+
+test("tfaCodes：按数据库密钥算验证码；非法密钥进 invalid；无密钥不出现；只回码不回密钥", async () => {
+  const s = setup();
+  s.ctx.accountRepo().upsertAccount({ email: "ok@x.com", secret_key: "JBSWY3DPEHPK3PXP" });
+  s.ctx.accountRepo().upsertAccount({ email: "padded@x.com", secret_key: " JBSW Y3DP EHPK 3PXP " });
+  s.ctx.accountRepo().upsertAccount({ email: "bad@x.com", secret_key: "!!!!" });
+  s.ctx.accountRepo().upsertAccount({ email: "none@x.com" });
+  const r = await s.call(CH.accountsTfaCodes, ["ok@x.com", "padded@x.com", "bad@x.com", "none@x.com", "ghost@x.com", "ok@x.com"]);
+  assert.match(r.codes["ok@x.com"], /^\d{6}$/);
+  assert.equal(r.codes["padded@x.com"], r.codes["ok@x.com"], "密钥里的空白先去掉");
+  assert.deepEqual(r.invalid, ["bad@x.com"]);
+  assert.equal(r.codes["none@x.com"], undefined, "没有密钥的账号不出现在结果里");
+  assert.equal(r.codes["ghost@x.com"], undefined);
+  assert.ok(r.periodEndsAt > Date.now(), "给出本周期结束时间，界面据此重取");
+  assert.deepEqual(Object.keys(r).sort(), ["codes", "invalid", "periodEndsAt"], "绝不回密钥");
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsTfaCodes, 42), bad);
+  await assert.rejects(s.call(CH.accountsTfaCodes, ["a", 1]), bad);
+  await assert.rejects(s.call(CH.accountsTfaCodes, [""]), bad);
+  await assert.rejects(s.call(CH.accountsTfaCodes, Array.from({ length: 1001 }, (_, i) => `e${i}@x.com`)), bad, "超过上限");
+});
+
+test("updateNote：只写 note 一个字段；未绑定窗口 / 参数非法一律拒绝", async () => {
+  const s = setup();
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "101" },
+    { email: "b@x.com" },
+  ]);
+  assert.equal(await s.call(CH.accountsUpdateNote, "a@x.com", "第一行\n第二行"), true);
+  assert.deepEqual(s.ix.calls, [["updateProfile", 101, { note: "第一行\n第二行" }]], "只传 note，不碰 tfa_secret / name");
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsUpdateNote, "b@x.com", "x"), bad, "未绑定窗口");
+  await assert.rejects(s.call(CH.accountsUpdateNote, "ghost@x.com", "x"), bad);
+  await assert.rejects(s.call(CH.accountsUpdateNote, "a@x.com", 42), bad);
+  await assert.rejects(s.call(CH.accountsUpdateNote, "a@x.com", "x".repeat(2001)), bad, "太长");
+  await assert.rejects(s.call(CH.accountsUpdateNote, "", "x"), bad);
+  assert.equal(s.ix.calls.length, 1, "失败的调用不应碰到 ixBrowser");
+});
+
+test("applyNoteUpdate：只改那一行；邮箱不在列表里时原样返回", () => {
+  const rows = [row({ email: "a@x.com", note: "旧备注" }), row({ email: "b@x.com" })];
+  const next = applyNoteUpdate(rows, "a@x.com", "新备注\n第二行");
+  assert.notEqual(next, rows);
+  assert.deepEqual(
+    next.map((r) => [r.email, r.note]),
+    [
+      ["a@x.com", "新备注\n第二行"],
+      ["b@x.com", ""],
+    ],
+  );
+  assert.equal(applyNoteUpdate(rows, "ghost@x.com", "x"), rows);
 });

@@ -21,7 +21,8 @@ import {
   tableSorter as sorter,
 } from "../../../../shared/logic/home-list.ts";
 import { Panel } from "../../components/Section.tsx";
-import { TfaCell, useTfaCodes } from "./TfaCell.tsx";
+import { TfaCell, useTfaCodes } from "../../components/TfaCodeCell.tsx";
+import { IPC, invoke } from "../../lib/ipc.ts";
 
 export interface BrowserListCardProps {
   list: HomeBrowserList | null;
@@ -64,7 +65,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
     () => visible.filter((b) => b.hasTfa && b.profileId !== null).map((b) => b.profileId as number),
     [visible],
   );
-  const tfa = useTfaCodes(tfaIds, props.version);
+  const tfa = useTfaCodes(tfaIds, props.version, (keys) => invoke(IPC.invoke.homeTfaCodes, keys.map(Number)));
   const invalidSet = useMemo(() => new Set(tfa?.invalid ?? []), [tfa]);
 
   // 表格高度跟随容器（面板占满页面剩余高度）

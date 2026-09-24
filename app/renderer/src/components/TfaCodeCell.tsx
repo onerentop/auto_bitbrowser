@@ -1,36 +1,44 @@
 /**
- * 首页 2FA：验证码取数 hook + 表格单元格
+ * 2FA 验证码的共享取数 hook 与表格单元格（首页按窗口 ID、账号页按邮箱都用它）
  *
- * 密钥只在后端。这里按窗口 ID 向后端要验证码，在每个 30 秒周期结束后自动再要一次；
+ * 密钥只在后端。这里按 key 向后端要验证码，在每个 30 秒周期结束后自动再要一次；
  * 单元格自己每秒走倒计时（只有可视区域的几十个单元格在跑，不会让整张表每秒重渲染）。
  */
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { App, Progress, Space, Tooltip, Typography } from "antd";
-import { MAX_TFA_CODE_IDS, type HomeTfaCodes } from "../../../../shared/channels/home.ts";
-import { IPC, invoke } from "../../lib/ipc.ts";
-import { useTokens } from "../../theme/tokens.ts";
+import { MAX_TFA_CODE_IDS } from "../../../shared/channels/home.ts";
+import { useTokens } from "../theme/tokens.ts";
 
 const PERIOD_SECONDS = 30;
 
 /**
- * 取 ids 对应的当前验证码。ids 或 version（列表刷新次数）变化时立即重取；
- * 之后在 periodEndsAt 后 300ms 自动重取；出错 5 秒后重试。
+ * 取 keys 对应的当前验证码；keys 或 version（列表刷新次数）变化时立即重取，
+ * 之后在 periodEndsAt 后 300ms 自动重取，出错 5 秒后重试。
+ *
+ * keys 只用来判断「变没变」，真正的请求由调用方给的 fetch 决定（首页传窗口 ID、账号页传邮箱）。
  */
-export function useTfaCodes(ids: readonly number[], version: number): HomeTfaCodes | null {
-  const idsKey = ids.slice(0, MAX_TFA_CODE_IDS).join(",");
-  const [data, setData] = useState<HomeTfaCodes | null>(null);
+export function useTfaCodes<K extends string | number, D extends { periodEndsAt: number }>(
+  keys: readonly K[],
+  version: number,
+  fetch: (keys: string[]) => Promise<D>,
+): D | null {
+  const keysKey = keys.slice(0, MAX_TFA_CODE_IDS).join(",");
+  const [data, setData] = useState<D | null>(null);
+  // fetch 是实现细节（每个页面固定用一条通道），不进依赖数组，避免每次渲染重取
+  const fetchRef = useRef(fetch);
+  fetchRef.current = fetch;
 
   useEffect(() => {
-    if (!idsKey) {
+    if (!keysKey) {
       setData(null);
       return;
     }
-    const list = idsKey.split(",").map(Number);
+    const list = keysKey.split(",");
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = async (): Promise<void> => {
       try {
-        const res = await invoke(IPC.invoke.homeTfaCodes, list);
+        const res = await fetchRef.current(list);
         if (cancelled) return;
         setData(res);
         timer = setTimeout(() => void load(), Math.max(500, res.periodEndsAt - Date.now() + 300));
@@ -43,7 +51,7 @@ export function useTfaCodes(ids: readonly number[], version: number): HomeTfaCod
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [idsKey, version]);
+  }, [keysKey, version]);
 
   return data;
 }
@@ -64,6 +72,7 @@ function useSecondsLeft(periodEndsAt: number | null): number {
 }
 
 export interface TfaCellProps {
+  /** 有没有配 2FA 密钥（没有时显示「—」） */
   hasTfa: boolean;
   code: string | undefined;
   invalid: boolean;
