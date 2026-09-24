@@ -1,23 +1,25 @@
 /**
- * 渲染层入口：挂载 React，套上 Ant Design 的中文语言包与主题（深浅色随 theme store 切换）
+ * 渲染层入口：挂载 React，套上 Ant Design 的中文语言包与「值班台」主题（深浅色随 theme store 切换）
  */
-import { StrictMode, type ReactElement } from "react";
+import { StrictMode, useLayoutEffect, useMemo, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
-import { App as AntApp, ConfigProvider, theme } from "antd";
+import { App as AntApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { App } from "./App.tsx";
 import { useIsDark } from "./stores/theme.ts";
+import { applyCssVars, buildTheme } from "./theme/tokens.ts";
+import "./theme/app.css";
+
+/** 系统「减少动态效果」设置（启动时读取；改系统设置后重开应用生效） */
+const REDUCE_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function Root(): ReactElement {
   const dark = useIsDark();
+  const themeConfig = useMemo(() => buildTheme(dark, REDUCE_MOTION), [dark]);
+  // 自绘元素（任务坞进度条、焦点框、滚动条）用的 CSS 变量，绘制前写好，避免切换时闪一下
+  useLayoutEffect(() => applyCssVars(dark), [dark]);
   return (
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
-        algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: { colorPrimary: "#1677ff", borderRadius: 6 },
-      }}
-    >
+    <ConfigProvider locale={zhCN} theme={themeConfig}>
       <AntApp>
         <App />
       </AntApp>

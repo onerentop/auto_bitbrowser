@@ -1,12 +1,12 @@
 /**
- * 应用外壳：左侧导航 + 内容区 + 底部任务坞
+ * 应用外壳：左侧分组导航 + 状态灯 + 内容区 + 底部任务坞
  *
- * 左导航常驻，内容区随导航切换。
+ * 侧栏按 工作台 / Google 操作 / 工具 / 系统 分组；底部状态灯显示后端与 ixBrowser，点击进入运行状态页。
  * 不引路由库：页面只有几个，用 state 切换即可；切走的页面保持挂载（display:none），
  * 避免表格筛选、滚动位置等状态在切换时丢失。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Layout, Menu, Typography } from "antd";
+import { Layout, Menu, Typography, type MenuProps } from "antd";
 import {
   DashboardOutlined,
   DisconnectOutlined,
@@ -27,9 +27,12 @@ import { AccountsPage } from "./pages/AccountsPage.tsx";
 import { SettingsPage } from "./pages/SettingsPage.tsx";
 import { AiTaskPage } from "./pages/AiTaskPage.tsx";
 import { TotpImportPage } from "./pages/TotpImportPage.tsx";
-import { useIsDark } from "./stores/theme.ts";
+import { StatusLights } from "./components/StatusLights.tsx";
 import { useHostStatus } from "./stores/host-status.ts";
+import { setIxPolling } from "./stores/ix-status.ts";
+import { useTokens } from "./theme/tokens.ts";
 import { initThemeFromConfig } from "./pages/settings/theme-init.ts";
+import type { AiTaskKind } from "../../shared/channels/ai-tasks.ts";
 
 const { Sider, Content } = Layout;
 
@@ -48,60 +51,52 @@ type PageKey =
 
 interface PageDef {
   key: PageKey;
+  group: PageGroup;
   label: string;
   icon: ReactElement;
   render: () => ReactElement;
 }
 
-/** 导航顺序与文案（首页 → Google 专区 5 项 → 账号管理 → 导入 TOTP → 设置） */
+/** 侧栏分组（顺序即显示顺序） */
+const PAGE_GROUPS = ["工作台", "Google 操作", "工具", "系统"] as const;
+type PageGroup = (typeof PAGE_GROUPS)[number];
+
+/** AI 任务页（6 个导航项共用一个组件） */
+const aiPage = (key: PageKey, kind: AiTaskKind, label: string, icon: ReactElement): PageDef => ({
+  key,
+  group: "Google 操作",
+  label,
+  icon,
+  render: () => <AiTaskPage kind={kind} label={label} />,
+});
+
+/** 导航顺序与文案 */
 const PAGES: PageDef[] = [
-  { key: "home", label: "首页", icon: <HomeOutlined />, render: () => <HomePage /> },
-  {
-    key: "ai_replace_phone",
-    label: "替换手机号",
-    icon: <PhoneOutlined />,
-    render: () => <AiTaskPage kind="replace_phone" label="替换手机号" />,
-  },
-  {
-    key: "ai_replace_email",
-    label: "替换辅助邮箱",
-    icon: <MailOutlined />,
-    render: () => <AiTaskPage kind="replace_email" label="替换辅助邮箱" />,
-  },
-  {
-    key: "ai_modify_2sv",
-    label: "修改 2SV 手机",
-    icon: <SafetyOutlined />,
-    render: () => <AiTaskPage kind="modify_2sv" label="修改 2SV 手机" />,
-  },
-  {
-    key: "ai_modify_auth",
-    label: "修改验证器",
-    icon: <KeyOutlined />,
-    render: () => <AiTaskPage kind="modify_auth" label="修改验证器" />,
-  },
-  {
-    key: "ai_kick_devices",
-    label: "踢出设备",
-    icon: <DisconnectOutlined />,
-    render: () => <AiTaskPage kind="kick_devices" label="踢出设备" />,
-  },
-  {
-    key: "ai_change_password",
-    label: "修改密码",
-    icon: <LockOutlined />,
-    render: () => <AiTaskPage kind="change_password" label="修改密码" />,
-  },
-  { key: "accounts", label: "账号管理", icon: <TeamOutlined />, render: () => <AccountsPage /> },
-  { key: "totp", label: "导入 TOTP", icon: <QrcodeOutlined />, render: () => <TotpImportPage /> },
-  { key: "settings", label: "设置", icon: <SettingOutlined />, render: () => <SettingsPage /> },
-  { key: "status", label: "运行状态", icon: <DashboardOutlined />, render: () => <StatusPage /> },
+  { key: "home", group: "工作台", label: "窗口", icon: <HomeOutlined />, render: () => <HomePage /> },
+  { key: "accounts", group: "工作台", label: "账号", icon: <TeamOutlined />, render: () => <AccountsPage /> },
+  aiPage("ai_replace_phone", "replace_phone", "替换手机号", <PhoneOutlined />),
+  aiPage("ai_replace_email", "replace_email", "替换辅助邮箱", <MailOutlined />),
+  aiPage("ai_modify_2sv", "modify_2sv", "修改 2SV 手机", <SafetyOutlined />),
+  aiPage("ai_modify_auth", "modify_auth", "修改验证器", <KeyOutlined />),
+  aiPage("ai_kick_devices", "kick_devices", "踢出设备", <DisconnectOutlined />),
+  aiPage("ai_change_password", "change_password", "修改密码", <LockOutlined />),
+  { key: "totp", group: "工具", label: "导入 TOTP", icon: <QrcodeOutlined />, render: () => <TotpImportPage /> },
+  { key: "settings", group: "系统", label: "设置", icon: <SettingOutlined />, render: () => <SettingsPage /> },
+  { key: "status", group: "系统", label: "运行状态", icon: <DashboardOutlined />, render: () => <StatusPage /> },
 ];
+
+/** 侧栏菜单：按分组组装，分组标题用 antd Menu 的 group */
+const MENU_ITEMS: MenuProps["items"] = PAGE_GROUPS.map((g) => ({
+  type: "group" as const,
+  key: `group:${g}`,
+  label: g,
+  children: PAGES.filter((p) => p.group === g).map((p) => ({ key: p.key, label: p.label, icon: p.icon })),
+}));
 
 export function App(): ReactElement {
   const [page, setPage] = useState<PageKey>("home");
   const [visited, setVisited] = useState<Set<PageKey>>(() => new Set(["home"]));
-  const dark = useIsDark();
+  const t = useTokens();
   const hostReady = useHostStatus()?.state === "ready";
 
   // 启动时读取已保存的主题配置。
@@ -113,6 +108,12 @@ export function App(): ReactElement {
     void initThemeFromConfig();
   }, [hostReady]);
 
+  // 侧栏的 ixBrowser 状态灯：后端就绪时轮询，未就绪时停
+  useEffect(() => {
+    setIxPolling(hostReady);
+    return () => setIxPolling(false);
+  }, [hostReady]);
+
   const go = (key: PageKey): void => {
     setPage(key);
     setVisited((v) => (v.has(key) ? v : new Set(v).add(key)));
@@ -120,23 +121,30 @@ export function App(): ReactElement {
 
   return (
     <Layout style={{ height: "100vh" }}>
-      <Sider width={176} theme={dark ? "dark" : "light"} style={{ borderRight: "1px solid rgba(128,128,128,0.2)" }}>
-        <div style={{ padding: "16px 16px 8px" }}>
-          <Typography.Text strong style={{ fontSize: 15 }}>
-            ixBrowser 管理工具
-          </Typography.Text>
-        </div>
-        <Menu
-          mode="inline"
-          theme={dark ? "dark" : "light"}
-          selectedKeys={[page]}
-          items={PAGES.map((p) => ({ key: p.key, label: p.label, icon: p.icon }))}
-          onClick={(e) => go(e.key as PageKey)}
-          style={{ borderInlineEnd: "none" }}
-        />
+      <Sider width={208} style={{ borderRight: `1px solid ${t.line}` }}>
+        <nav aria-label="主导航" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div style={{ padding: "18px 20px 10px" }}>
+            <Typography.Text strong style={{ fontSize: 14, display: "block" }}>
+              ixBrowser 管理工具
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Google 账号批量管理
+            </Typography.Text>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            <Menu
+              mode="inline"
+              selectedKeys={[page]}
+              items={MENU_ITEMS}
+              onClick={(e) => go(e.key as PageKey)}
+              style={{ borderInlineEnd: "none" }}
+            />
+          </div>
+          <StatusLights onOpen={() => go("status")} />
+        </nav>
       </Sider>
       <Layout>
-        <Content style={{ overflow: "auto", padding: 16 }}>
+        <Content style={{ overflow: "auto", padding: "20px 24px" }}>
           {PAGES.filter((p) => visited.has(p.key)).map((p) => (
             <div key={p.key} style={{ display: p.key === page ? "block" : "none", height: "100%" }}>
               {p.render()}

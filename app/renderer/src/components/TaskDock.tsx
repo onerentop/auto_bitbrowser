@@ -1,15 +1,16 @@
 /**
- * 全局任务坞：底部状态条 + 日志抽屉 + 结果汇总弹窗
+ * 全局任务坞：底部状态条（运行时顶边一条细进度条）+ 日志抽屉 + 结果汇总弹窗
  *
- * 各页面的日志区、进度条与「停止」按钮统一收在这里。
+ * 各页面的日志区、进度与「停止」按钮统一收在这里。
  * 合成一个全局的即可，因为后端本来就只允许一个任务同时运行。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Button, Drawer, Modal, Progress, Space, Typography } from "antd";
+import { Button, Descriptions, Drawer, Modal, Space, Typography } from "antd";
 import { StopOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import type { TaskFinishedEvent } from "../../../shared/ipc.ts";
 import { describeError } from "../lib/ipc.ts";
 import { clearLogs, onTaskFinished, stopTask, useTaskState } from "../stores/task.ts";
+import { useTokens } from "../theme/tokens.ts";
 
 const OUTCOME_TEXT: Record<TaskFinishedEvent["outcome"], string> = {
   succeeded: "已完成",
@@ -64,6 +65,7 @@ function summarize(result: unknown): Array<[string, string]> {
 
 export function TaskDock(): ReactElement {
   const { running, logs } = useTaskState();
+  const t = useTokens();
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [finished, setFinished] = useState<TaskFinishedEvent | null>(null);
@@ -79,53 +81,58 @@ export function TaskDock(): ReactElement {
 
   const percent = running && running.total > 0 ? Math.round((running.current / running.total) * 100) : 0;
   const last = logs.at(-1);
+  const rows = finished ? summarize(finished.result) : [];
 
   return (
     <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "6px 16px",
-          borderTop: "1px solid rgba(128,128,128,0.2)",
-          minHeight: 40,
-        }}
-      >
+      <div style={{ background: t.surface, borderTop: `1px solid ${t.line}` }}>
+        {/* 全应用唯一的动效：任务运行时的细进度条（不知道总数时往复移动，减少动态效果时静止） */}
         {running ? (
-          <>
-            <Typography.Text strong>{running.label}</Typography.Text>
-            <Progress
-              percent={percent}
-              size="small"
-              style={{ width: 200, margin: 0 }}
-              format={() => (running.total > 0 ? `${running.current}/${running.total}` : "…")}
-            />
-            <Button
-              size="small"
-              danger
-              icon={<StopOutlined />}
-              loading={stopping}
-              onClick={() => {
-                setStopping(true);
-                stopTask().catch((e: unknown) => {
-                  setStopping(false);
-                  Modal.error({ title: "停止失败", content: describeError(e) });
-                });
-              }}
-            >
-              停止
-            </Button>
-          </>
-        ) : (
-          <Typography.Text type="secondary">空闲</Typography.Text>
-        )}
-        <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0 }}>
-          {last ? `${formatTime(last.at)}  ${last.message}` : ""}
-        </Typography.Text>
-        <Button size="small" icon={<UnorderedListOutlined />} onClick={() => setOpen(true)}>
-          日志（{logs.length}）
-        </Button>
+          <div
+            className="abb-dock-bar"
+            data-indeterminate={running.total > 0 ? "false" : "true"}
+            role="progressbar"
+            aria-label={running.label}
+            aria-valuemin={0}
+            aria-valuemax={running.total > 0 ? running.total : undefined}
+            aria-valuenow={running.total > 0 ? running.current : undefined}
+          >
+            <span style={running.total > 0 ? { width: `${percent}%` } : undefined} />
+          </div>
+        ) : null}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 16px 0 24px", minHeight: 38 }}>
+          {running ? (
+            <>
+              <Typography.Text strong>{running.label}</Typography.Text>
+              <Typography.Text type="secondary" className="abb-num">
+                {running.total > 0 ? `${running.current} / ${running.total}` : "进行中"}
+              </Typography.Text>
+              <Button
+                size="small"
+                danger
+                icon={<StopOutlined />}
+                loading={stopping}
+                onClick={() => {
+                  setStopping(true);
+                  stopTask().catch((e: unknown) => {
+                    setStopping(false);
+                    Modal.error({ title: "停止失败", content: describeError(e) });
+                  });
+                }}
+              >
+                {stopping ? "正在停止" : "停止"}
+              </Button>
+            </>
+          ) : (
+            <Typography.Text type="secondary">没有正在运行的任务</Typography.Text>
+          )}
+          <Typography.Text type="secondary" ellipsis style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+            {last ? `${formatTime(last.at)}  ${last.message}` : ""}
+          </Typography.Text>
+          <Button size="small" type="text" icon={<UnorderedListOutlined />} onClick={() => setOpen(true)}>
+            日志 {logs.length}
+          </Button>
+        </div>
       </div>
 
       <Drawer
@@ -140,34 +147,33 @@ export function TaskDock(): ReactElement {
           </Button>
         }
       >
-        <pre style={{ margin: 0, fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+        <pre className="abb-mono" style={{ margin: 0, fontSize: 12, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
           {logs.map((l) => `${formatTime(l.at)}  ${l.message}`).join("\n")}
         </pre>
         <div ref={bottomRef} />
       </Drawer>
 
       <Modal
-        title={finished ? `${finished.label} · ${OUTCOME_TEXT[finished.outcome]}` : ""}
+        title={finished ? `${finished.label}：${OUTCOME_TEXT[finished.outcome]}` : ""}
         open={finished !== null}
         onCancel={() => setFinished(null)}
         footer={
           <Space>
             <Button onClick={() => setOpen(true)}>查看日志</Button>
             <Button type="primary" onClick={() => setFinished(null)}>
-              确定
+              知道了
             </Button>
           </Space>
         }
       >
-        {finished?.error ? <Typography.Text type="danger">{finished.error}</Typography.Text> : null}
-        {finished
-          ? summarize(finished.result).map(([k, v]) => (
-              <div key={k}>
-                <Typography.Text type="secondary">{k}：</Typography.Text>
-                <Typography.Text>{v}</Typography.Text>
-              </div>
-            ))
-          : null}
+        {finished?.error ? (
+          <Typography.Paragraph type="danger" style={{ marginBottom: 12 }}>
+            {finished.error}
+          </Typography.Paragraph>
+        ) : null}
+        {finished && rows.length > 0 ? (
+          <Descriptions size="small" column={1} bordered items={rows.map(([k, v], i) => ({ key: i, label: k, children: v }))} />
+        ) : null}
       </Modal>
     </>
   );

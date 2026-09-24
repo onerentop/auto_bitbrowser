@@ -1,0 +1,76 @@
+/*
+ * 全局样式（「值班台」设计系统）：只放 antd 主题覆盖不到的东西。
+ * 颜色来自 tokens.ts 写到 <html> 上的 --abb-* 变量（applyCssVars），深浅色随主题切换。
+ */
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字对齐：表格、统计、计数 */
+.ant-table,
+.ant-statistic,
+.ant-progress-text,
+.ant-descriptions,
+.abb-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 等宽：只用于 2FA 验证码、窗口 ID、日志 */
+.abb-mono {
+  font-family: var(--abb-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 键盘焦点始终可见（鼠标点击不出现） */
+:focus-visible {
+  outline: 2px solid var(--abb-indigo);
+  outline-offset: 2px;
+}
+
+/* 细滚动条，颜色跟随分隔线 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--abb-line) transparent;
+}
+
+/* 任务坞进度条：不定进度时一段色块往复移动 */
+@keyframes abb-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.abb-dock-bar {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: var(--abb-line);
+}
+
+.abb-dock-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--abb-indigo);
+  transition: width 0.3s ease-out;
+}
+
+.abb-dock-bar[data-indeterminate="true"] > span {
+  width: 25%;
+  animation: abb-indeterminate 1.4s ease-in-out infinite;
+}
+
+/* 系统开启「减少动态效果」时：antd 组件的动效由主题 token.motion 关闭（见 tokens.ts），这里只处理自绘的进度条 */
+@media (prefers-reduced-motion: reduce) {
+  .abb-dock-bar > span {
+    transition: none;
+  }
+  .abb-dock-bar[data-indeterminate="true"] > span {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
