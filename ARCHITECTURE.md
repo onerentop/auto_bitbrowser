@@ -105,7 +105,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 
 ### 3.3 规则表
 
-每条规则对应 `.dependency-cruiser.cjs` 里的同名规则（C2 接入后生效）。
+每条规则对应 `.dependency-cruiser.cjs` 里的同名规则，`pnpm run check:deps` 检查（有 error 即非零退出）。
 
 | 规则名 | 级别 | 内容 |
 |---|---|---|
@@ -191,7 +191,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 | `pnpm run typecheck:app` | 主进程 / 后端 / 预加载（`tsconfig.node.json`）与渲染层（`tsconfig.web.json`）类型检查；`app/shared` 两边都查 |
 | `pnpm test` | 全量单测 |
 | `pnpm run build:app` | electron-vite 构建（本项目没有打包配置，只构建到 `out/`）；构建后 `out/main/index.js` 不得出现 `IxBrowserClient` / `stagehand` / `playwright` |
-| `pnpm run check:deps` | 依赖规则（§3），**待 C2 接入** |
+| `pnpm run check:deps` | 依赖规则（§3）：0 个 error |
 | `pnpm run typecheck:test` | 测试代码类型检查，**待 C5 接入** |
 
 ## 9. 当前偏差
@@ -200,10 +200,6 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 
 | # | 偏差 | 违反 | 负责子任务 |
 |---|---|---|---|
-| D1 | 渲染层 5 处直接引用 `src/application`：`app/renderer/src/pages/HomePage.tsx:21`、`pages/home/BrowserListCard.tsx:20`、`pages/settings/AccountsTab.tsx:29`、`pages/settings/BatchImportModal.tsx:15`、`pages/settings/ProxiesTab.tsx:26`（引用 `home-tree.ts`、`settings-data.ts`，应移到 `app/shared/logic/`） | `renderer-only-shared` | C2 |
-| D2 | 依赖规则尚未接入门禁 | §3、§8 | C2 |
-| D3 | 按源码位置推算数据目录的默认配置实例与常量：`src/core/config-manager.ts` 的 `getBasePath` / `BASE_PATH` / 默认单例 `configManager`，`src/core/retry-helper.ts` 的 `BASE_PATH`；`src/automation/batch-account-processor.ts:174` 漏传配置时会静默使用默认单例 | §6 | C2 |
-| D4 | 无调用方的失败任务队列：`src/core/retry-helper.ts:287-462` | 死代码 | C2 |
 | D5 | handler 里做业务编排：`app/host/handlers/settings/proxies.ts:63-204`（直接创建仓储 / DataStore / ProxyAllocator 并做校验去重）、`settings/accounts.ts:103-112`（直接执行事务 SQL）、`home.ts:141-188`（自写批处理循环）、`accounts/plan.ts`（决策逻辑）、`ai-tasks.ts:153`（直接创建 `HistoryRepository`） | §4 | C3 |
 | D6 | handler 直接依赖 automation：`app/host/handlers/accounts.ts` → `src/automation/batch-account-processor.ts`、`src/automation/auto-health-check.ts` | `handlers-via-application` | C3 |
 | D7 | 设置页「删除选中」与账号管理页的删除规则不一致（按邮箱找窗口、不看删除结果）：`app/host/handlers/settings/accounts.ts:124-187`；应复用 `executeBatchDelete`（窗口以数据库绑定为准、先删账号成功才删窗口） | §4 | C3 |

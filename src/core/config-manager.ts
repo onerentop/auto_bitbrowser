@@ -4,11 +4,10 @@
  * load() 的明文迁移、全部 get_ai_* / set_ai_* 的取值优先级。
  *
  * 设计取舍：
- *   1. 单例形态：可实例化的 class + 默认单例 configManager + 模块级便捷函数委托单例。
- *      理由：可测试性（测试可注入独立的 configFile，互不污染）。
+ *   1. 形态：可实例化的 class，由组合根（app/host/context.ts）按数据根目录创建后注入。
+ *      不提供默认单例：配置文件位置只由数据根目录决定（ARCHITECTURE.md §6），不按源码位置推算。
  *   2. 无锁：Node 单线程事件循环下，这里的所有操作都是同步的，不存在交叉执行点。
- *   3. 配置文件路径：默认解析到仓库根的 config.json（本文件位于 src/core/ → 上溯两级），
- *      构造参数 configFile 允许注入（测试用）。
+ *   3. 配置文件路径：构造参数 configFile 必须传入（生产由组合根给出，测试用临时文件）。
  *   4. 打印：用可注入的 log（默认 console.log），文案逐字保留。
  *   5. b64/UTF-8 解码的**异常语义**：Node 的 Buffer 解码是静默容错的，为让非法输入
  *      照样落到 catch，这里显式校验 base64 长度并用 TextDecoder({fatal:true}) 解码。
@@ -24,8 +23,6 @@
  * getAiProviderApiKey 的二次解密。
  */
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 /** 配置树里的任意值（JSON 可序列化的任意对象） */
 export type ConfigValue = unknown;
@@ -34,18 +31,6 @@ export type ConfigValue = unknown;
 export type ConfigDict = Record<string, ConfigValue>;
 
 export type LogFn = (message: string) => void;
-
-/** 基础路径 = 仓库根（本文件在 src/core/，故上溯两级） */
-export function getBasePath(): string {
-  return path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
-}
-
-export const BASE_PATH: string = getBasePath();
-
-/** 配置文件名的默认值 */
-export function resolveDefaultConfigFile(): string {
-  return path.join(BASE_PATH, "config.json");
-}
 
 /** 混淆密钥，简单混淆，非高安全性加密 */
 export const OBFUSCATION_KEY = "ixBrowser_AutoManager_2024";
@@ -245,8 +230,8 @@ export function decryptSensitive(value: string): string {
 // ==================== ConfigManager ====================
 
 export interface ConfigManagerOptions {
-  /** 配置文件路径，默认 BASE_PATH/config.json（测试可注入） */
-  configFile?: string;
+  /** 配置文件路径（必填：生产由组合根按数据根目录给出，测试用临时文件） */
+  configFile: string;
   /** 日志输出，默认 console.log */
   log?: LogFn;
 }
@@ -262,7 +247,7 @@ export interface LlmConfigResult {
 
 /**
  * 配置管理器
- * 可实例化的普通类，模块底部导出默认单例 configManager。
+ * 可实例化的普通类；由组合根创建后注入，不提供默认单例。
  */
 export class ConfigManager {
   readonly configFile: string;
@@ -272,8 +257,8 @@ export class ConfigManager {
  /** None 表示尚未加载 */
   private config: ConfigDict | null = null;
 
-  constructor(options: ConfigManagerOptions = {}) {
-    this.configFile = options.configFile ?? resolveDefaultConfigFile();
+  constructor(options: ConfigManagerOptions) {
+    this.configFile = options.configFile;
     this.log = options.log ?? ((msg: string) => console.log(msg));
   }
 
@@ -385,7 +370,7 @@ export class ConfigManager {
 
   /**
  * 获取配置项，支持嵌套 key
-   * 例如: configManager.get("timeouts.page_load", 30)
+   * 例如: config.get("timeouts.page_load", 30)
    *
    * 参数默认值：defaultValue 默认为 null（JSON 语义一致）。
    * ⚠ 返回的是**内部对象的引用**（不深拷贝），调用方修改会直接改到配置树。
@@ -411,7 +396,7 @@ export class ConfigManager {
 
   /**
  * 设置配置项，支持嵌套 key
-   * 例如: configManager.set("timeouts.page_load", 30)
+   * 例如: config.set("timeouts.page_load", 30)
    *
    * 中间节点是标量时显式抛 TypeError。
    */
@@ -801,39 +786,4 @@ export class ConfigManager {
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-// ==================== 默认单例 + 模块级便捷函数 ====================
-
-/** 默认单例 */
-export const configManager = new ConfigManager();
-
-export function load(): ConfigDict {
-  return configManager.load();
-}
-
-export function save(config?: ConfigDict | null): void {
-  configManager.save(config);
-}
-
-export function get(key: string, defaultValue: ConfigValue = null): ConfigValue {
-  return configManager.get(key, defaultValue);
-}
-
-export function set(key: string, value: ConfigValue): void {
-  configManager.set(key, value);
-}
-
-export function reload(): ConfigDict {
-  return configManager.reload();
-}
-
-/** 模块级便捷函数 get_config */
-export function getConfig(key: string, defaultValue: ConfigValue = null): ConfigValue {
-  return configManager.get(key, defaultValue);
-}
-
-/** 模块级便捷函数 set_config */
-export function setConfig(key: string, value: ConfigValue): void {
-  configManager.set(key, value);
 }

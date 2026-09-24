@@ -12,8 +12,6 @@ import { TaskRunner, createLogProgressTracker, toCloneable } from "../app/host/t
 import { createHostContext } from "../app/host/context.ts";
 import { mergeHandlers } from "../app/host/handlers/index.ts";
 import { resolveDataRoot } from "../app/main/data-root.ts";
-import { getBasePath } from "../src/core/config-manager.ts";
-import { BASE_PATH } from "../src/core/retry-helper.ts";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -179,15 +177,13 @@ test("resolveDataRoot：ABB_DATA_ROOT 优先；打包取 exe 目录；开发取 
   assert.equal(resolveDataRoot({ ...base, isPackaged: true, env: {} }).replace(/\\/g, "/"), "C:/app");
 });
 
-test("源码运行时 getBasePath / BASE_PATH / 开发态数据根目录一致，都是 package.json 所在目录", () => {
-  // 三处各自推算「仓库根」：config.json、failed_tasks.json、accounts.db 必须落在同一个目录。
+test("开发态数据根目录就是 package.json 所在目录（运行时数据位置的唯一来源）", () => {
+  // config.json / accounts.db 都只从这里取位置；不得再有代码按源码位置自己推算（ARCHITECTURE.md §6）。
   const appRoot = fileURLToPath(new URL("..", import.meta.url));
   assert.ok(existsSync(join(appRoot, "package.json")), `测试前提：${appRoot} 下应有 package.json`);
   const norm = (p) => resolve(p).replace(/\\/g, "/").replace(/\/$/, "").toLowerCase();
-  assert.equal(norm(getBasePath()), norm(appRoot), "config-manager 的 getBasePath");
-  assert.equal(norm(BASE_PATH), norm(appRoot), "retry-helper 的 BASE_PATH");
   const devRoot = resolveDataRoot({ env: {}, isPackaged: false, exePath: "C:/app/abb.exe", appPath: appRoot });
-  assert.equal(norm(devRoot), norm(appRoot), "data-root 的开发态数据根目录");
+  assert.equal(norm(devRoot), norm(appRoot));
 });
 
 // ==================== 建表 ====================

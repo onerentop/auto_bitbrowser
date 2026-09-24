@@ -144,8 +144,8 @@ auto_bitbrowser2/
 
 - **数据库优先**：账号状态改动走 `src/db/` 的 repository，不要直接写文本文件。
 - **运行时数据**（`accounts.db` / `config.json` / `已修改密钥.txt`）都在数据根目录（见 `ARCHITECTURE.md` §6），
-  开发时是仓库根目录；均已在 `.gitignore` 中，**不要提交**。`failed_tasks.json` 是旧版失败任务队列的遗留文件，
-  当前没有代码读写它（见 `ARCHITECTURE.md` §9 D4）。
+  开发时是仓库根目录；均已在 `.gitignore` 中，**不要提交**。数据目录只由 `app/main/data-root.ts` 决定，
+  不要按源码位置（`import.meta.url`）推算。`failed_tasks.json` 是旧版失败任务队列的遗留文件，已无代码读写。
 - 工作目录里的 `accounts.db`、`已修改密钥.txt` 是**明文真实数据**，不要外泄到日志或输出。
 
 ### ⚠️ 窗口备注（note）字段的约定
@@ -163,9 +163,10 @@ auto_bitbrowser2/
 
 ```powershell
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
-pnpm test                   # 全量单测（当前基线 549 通过 / 0 失败）
+pnpm test                   # 全量单测（当前基线 537 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
+pnpm run check:deps         # 分层依赖规则（ARCHITECTURE.md §3），0 个 error
 ```
 
 > **已移除**：`verify:prompts` 与 `verify:selectors` —— 它们的比对基准是 Python 源码（提示词逐条对拍、
@@ -185,7 +186,7 @@ pnpm run build:app          # 构建
 4. **配置读写**一律经 `src/core/config-manager.ts`（敏感字段依赖它的加解密）。
 5. **易失败操作**用 `src/core/retry-helper.ts`。
 6. **不要碰窗口备注**（见上文约定）。
-7. **改动后必须跑门禁**：见上文「测试与门禁」（`typecheck` + `typecheck:app` + `pnpm test` + `build:app`），全部通过再提交。
+7. **改动后必须跑门禁**：见上文「测试与门禁」（`typecheck` + `typecheck:app` + `pnpm test` + `build:app` + `check:deps`），全部通过再提交。
 8. **真机验证的规矩**（本项目一直在用）：
    - 先只读探针确认真实页面形态，再写代码；
    - **先红后绿**：先写能复现缺陷的测试，再修；

@@ -3,7 +3,7 @@
  *
  * 数据根目录（accounts.db / config.json 所在处）由主进程决定，经环境变量
  * ABB_DATA_ROOT 传进来（见 app/main/data-root.ts）。这里不自己猜路径：
- * src/core/config-manager.ts 的 getBasePath() 依赖 import.meta.url，打包后会指到 out/ 下。
+ * 按源码位置（import.meta.url）推算的路径在打包后会指到 out/ 下（ARCHITECTURE.md §6）。
  *
  * 数据库、配置都是**惰性**创建：第一次用到时才打开。这样即使库文件损坏，
  * 后端进程也能起来，错误以信封形式返回给界面，而不是启动即崩。

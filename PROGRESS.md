@@ -20,7 +20,7 @@
 - Stagehand 必须锁 3.7.3，不可升级（原因见第二章）
 - 窗口备注（note）字段由用户自己维护，自动化任务一律不读写它
 - 引擎判定必须锚定真实页面文本 / DOM / URL，不要相信 act() 的成功返回
-- 改动后必须跑：npm run typecheck + npm test + npm run typecheck:app
+- 改动后必须跑门禁：typecheck、typecheck:app、test、build:app、check:deps（见 ARCHITECTURE.md §8）
 ```
 
 ### 第二步：验证环境没坏
@@ -29,11 +29,13 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 549/549 通过
+pnpm test              # 应 537/537 通过
 pnpm run typecheck:app # 应无输出
+pnpm run build:app     # 应构建成功
+pnpm run check:deps    # 应 0 个 error
 ```
 
-三条全绿说明代码与文档一致，可以放心继续。
+全部通过说明代码与文档一致，可以放心继续。
 
 ### 工作目录速查
 
@@ -44,7 +46,7 @@ pnpm run typecheck:app # 应无输出
 | `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `src/` | 业务库（不依赖 Electron，可单独单测） |
 | `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `test/` | 单测（549 个，含 `app-*.test.mjs`） |
+| `test/` | 单测（537 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -53,7 +55,7 @@ pnpm run typecheck:app # 应无输出
 
 | 层 | 进度 | 职责 |
 |---|---|---|
-| `src/core` | ✅ 完成 | 配置（敏感字段加解密）/ 重试与失败队列 / 强随机密码 |
+| `src/core` | ✅ 完成 | 配置（敏感字段加解密）/ 重试 / 强随机密码 / TOTP 解析 |
 | `src/db` | ✅ 完成 | SQLite schema、连接、各 repository（账号 / 任务历史等） |
 | `src/engine` | ✅ 完成 | Stagehand 引擎门面 + `operations/`（登录 / 换号 / 改 2SV / 改验证器 / 踢设备 / 改密码） |
 | `src/automation` | ✅ 完成 | 各 `auto-*` 业务流程 |
@@ -64,8 +66,10 @@ pnpm run typecheck:app # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 549/549 通过
+pnpm test               # 537/537 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
+pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
+pnpm run check:deps     # 分层依赖规则 0 个 error
 ```
 
 ## 二、关键决策与坑（重要，勿改）

@@ -7,7 +7,7 @@ import {
   parseAccountImportLine,
   parseImportText,
   type ImportedAccount,
-} from "../../../../src/application/settings-data.ts";
+} from "../../../shared/logic/settings-data.ts";
 import { deleteBrowserById, findBrowserByEmail, type IxWindowDeps } from "../../../../src/ixbrowser/window.ts";
 import {
   SETTINGS_INVOKE,

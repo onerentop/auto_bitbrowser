@@ -7,13 +7,13 @@
  *   - filterBrowserTree：按关键词过滤窗口树
  *   - selectAllVisible：全选当前可见项
  *   - selectedProfileIds：取得勾选的窗口 ID
- * 纯 TS，不依赖 node / DOM / electron，便于单测与渲染层直接引用。
+ * 纯 TS，不依赖 node / DOM / electron：属于共享内核（app/shared），Node 与浏览器两边都能跑。
  */
 import type {
   HomeBrowserNode,
   HomeGroupNode,
   HomeGroupOption,
-} from "../../app/shared/channels/home.ts";
+} from "../channels/home.ts";
 
 /** 默认分组 ID（ixBrowser 固有分组） */
 export const DEFAULT_GROUP_ID = 1;

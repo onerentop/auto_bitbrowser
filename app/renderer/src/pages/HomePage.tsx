@@ -18,7 +18,7 @@ import {
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
-import { defaultGroupOptions, refreshSummary } from "../../../../src/application/home-tree.ts";
+import { defaultGroupOptions, refreshSummary } from "../../../shared/logic/home-tree.ts";
 import { ConfigCard } from "./home/ConfigCard.tsx";
 import { BrowserListCard } from "./home/BrowserListCard.tsx";
 

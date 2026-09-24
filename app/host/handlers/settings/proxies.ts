@@ -14,7 +14,7 @@ import {
   parseProxyImportLine,
   proxyKey,
   type ImportedProxy,
-} from "../../../../src/application/settings-data.ts";
+} from "../../../shared/logic/settings-data.ts";
 import { ProxyRepository } from "../../../../src/db/proxy-repository.ts";
 import { DataStore, makeProxyInfo, type ProxyInfo } from "../../../../src/services/data-store.ts";
 import { DEFAULT_MAX_WINDOWS_PER_IP, ProxyAllocator } from "../../../../src/services/proxy-allocator.ts";

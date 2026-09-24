@@ -15,26 +15,16 @@
  *   3. `withRetry(fn, options)` 是高阶函数，不是装饰器：
  *      TS 的 decorator 只能修饰 class 成员，修饰不了自由函数。
  *      `withRetryAsync` 作为同义导出保留。
- *   4. `FailedTaskQueue` 是可实例化的类 + 默认单例 `failedTaskQueue`，
- *      并导出模块级便捷函数委托给单例。
- *      无锁：Node 单线程，且这里全是同步操作。
- *      不在 import 期自动加载队列，需要时显式调用 `failedTaskQueue.load()`。
- *   5. 日志 → 注入的 `LogFn`，默认 `noopLog`（静默），文案逐字保留。
- *   6. `sleep(delay)` → 可注入的 `sleepImpl(ms)`（默认 setTimeout），
+ *   4. 日志 → 注入的 `LogFn`，默认 `noopLog`（静默），文案逐字保留。
+ *   5. `sleep(delay)` → 可注入的 `sleepImpl(ms)`（默认 setTimeout），
  *      单测可传假 sleep 避免真等。**延迟单位是秒，sleepImpl 参数是毫秒**
  *      （与 engine/playwright-compat.ts 的约定一致），转换在调用点 `delay * 1000`。
- *   7. `LogFn` / `noopLog` 在本文件内声明，避免 core 层依赖上层模块。
+ *   6. `LogFn` / `noopLog` 在本文件内声明，避免 core 层依赖上层模块。
  *
  * 已知行为（看着可疑但没改）：
  *   - `calculateDelay` **没有抖动（jitter）**，就是纯指数退避 + 上限截断。
  *   - `executeAsync` 失败时返回的是**错误消息字符串**而不是错误对象。
- *   - `FailedTaskQueue.add` 命中已有任务时只 +1 重试次数并刷新时间，不追加新任务。
- *   - `FailedTaskQueue.load` 在文件不存在时**保持现有内存状态不变**（不清空）。
  */
-
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // ==================== 日志与 sleep 注入 ====================
 
@@ -48,18 +38,6 @@ export const noopLog: LogFn = () => {};
 export type SleepFn = (ms: number) => Promise<void>;
 
 const defaultSleep: SleepFn = (ms) => new Promise<void>((r) => setTimeout(r, ms));
-
-// ==================== 基础路径 ====================
-
-/**
- * 基础路径：打包态取 exe 目录，否则取仓库根。
- * Node 侧固定按源码位置推导：src/core → 上两级 = 仓库根。
- */
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const BASE_PATH = path.resolve(HERE, "..", "..");
-
-/** 失败任务队列的持久化文件（仓库根 / failed_tasks.json） */
-export const FAILED_TASKS_FILE = path.join(BASE_PATH, "failed_tasks.json");
 
 // ==================== 重试判定 ====================
 
@@ -261,201 +239,6 @@ export class RetryHelper {
     const errMsg = hasError ? errorMessage(lastError) : "未知错误";
     return [false, errMsg] as const;
   }
-}
-
-// ==================== FailedTaskQueue ====================
-
-/** 失败任务记录。字段名保持 snake_case（与写出的 JSON 完全一致） */
-export interface FailedTask {
-  id: string;
-  type: string;
-  context: Record<string, unknown>;
-  failed_at: string;
-  retry_count: number;
-}
-
-/** 格式化本地时间戳：YYYY-MM-DD HH:MM:SS */
-function formatTimestamp(d: Date = new Date()): string {
-  const p = (n: number, w = 2) => String(n).padStart(w, "0");
-  return (
-    `${p(d.getFullYear(), 4)}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
-    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-  );
-}
-
-/** 工厂：字段全必需，默认值在这里补齐 */
-export function createFailedTask(
-  overrides: Partial<FailedTask> & { id: string; type: string },
-): FailedTask {
-  return {
-    id: overrides.id,
-    type: overrides.type,
-    context: overrides.context ?? {},
-    failed_at: overrides.failed_at ?? formatTimestamp(),
-    retry_count: overrides.retry_count ?? 0,
-  };
-}
-
-export interface FailedTaskQueueOptions {
-  /** 持久化文件路径，默认仓库根 / failed_tasks.json */
-  filePath?: string;
-  /** 日志回调 */
-  logCallback?: LogFn;
-  /** 时间戳生成，测试可注入 */
-  now?: () => Date;
-}
-
-/**
- * 失败任务队列（实例 + 默认单例）
- */
-export class FailedTaskQueue {
-  readonly filePath: string;
-
-  private tasks: FailedTask[] = [];
-  private readonly logCallback: LogFn;
-  private readonly now: () => Date;
-
-  constructor(options: FailedTaskQueueOptions = {}) {
-    this.filePath = options.filePath ?? FAILED_TASKS_FILE;
-    this.logCallback = options.logCallback ?? noopLog;
-    this.now = options.now ?? (() => new Date());
-  }
-
-  /**
-   * 添加失败任务。
-   * 已存在（id + type 均相同）时只把 retry_count +1 并刷新 failed_at，不追加新记录。
-   */
-  add(taskId: string, taskType: string, context: Record<string, unknown> | null = null): void {
-    const failedAt = formatTimestamp(this.now());
-
-    for (const t of this.tasks) {
-      if (t.id === taskId && t.type === taskType) {
-        t.retry_count += 1;
-        t.failed_at = failedAt;
-        return;
-      }
-    }
-
-    this.tasks.push({
-      id: taskId,
-      type: taskType,
-      context: context ?? {},
-      failed_at: failedAt,
-      retry_count: 0,
-    });
-  }
-
-  /** 移除任务（成功后调用）。taskType 省略时移除该 id 的全部类型 */
-  remove(taskId: string, taskType: string | null = null): void {
-    this.tasks = this.tasks.filter(
-      (t) => !(t.id === taskId && (taskType === null || t.type === taskType)),
-    );
-  }
-
-  /** 获取所有失败任务（返回浅拷贝数组，改动不影响内部状态） */
-  getAll(taskType: string | null = null): FailedTask[] {
-    if (taskType) return this.tasks.filter((t) => t.type === taskType);
-    return [...this.tasks];
-  }
-
-  /** 获取失败任务的 ID 列表 */
-  getIds(taskType: string | null = null): string[] {
-    return this.getAll(taskType).map((t) => t.id);
-  }
-
-  /** 获取失败任务数量 */
-  count(taskType: string | null = null): number {
-    return this.getAll(taskType).length;
-  }
-
-  /** 清空失败任务（可按类型） */
-  clear(taskType: string | null = null): void {
-    if (taskType) {
-      this.tasks = this.tasks.filter((t) => t.type !== taskType);
-    } else {
-      this.tasks = [];
-    }
-  }
-
-  /** 保存到文件（JSON，2 空格缩进，无结尾换行） */
-  save(): void {
-    try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.tasks, null, 2), "utf-8");
-    } catch (e) {
-      this.logCallback(`[FailedTaskQueue] 保存失败: ${errorMessage(e)}`);
-    }
-  }
-
-  /**
-   * 从文件加载。
-   * 文件不存在 → 保持现状不变；读/解析失败 → 清空为 []。
-   * 非数组的顶层值按「加载失败」处理并清空（TS 类型上不允许非数组）。
-   */
-  load(): void {
-    if (!fs.existsSync(this.filePath)) return;
-    try {
-      const raw = fs.readFileSync(this.filePath, "utf-8");
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) throw new Error("failed_tasks.json 顶层不是数组");
-      this.tasks = parsed as FailedTask[];
-    } catch (e) {
-      this.logCallback(`[FailedTaskQueue] 加载失败: ${errorMessage(e)}`);
-      this.tasks = [];
-    }
-  }
-}
-
-/**
- * 默认单例。
- * 注意：这里不在 import 期自动加载队列，需要恢复历史失败任务时请显式调用
- * `failedTaskQueue.load()`。
- */
-export const failedTaskQueue = new FailedTaskQueue();
-
-// —— 模块级便捷函数（camelCase 化），全部委托给单例 ——
-
-/** 对应 FailedTaskQueue.add */
-export function add(
-  taskId: string,
-  taskType: string,
-  context: Record<string, unknown> | null = null,
-): void {
-  failedTaskQueue.add(taskId, taskType, context);
-}
-
-/** 对应 FailedTaskQueue.remove */
-export function remove(taskId: string, taskType: string | null = null): void {
-  failedTaskQueue.remove(taskId, taskType);
-}
-
-/** 对应 FailedTaskQueue.get_all */
-export function getAll(taskType: string | null = null): FailedTask[] {
-  return failedTaskQueue.getAll(taskType);
-}
-
-/** 对应 FailedTaskQueue.get_ids */
-export function getIds(taskType: string | null = null): string[] {
-  return failedTaskQueue.getIds(taskType);
-}
-
-/** 对应 FailedTaskQueue.count */
-export function count(taskType: string | null = null): number {
-  return failedTaskQueue.count(taskType);
-}
-
-/** 对应 FailedTaskQueue.clear */
-export function clear(taskType: string | null = null): void {
-  failedTaskQueue.clear(taskType);
-}
-
-/** 对应 FailedTaskQueue.save */
-export function save(): void {
-  failedTaskQueue.save();
-}
-
-/** 对应 FailedTaskQueue.load */
-export function load(): void {
-  failedTaskQueue.load();
 }
 
 // ==================== withRetry（重试高阶函数） ====================

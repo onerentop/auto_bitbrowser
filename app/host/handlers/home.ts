@@ -29,7 +29,7 @@ import {
   resolveNamePrefix,
   type CreateWindowsDeps,
 } from "../../../src/application/create-windows.ts";
-import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../../src/application/home-tree.ts";
+import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../shared/logic/home-tree.ts";
 
 /** 配置键 */
 export const HOME_CONFIG_KEYS = {

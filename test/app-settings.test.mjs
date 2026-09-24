@@ -32,7 +32,7 @@ import {
   parseProxyImportLine,
   truncateInvalidLine,
   dedupeProxiesByKey,
-} from "../src/application/settings-data.ts";
+} from "../app/shared/logic/settings-data.ts";
 import { initDb } from "../src/db/schema.ts";
 import { ProxyRepository } from "../src/db/proxy-repository.ts";
 import { ProxyAllocator } from "../src/services/proxy-allocator.ts";

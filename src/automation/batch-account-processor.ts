@@ -17,7 +17,6 @@
  */
 
 import { RetryHelper, errorMessage } from "../core/retry-helper.ts";
-import { configManager } from "../core/config-manager.ts";
 import { Semaphore, gatherSettled, sleep as defaultSleep } from "../core/semaphore.ts";
 import {
   addFailed,
@@ -43,7 +42,7 @@ export type AccountDict = Record<string, unknown>;
 
 /**
  * 配置读取接口。
- * 真实实现：core/config-manager.ts 的 `configManager` 单例（方法名一致）。
+ * 真实实现：core/config-manager.ts 的 `ConfigManager`（由组合根创建后注入，方法名一致）。
  */
 export interface ConfigManagerLike {
   getLoginConcurrency(): number;
@@ -81,8 +80,8 @@ export type LoginFn = (args: {
 // ==================== 依赖集合 ====================
 
 export interface BatchProcessorDeps {
-  /** 默认 core/config-manager.ts 的 configManager 单例 */
-  config?: ConfigManagerLike;
+  /** 配置（必填）：生产由组合根注入 ConfigManager，测试注入假对象；不再有默认单例兜底 */
+  config: ConfigManagerLike;
   /**
    * 数据库连接。给了它就会自动构造 accountRepo，
    * 这是生产路径推荐的注入方式（没有进程级数据库单例，
@@ -142,7 +141,7 @@ function makeDefaultLoginFn(repo: AccountRepoLike | null): LoginFn {
  * 批量账号处理器
  *
  * 使用示例:
- *   const processor = new BatchAccountProcessor({ concurrency: 3 });
+ *   const processor = new BatchAccountProcessor({ concurrency: 3 }, { config, db });
  *   const result = await processor.batchLogin(accounts, browserIds);
  */
 export class BatchAccountProcessor {
@@ -169,9 +168,9 @@ export class BatchAccountProcessor {
       retryTimes?: number;
       callback?: ProgressCallback | null;
     } = {},
-    deps: BatchProcessorDeps = {},
+    deps: BatchProcessorDeps,
   ) {
-    this.config = deps.config ?? configManager;
+    this.config = deps.config;
     this.concurrency = options.concurrency ? options.concurrency : this.config.getLoginConcurrency();
     this.retryHelper = new RetryHelper({ maxRetries: options.retryTimes ?? 2, baseDelay: 2.0 });
     this.callback = options.callback ?? null;
@@ -385,7 +384,7 @@ export class BatchAccountProcessor {
 
 /**
  * 快速批量登录
- * deps 是可选的注入参数，便于测试。
+ * deps 必填（至少要有 config），便于测试注入。
  */
 export async function quickBatchLogin(
   accounts: AccountDict[],
@@ -395,7 +394,7 @@ export async function quickBatchLogin(
     callback?: ProgressCallback | null;
     maxRetries?: number | null;
   } = {},
-  deps: BatchProcessorDeps = {},
+  deps: BatchProcessorDeps,
 ): Promise<BatchResult> {
   const processor = new BatchAccountProcessor(
     { concurrency: options.concurrency ?? 3, callback: options.callback ?? null },

@@ -2,7 +2,7 @@
  * 批量导入对话框（多行文本 → 实时解析预览 → 导入）
  *
  * 多行文本 → 实时解析预览（#、各列、状态）→ 有效 / 无效计数 → 「导入」。
- * 预览用 src/application/settings-data.ts 的纯函数；后端导入时用同一函数重新解析，不信任预览结果。
+ * 预览用 app/shared/logic/settings-data.ts 的纯函数；后端导入时用同一函数重新解析，不信任预览结果。
  */
 import { useDeferredValue, useMemo, useState, type ReactElement } from "react";
 import { App, Card, Input, Modal, Space, Table, Typography } from "antd";
@@ -12,7 +12,7 @@ import {
   parseImportText,
   truncateInvalidLine,
   type LineParseResult,
-} from "../../../../../src/application/settings-data.ts";
+} from "../../../../shared/logic/settings-data.ts";
 import { describeError } from "../../lib/ipc.ts";
 
 export interface BatchImportModalProps<T> {

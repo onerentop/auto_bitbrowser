@@ -24,7 +24,7 @@ import {
   refreshSummary,
   selectAllVisible,
   selectedProfileIds,
-} from "../src/application/home-tree.ts";
+} from "../app/shared/logic/home-tree.ts";
 import { ConfigManager } from "../src/core/config-manager.ts";
 
 // ==================== 工具 ====================

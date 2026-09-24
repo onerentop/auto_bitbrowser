@@ -5,7 +5,7 @@
  *   一级：分组 `📁 {分组名} ({数量})`，三态勾选（checkStrictly=false，由子项推导），默认展开
  *   二级：名称 / 窗口ID / 2FA验证码（恒为空） / 备注
  * 勾选状态只记录窗口 key；分组的全选 / 半选由 antd 自动推导。
- * 过滤 / 全选 / 取选中 ID 全部走 src/application/home-tree.ts 的纯函数。
+ * 过滤 / 全选 / 取选中 ID 全部走 app/shared/logic/home-tree.ts 的纯函数。
  */
 import { useEffect, useMemo, useState, type Key, type ReactElement } from "react";
 import { Button, Card, Checkbox, Input, Space, Table, Typography } from "antd";
@@ -17,7 +17,7 @@ import {
   groupLabel,
   selectAllVisible,
   selectedProfileIds,
-} from "../../../../../src/application/home-tree.ts";
+} from "../../../../shared/logic/home-tree.ts";
 
 export interface BrowserListCardProps {
   groups: HomeGroupNode[];

@@ -23,7 +23,7 @@ import {
   PROXY_PREVIEW_COLUMNS,
   formatProxyPreviewRow,
   parseProxyImportLine,
-} from "../../../../../src/application/settings-data.ts";
+} from "../../../../shared/logic/settings-data.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { useHostStatus } from "../../stores/host-status.ts";
 import { BatchImportModal } from "./BatchImportModal.tsx";
