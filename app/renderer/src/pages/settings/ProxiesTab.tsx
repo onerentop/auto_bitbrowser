@@ -2,7 +2,7 @@
  * 「代理」标签（列表 / 增删改 / 批量导入 / 绑定详情）
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { Alert, App, Button, Card, Empty, Form, Input, List, Modal, Select, Space, Table, Tooltip, Typography } from "antd";
+import { Alert, App, Button, Empty, Form, Input, List, Modal, Select, Space, Table, Tooltip, Typography } from "antd";
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -27,14 +27,16 @@ import {
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { useHostStatus } from "../../stores/host-status.ts";
 import { BatchImportModal } from "../../components/BatchImportModal.tsx";
+import { Panel } from "../../components/Section.tsx";
+import { useTokens, type Palette } from "../../theme/tokens.ts";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 
-/** 使用情况颜色（满 / 已用 / 空闲） */
-function usageColor(p: ProxyListItemDto): string {
-  if (p.is_full) return "#f44336";
-  if (p.used_count > 0) return "#ff9800";
-  return "#4caf50";
+/** 使用情况颜色（满 / 已用 / 空闲），取状态令牌 */
+function usageColor(t: Palette, p: ProxyListItemDto): string {
+  if (p.is_full) return t.bad;
+  if (p.used_count > 0) return t.warn;
+  return t.ok;
 }
 
 /** 新增 / 编辑代理弹窗 */
@@ -161,7 +163,7 @@ function ProxyDetailModal(props: { proxyId: number | null; onClose: () => void }
               ]}
             >
               <Space direction="vertical" size={0}>
-                <Typography.Text>{b.browser_id}</Typography.Text>
+                <Typography.Text className="abb-mono">{b.browser_id}</Typography.Text>
                 {b.email ? <Typography.Text type="secondary">{b.email}</Typography.Text> : null}
               </Space>
             </List.Item>
@@ -195,6 +197,7 @@ export function ProxiesTab(): ReactElement {
   const [detailId, setDetailId] = useState<number | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const hostReady = useHostStatus()?.state === "ready";
+  const t = useTokens();
 
   /** 加载列表数据 */
   const load = useCallback(async () => {
@@ -284,7 +287,9 @@ export function ProxiesTab(): ReactElement {
       title: "使用情况",
       key: "usage",
       width: 90,
-      render: (_, p) => <span style={{ color: usageColor(p) }}>{`${p.used_count}/${p.max_count}`}</span>,
+      render: (_, p) => (
+        <span className="abb-num" style={{ color: usageColor(t, p) }}>{`${p.used_count}/${p.max_count}`}</span>
+      ),
     },
     {
       title: "操作",
@@ -307,28 +312,28 @@ export function ProxiesTab(): ReactElement {
   ];
 
   return (
-    <Space direction="vertical" size={12} style={{ width: "100%" }}>
-      <Card size="small">
-        <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
-          <Space wrap>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-              添加代理
-            </Button>
-            <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
-              批量导入
-            </Button>
-            <Button icon={<DeleteOutlined />} onClick={deleteSelected}>
-              删除选中
-            </Button>
-            <Button type="text" icon={<SyncOutlined />} onClick={() => void load()} loading={loading}>
-              刷新
-            </Button>
-          </Space>
-          <Typography.Text type="secondary">共 {items.length} 个代理</Typography.Text>
+    <Panel>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <Space wrap>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+            添加代理
+          </Button>
+          <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
+            批量导入
+          </Button>
+          <Button icon={<DeleteOutlined />} onClick={deleteSelected}>
+            删除选中
+          </Button>
+          <Button type="text" icon={<SyncOutlined />} onClick={() => void load()} loading={loading}>
+            刷新
+          </Button>
         </Space>
-      </Card>
+        <Typography.Text type="secondary">
+          {selected.length > 0 ? `已选 ${selected.length} 个，` : ""}共 <span className="abb-num">{items.length}</span> 个代理
+        </Typography.Text>
+      </div>
 
-      {error ? <Alert type="error" showIcon message={`加载代理失败: ${error}`} /> : null}
+      {error ? <Alert type="error" showIcon message={`加载代理失败: ${error}`} style={{ marginTop: 12 }} /> : null}
 
       <Table<ProxyListItemDto>
         size="small"
@@ -339,6 +344,7 @@ export function ProxiesTab(): ReactElement {
         rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]) }}
         pagination={{ defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200] }}
         locale={{ emptyText: <Empty description="暂无代理" /> }}
+        style={{ marginTop: 12 }}
       />
 
       <ProxyEditModal editing={editing} open={editOpen} onCancel={() => setEditOpen(false)} onSubmit={submitEdit} />
@@ -363,6 +369,6 @@ export function ProxiesTab(): ReactElement {
         onClose={() => setImportOpen(false)}
         onDone={() => void load()}
       />
-    </Space>
+    </Panel>
   );
 }

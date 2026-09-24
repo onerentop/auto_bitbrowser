@@ -5,7 +5,7 @@
  * 预览用 app/shared/logic/settings-data.ts 的纯函数；后端导入时用同一函数重新解析，不信任预览结果。
  */
 import { useDeferredValue, useMemo, useState, type ReactElement } from "react";
-import { App, Card, Input, Modal, Space, Table, Typography } from "antd";
+import { App, Input, Modal, Space, Table, Typography } from "antd";
 import type { ImportResultDto } from "../../../shared/channels/settings.ts";
 import {
   countImportRows,
@@ -14,6 +14,7 @@ import {
   type LineParseResult,
 } from "../../../shared/logic/settings-data.ts";
 import { describeError } from "../lib/ipc.ts";
+import { useTokens } from "../theme/tokens.ts";
 
 export interface BatchImportModalProps<T> {
   open: boolean;
@@ -38,6 +39,7 @@ interface PreviewRow {
 
 export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactElement {
   const { message } = App.useApp();
+  const t = useTokens();
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const deferredText = useDeferredValue(text);
@@ -84,7 +86,7 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
   };
 
   const tableColumns = [
-    { title: "#", key: "no", width: 50, render: (_: unknown, r: PreviewRow) => r.key },
+    { title: "#", key: "no", width: 50, className: "abb-num", render: (_: unknown, r: PreviewRow) => r.key },
     ...columns.map((c, i) => ({
       title: c,
       key: `c${i}`,
@@ -94,8 +96,9 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
     {
       title: "状态",
       key: "status",
+      // 状态色走 antd 语义色（主题中映射到 ok / bad 令牌）
       render: (_: unknown, r: PreviewRow) => (
-        <Typography.Text style={{ color: r.ok ? "#4caf50" : "#f44336" }}>{r.status}</Typography.Text>
+        <Typography.Text type={r.ok ? "success" : "danger"}>{r.status}</Typography.Text>
       ),
     },
   ];
@@ -114,17 +117,18 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
       maskClosable={false}
     >
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
-        <Card size="small">
+        {/* 格式说明：浅底提示条，不再用卡片 */}
+        <div style={{ background: t.canvas, border: `1px solid ${t.line}`, borderRadius: 6, padding: "8px 12px" }}>
           <Typography.Text type="secondary">格式: {props.formatHint}</Typography.Text>
-        </Card>
-        <Typography.Text>请粘贴数据（每行一条记录）:</Typography.Text>
+        </div>
+        <Typography.Text>粘贴数据，每行一条记录</Typography.Text>
         <Input.TextArea
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="在此粘贴数据..."
           autoSize={{ minRows: 4, maxRows: 6 }}
         />
-        <Typography.Text>解析预览:</Typography.Text>
+        <Typography.Text style={{ marginTop: 4 }}>解析预览</Typography.Text>
         <Table<PreviewRow>
           size="small"
           rowKey="key"
@@ -134,7 +138,11 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
           scroll={{ y: 240 }}
         />
         <Typography.Text type="secondary">
-          有效: {counts.valid} | 无效: {counts.invalid}
+          有效 <Typography.Text type="success" className="abb-num">{counts.valid}</Typography.Text> 条，无效{" "}
+          <Typography.Text type={counts.invalid > 0 ? "danger" : "secondary"} className="abb-num">
+            {counts.invalid}
+          </Typography.Text>{" "}
+          条
         </Typography.Text>
       </Space>
     </Modal>

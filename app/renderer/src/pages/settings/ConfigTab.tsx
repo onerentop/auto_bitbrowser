@@ -1,25 +1,10 @@
 /**
- * 「配置」标签（分组卡片 + 表单，集中读写后端配置）
+ * 「配置」标签（一个面板内的分节表单，集中读写后端配置）
  *
- * 布局用 antd 重新组织（分组卡片 + 表单），字段、范围、默认值与文案沿用原有定义。
+ * 布局：顶部固定操作条（刷新 / 恢复默认 / 保存配置）+ 左对齐分节表单；字段、范围、默认值与文案沿用原有定义。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import {
-  Alert,
-  App,
-  AutoComplete,
-  Button,
-  Card,
-  Col,
-  Form,
-  Input,
-  InputNumber,
-  Row,
-  Select,
-  Space,
-  Tabs,
-  Typography,
-} from "antd";
+import { Alert, App, AutoComplete, Button, Form, Input, InputNumber, Select, Space, Tabs, Typography } from "antd";
 import { CopyOutlined, ReloadOutlined, SaveOutlined, SendOutlined, SyncOutlined } from "@ant-design/icons";
 import {
   SETTINGS_NUMBER_RANGES,
@@ -31,6 +16,8 @@ import {
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { useHostStatus } from "../../stores/host-status.ts";
 import { normalizeThemeMode, setThemeMode } from "../../stores/theme.ts";
+import { Panel, Section } from "../../components/Section.tsx";
+import { useTokens } from "../../theme/tokens.ts";
 
 const APP_PASSWORDS_URL = "https://myaccount.google.com/apppasswords";
 
@@ -112,6 +99,7 @@ export function ConfigTab(): ReactElement {
   const [applyingDir, setApplyingDir] = useState(false);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostReady = useHostStatus()?.state === "ready";
+  const t = useTokens();
 
   /** 从后端加载配置 */
   const load = useCallback(async () => {
@@ -304,7 +292,7 @@ export function ConfigTab(): ReactElement {
         </Form.Item>
         {!isGemini ? (
           <Form.Item label=" " colon={false}>
-            <Hint>💡 支持第三方 Claude API 服务，如 OpenRouter、Together 等</Hint>
+            <Hint>支持第三方 Claude API 服务，如 OpenRouter、Together 等</Hint>
           </Form.Item>
         ) : null}
         <Form.Item label=" " colon={false}>
@@ -322,25 +310,56 @@ export function ConfigTab(): ReactElement {
   };
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Space>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
-          刷新
-        </Button>
-        {!loaded && !loadError ? <Typography.Text type="secondary">等待后端就绪...</Typography.Text> : null}
-      </Space>
-      {loadError ? <Alert type="error" showIcon message="加载配置失败" description={loadError} /> : null}
-
-      <Form<FormValues>
-        form={form}
-        layout="horizontal"
-        labelCol={{ flex: "130px" }}
-        wrapperCol={{ flex: "auto" }}
-        initialValues={{ ...defaultFormValues(), data_dir: "" }}
-        disabled={!loaded}
+    <Panel padding={0}>
+      {/* 操作条固定在面板顶部：保存 / 恢复默认 / 刷新始终在同一位置 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          padding: "12px 16px",
+          borderBottom: `1px solid ${t.line}`,
+        }}
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Card size="small" title="🤖 AI Agent 配置 (多提供商)">
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {!loaded && !loadError ? "等待后端就绪..." : "修改后点「保存配置」写入；主题切换即时生效"}
+        </Typography.Text>
+        <Space wrap>
+          <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
+            刷新
+          </Button>
+          {/* 与改版前一致：配置加载完成前不可保存 / 恢复默认（原先由 Form disabled 连带禁用） */}
+          <Button icon={<SyncOutlined />} onClick={reset} disabled={!loaded}>
+            恢复默认
+          </Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} disabled={!loaded} onClick={() => void save()}>
+            保存配置
+          </Button>
+        </Space>
+      </div>
+
+      <div style={{ padding: 16 }}>
+        {loadError ? (
+          <Alert type="error" showIcon message="加载配置失败" description={loadError} style={{ marginBottom: 16 }} />
+        ) : null}
+
+        <Form<FormValues>
+          form={form}
+          layout="horizontal"
+          labelAlign="left"
+          labelCol={{ flex: "130px" }}
+          wrapperCol={{ flex: "auto" }}
+          initialValues={{ ...defaultFormValues(), data_dir: "" }}
+          disabled={!loaded}
+          style={{ maxWidth: 760 }}
+        >
+          <Section
+            first
+            title="AI Agent 配置（多提供商）"
+            description="AI Agent 用于智能浏览器自动化任务（修改2SV手机、替换辅助邮箱等）"
+          >
             <Form.Item name="ai_default_provider" label="默认提供商">
               <Select
                 style={{ width: 200 }}
@@ -355,72 +374,54 @@ export function ConfigTab(): ReactElement {
               activeKey={providerTab}
               onChange={(k) => setProviderTab(k as AiProviderName)}
               items={[
-                { key: "gemini", label: "🔷 Gemini", forceRender: true, children: providerForm("gemini") },
-                { key: "anthropic", label: "🟠 Anthropic/Claude", forceRender: true, children: providerForm("anthropic") },
+                { key: "gemini", label: "Gemini", forceRender: true, children: providerForm("gemini") },
+                { key: "anthropic", label: "Anthropic / Claude", forceRender: true, children: providerForm("anthropic") },
               ]}
             />
             <NumberField name="ai_max_steps" label="最大步骤" />
-            <Form.Item label=" " colon={false}>
-              <Hint>💡 AI Agent 用于智能浏览器自动化任务（修改2SV手机、替换辅助邮箱等）</Hint>
-            </Form.Item>
-          </Card>
+          </Section>
 
-          <Card size="small" title="Gmail 验证码邮箱（替换辅助邮箱功能）">
+          <Section
+            title="Gmail 验证码邮箱"
+            description="替换辅助邮箱功能用它收验证码；需在 Google 账号设置中生成「应用专用密码」"
+          >
             <Form.Item name="gmail_imap_email" label="Gmail 邮箱">
               <Input placeholder="example@gmail.com" />
             </Form.Item>
             <Form.Item name="gmail_imap_password" label="应用密码">
               <Input.Password placeholder="应用专用密码（非登录密码）" autoComplete="off" />
             </Form.Item>
-            <Form.Item label=" " colon={false}>
-              <Space direction="vertical" size={4}>
-                <Hint>提示: 需在 Google 账号设置中生成「应用专用密码」</Hint>
-                <Space>
-                  <Typography.Text style={{ color: "#1976D2", fontSize: 12 }}>
-                    获取应用密码: {APP_PASSWORDS_URL}
-                  </Typography.Text>
-                  <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => void copyLink()} disabled={false}>
-                    {copied ? "已复制!" : "复制链接"}
-                  </Button>
-                </Space>
+            <Form.Item label=" " colon={false} style={{ marginBottom: 0 }}>
+              <Space size={4} wrap>
+                <Hint>{`获取应用密码: ${APP_PASSWORDS_URL}`}</Hint>
+                <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => void copyLink()} disabled={false}>
+                  {copied ? "已复制" : "复制链接"}
+                </Button>
               </Space>
             </Form.Item>
-          </Card>
+          </Section>
 
-          <Row gutter={16}>
-            <Col xs={24} lg={12}>
-              <Card size="small" title="超时设置 (秒)" style={{ height: "100%" }}>
-                <NumberField name="timeout_page_load" label="页面加载" />
-                <NumberField name="timeout_status_check" label="状态检测" />
-                <NumberField name="timeout_iframe_wait" label="Iframe 等待" />
-              </Card>
-            </Col>
-            <Col xs={24} lg={12}>
-              <Card size="small" title="操作延迟 (秒)" style={{ height: "100%" }}>
-                <NumberField name="delay_after_login" label="登录后" />
-                <NumberField name="delay_after_offer" label="Offer 后" />
-                <NumberField name="delay_after_save" label="保存后" />
-              </Card>
-            </Col>
-          </Row>
+          <Section title="超时设置（秒）">
+            <NumberField name="timeout_page_load" label="页面加载" />
+            <NumberField name="timeout_status_check" label="状态检测" />
+            <NumberField name="timeout_iframe_wait" label="Iframe 等待" />
+          </Section>
 
-          <Row gutter={16}>
-            <Col xs={24} lg={12}>
-              <Card size="small" title="🌐 代理设置" style={{ height: "100%" }}>
-                <NumberField name="proxy_max_windows_per_ip" label="每IP最大窗口数" />
-                <Form.Item label=" " colon={false}>
-                  <Hint>提示: 批量创建窗口时，每个代理IP最多分配给指定数量的窗口</Hint>
-                </Form.Item>
-              </Card>
-            </Col>
-            <Col xs={24} lg={12}>
-              <Card size="small" title="其他设置" style={{ height: "100%" }}>
-                <NumberField name="default_thread_count" label="默认并发数" />
-              </Card>
-            </Col>
-          </Row>
+          <Section title="操作延迟（秒）">
+            <NumberField name="delay_after_login" label="登录后" />
+            <NumberField name="delay_after_offer" label="Offer 后" />
+            <NumberField name="delay_after_save" label="保存后" />
+          </Section>
 
-          <Card size="small" title="外观">
+          <Section title="代理设置" description="批量创建窗口时，每个代理 IP 最多分配给指定数量的窗口">
+            <NumberField name="proxy_max_windows_per_ip" label="每IP最大窗口数" />
+          </Section>
+
+          <Section title="其他设置">
+            <NumberField name="default_thread_count" label="默认并发数" />
+          </Section>
+
+          <Section title="外观">
             <Form.Item name="theme" label="应用主题">
               {/* 切换主题立即生效，点「保存配置」才持久化 */}
               <Select
@@ -429,9 +430,9 @@ export function ConfigTab(): ReactElement {
                 onChange={(v: string) => setThemeMode(normalizeThemeMode(v))}
               />
             </Form.Item>
-          </Card>
+          </Section>
 
-          <Card size="small" title="数据">
+          <Section title="数据" description="数据目录点「应用」后立即写入，不需要再保存配置">
             <Form.Item label="数据目录">
               <Space.Compact style={{ width: "100%" }}>
                 <Input
@@ -445,21 +446,12 @@ export function ConfigTab(): ReactElement {
                 </Button>
               </Space.Compact>
             </Form.Item>
-            <Form.Item name="data_separator" label="数据分隔符">
+            <Form.Item name="data_separator" label="数据分隔符" style={{ marginBottom: 0 }}>
               <Input placeholder="账号文件字段分隔符" style={{ width: 200 }} />
             </Form.Item>
-          </Card>
-
-          <Space style={{ width: "100%", justifyContent: "flex-end" }}>
-            <Button type="primary" icon={<SaveOutlined />} style={{ width: 150 }} loading={saving} onClick={() => void save()}>
-              保存配置
-            </Button>
-            <Button icon={<SyncOutlined />} style={{ width: 150 }} onClick={reset}>
-              恢复默认
-            </Button>
-          </Space>
-        </Space>
-      </Form>
-    </Space>
+          </Section>
+        </Form>
+      </div>
+    </Panel>
   );
 }

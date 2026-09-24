@@ -5,17 +5,18 @@
  * 上面是任务列表，选中一条后下面是该次运行的逐条目结果；右上角可导出 CSV。
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { App, Button, Card, Empty, Space, Table, Tag, Typography } from "antd";
+import { App, Button, Empty, Space, Table, Tag } from "antd";
 import { DownloadOutlined, SyncOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { TaskRunItemRow, TaskRunRow } from "../../../../shared/channels/task-history.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { onTaskFinished } from "../../stores/task.ts";
+import { Panel, Section } from "../../components/Section.tsx";
 
-/** 任务结果的颜色（与界面其它地方的成功/失败口径一致） */
+/** 任务结果的标签色：antd 语义色（主题里已映射到 ok / warn / bad 令牌） */
 function outcomeTag(outcome: string | null): ReactElement {
   const value = outcome ?? "";
-  const color = value === "succeeded" ? "green" : value === "stopped" ? "orange" : "red";
+  const color = value === "succeeded" ? "success" : value === "stopped" ? "warning" : "error";
   const label = value === "succeeded" ? "成功" : value === "stopped" ? "已停止" : value === "failed" ? "失败" : value || "-";
   return <Tag color={color}>{label}</Tag>;
 }
@@ -24,7 +25,7 @@ function itemStatusTag(status: string | null): ReactElement {
   const value = status ?? "";
   // 「跳过」等中间状态用中性色：它们既不算成功也不算失败
   const color =
-    value === "成功" ? "green" : value === "失败" || value === "错误" ? "red" : value === "处理中" ? "blue" : "default";
+    value === "成功" ? "success" : value === "失败" || value === "错误" ? "error" : value === "处理中" ? "processing" : "default";
   return <Tag color={color}>{value || "-"}</Tag>;
 }
 
@@ -100,12 +101,17 @@ export function TaskHistoryTab(): ReactElement {
   }, [message]);
 
   const runColumns: ColumnsType<TaskRunRow> = [
-    { title: "结束时间", dataIndex: "finished_at", width: 170, render: (v: string | null) => v ?? "-" },
+    {
+      title: "结束时间",
+      dataIndex: "finished_at",
+      width: 170,
+      render: (v: string | null) => <span className="abb-num">{v ?? "-"}</span>,
+    },
     { title: "任务", dataIndex: "label", ellipsis: true, render: (v: string | null) => v ?? "-" },
     { title: "结果", dataIndex: "outcome", width: 90, render: (v: string | null) => outcomeTag(v) },
-    { title: "总数", dataIndex: "total", width: 70 },
-    { title: "成功", dataIndex: "success_count", width: 70 },
-    { title: "失败", dataIndex: "failed_count", width: 70 },
+    { title: "总数", dataIndex: "total", width: 70, className: "abb-num" },
+    { title: "成功", dataIndex: "success_count", width: 70, className: "abb-num" },
+    { title: "失败", dataIndex: "failed_count", width: 70, className: "abb-num" },
     { title: "错误", dataIndex: "error", ellipsis: true, render: (v: string | null) => v ?? "" },
   ];
 
@@ -116,10 +122,17 @@ export function TaskHistoryTab(): ReactElement {
   ];
 
   return (
-    <Space direction="vertical" style={{ width: "100%" }} size="middle">
-      <Card
-        size="small"
-        title="任务历史"
+    <Panel>
+      <Section
+        first
+        title="最近任务"
+        description={
+          <>
+            每次批量任务（登录 / 5 个 AI 任务 / 导入 TOTP / 打开与删除窗口等）结束后，运行结果会落库；这里查看最近 100 次。
+            选中一行可看该次的逐账号结果，同一账号只保留最终状态。「总数」是条目数，「成功」「失败」只统计终态条目，
+            因此「跳过」等中间状态不计入这两列。
+          </>
+        }
         extra={
           <Space>
             <Button icon={<SyncOutlined />} onClick={() => void refresh()} loading={loading}>
@@ -131,31 +144,24 @@ export function TaskHistoryTab(): ReactElement {
           </Space>
         }
       >
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          每次批量任务（登录 / 5 个 AI 任务 / 导入 TOTP / 打开与删除窗口等）结束后，运行结果会落库；
-          这里查看最近 100 次。选中一行可看该次的逐账号结果，同一账号只保留**最终**状态。
-          「总数」是条目数，「成功」「失败」只统计终态条目，因此「跳过」等中间状态不计入这两列。
-        </Typography.Paragraph>
-        {runs.length === 0 ? (
-          <Empty description="还没有任务记录" />
-        ) : (
-          <Table<TaskRunRow>
-            rowKey="id"
-            size="small"
-            columns={runColumns}
-            dataSource={runs}
-            pagination={{ pageSize: 20, size: "small" }}
-            rowSelection={{
-              type: "radio",
-              selectedRowKeys: selectedRunId === null ? [] : [selectedRunId],
-              onChange: (keys) => setSelectedRunId(Number(keys[0])),
-            }}
-            onRow={(row) => ({ onClick: () => setSelectedRunId(row.id) })}
-          />
-        )}
-      </Card>
+        <Table<TaskRunRow>
+          rowKey="id"
+          size="small"
+          columns={runColumns}
+          dataSource={runs}
+          loading={loading}
+          locale={{ emptyText: <Empty description="还没有任务记录" /> }}
+          pagination={runs.length > 0 ? { pageSize: 20, size: "small" } : false}
+          rowSelection={{
+            type: "radio",
+            selectedRowKeys: selectedRunId === null ? [] : [selectedRunId],
+            onChange: (keys) => setSelectedRunId(Number(keys[0])),
+          }}
+          onRow={(row) => ({ onClick: () => setSelectedRunId(row.id), style: { cursor: "pointer" } })}
+        />
+      </Section>
 
-      <Card size="small" title="逐条目结果">
+      <Section title="逐条目结果">
         {selectedRunId === null ? (
           <Empty description="选中上面的一条任务" />
         ) : (
@@ -167,7 +173,7 @@ export function TaskHistoryTab(): ReactElement {
             pagination={{ pageSize: 20, size: "small" }}
           />
         )}
-      </Card>
-    </Space>
+      </Section>
+    </Panel>
   );
 }
