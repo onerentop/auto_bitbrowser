@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 547/547 通过
+pnpm test              # 应 548/548 通过
 pnpm run typecheck:app # 应无输出
 ```
 
@@ -43,7 +43,7 @@ pnpm run typecheck:app # 应无输出
 | `desktop/PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `desktop/src/` | 业务库（不依赖 Electron，可单独单测） |
 | `desktop/app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `desktop/test/` | 单测（547 个，含 `app-*.test.mjs`） |
+| `desktop/test/` | 单测（548 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -64,7 +64,7 @@ pnpm run typecheck:app # 应无输出
 ```powershell
 cd desktop
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 547/547 通过
+pnpm test               # 548/548 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 ```
 

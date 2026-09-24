@@ -271,6 +271,23 @@ test("runTotpImport：中途停止，剩余条目计入 skipped_count", async ()
   assert.ok(importFinishedLogLines(r).length > 0);
 });
 
+test("importFinishedLogLines：窗口写入计数如实写成 2FA 密钥，不再声称更新了窗口备注", () => {
+  // 导入只写窗口 tfa_secret、不碰备注；汇总若仍写「已更新 N 个窗口备注」，
+  // 用户会误以为自己手写的备注被改过。
+  const lines = importFinishedLogLines({
+    success_count: 1,
+    total_count: 1,
+    password_count: 0,
+    bind_count: 0,
+    ix_update_count: 1,
+    failed_list: [],
+    warning_list: [],
+    skipped_count: 0,
+  });
+  assert.ok(lines.includes("已写入 1 个窗口的 2FA 密钥"), lines.join("\n"));
+  assert.ok(!lines.some((l) => l.includes("备注")), lines.join("\n"));
+});
+
 // ==================== handler ====================
 
 function makeHandlers(rows = [], opts = {}) {

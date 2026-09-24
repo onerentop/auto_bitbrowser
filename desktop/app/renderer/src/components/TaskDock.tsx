@@ -38,7 +38,7 @@ const RESULT_LABELS: Record<string, string> = {
   deleted_windows: "已删除窗口",
   password_count: "写入密码",
   bind_count: "绑定窗口",
-  ix_update_count: "更新窗口备注",
+  ix_update_count: "写入窗口 2FA 密钥",
   success_rate: "成功率",
   duration_seconds: "耗时（秒）",
 };

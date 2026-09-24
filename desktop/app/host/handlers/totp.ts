@@ -2,7 +2,7 @@
  * TOTP 密钥导入页的后端 handler
  *
  * 纯逻辑在 src/application/totp-import.ts；这里只做参数校验、依赖装配与后台任务启动。
- * 导入可能耗时（逐个更新窗口备注），走 ctx.tasks 后台任务，避免触发主进程 30s 超时。
+ * 导入可能耗时（逐个写入窗口 2FA 密钥），走 ctx.tasks 后台任务，避免触发主进程 30s 超时。
  */
 import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
@@ -99,7 +99,7 @@ function requireImportItems(value: unknown): TotpImportItem[] {
 // ==================== handler 工厂 ====================
 
 export interface TotpHandlerDeps {
-  /** 测试注入：替换窗口列表 / 备注更新 */
+  /** 测试注入：替换窗口列表 / 窗口 2FA 密钥写入 */
   listWindows?: TotpImportDeps["listWindows"];
   updateProfile?: TotpImportDeps["updateProfile"];
 }

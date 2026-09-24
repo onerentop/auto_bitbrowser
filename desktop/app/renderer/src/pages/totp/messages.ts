@@ -39,7 +39,7 @@ export function importFinishedNotice(r: TotpImportResult): FinishedNotice {
   if (warningCount > 0) msg += `\n⚠ 警告 ${warningCount} 个（窗口更新失败）`;
   if (r.password_count > 0) msg += `\n已更新 ${r.password_count} 个密码`;
   if (r.bind_count > 0) msg += `\n已自动绑定 ${r.bind_count} 个窗口`;
-  if (r.ix_update_count > 0) msg += `\n已更新 ${r.ix_update_count} 个窗口备注`;
+  if (r.ix_update_count > 0) msg += `\n已写入 ${r.ix_update_count} 个窗口的 2FA 密钥`;
   // 停止是本地新增的能力；停止时补一行说明
   if (r.skipped_count > 0) msg += `\n已停止，${r.skipped_count} 个未处理`;
 

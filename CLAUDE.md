@@ -217,7 +217,7 @@ auto_bitbrowser2/
 ```powershell
 cd desktop
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
-pnpm test                   # 全量单测（当前基线 547 通过 / 0 失败）
+pnpm test                   # 全量单测（当前基线 548 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
 ```

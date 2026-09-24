@@ -135,7 +135,7 @@ export async function autoChangePassword(
       // 关键：Google 侧没确认成功 → 一个本地字段都不动
       if (!result.success) return [false, result.message || "修改密码失败"] as Result2;
 
-      log("Google 侧已确认更改，开始写回本地（数据库 / 窗口备注第 2 段 / 窗口密码字段）");
+      log("Google 侧已确认更改，开始写回本地（数据库 / 窗口密码字段）");
       const saved = await saveNewPassword({
         email,
         newPassword,

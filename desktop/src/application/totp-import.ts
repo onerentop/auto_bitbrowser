@@ -369,7 +369,7 @@ export function importFinishedLogLines(r: TotpImportResult): string[] {
   }
   if (r.password_count > 0) lines.push(`已更新 ${r.password_count} 个密码`);
   if (r.bind_count > 0) lines.push(`已自动绑定 ${r.bind_count} 个窗口`);
-  if (r.ix_update_count > 0) lines.push(`已更新 ${r.ix_update_count} 个窗口备注`);
+  if (r.ix_update_count > 0) lines.push(`已写入 ${r.ix_update_count} 个窗口的 2FA 密钥`);
   lines.push("=".repeat(40));
   return lines;
 }
