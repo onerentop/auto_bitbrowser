@@ -105,6 +105,8 @@ export function renderedCheckScript(selector: string): string {
   })()`;
 }
 
+export const TEXT_HIT_ATTRIBUTE = "data-abb-text-hit";
+
 /**
  * 页面内「按可见文本点击」脚本。
  *
@@ -113,16 +115,26 @@ export function renderedCheckScript(selector: string): string {
  * 并抛 StagehandElementNotFoundError，click() / jsClick() 只能静默返回 false。
  * 这里改为在页面里按可见文本找元素并派发 DOM 点击（真机已验证能触发导航与弹层按钮）。
  *
+ * 匹配模式 mode：
+ *   - `prefix`（默认）要求候选文本**以目标开头**，用于「保存」「下一步」这类按钮；
+ *   - `contains` 只要求**包含**目标，用于「Get a verification code from the Google Authenticator app」
+ *     这种前缀不确定的长句（真机 2026-09-24：登录停在「选择验证方式」页就是因为 prefix 找不到它）。
+ *
  * 选元素顺序（每一级都是为了不点错）：
- *   1. 只保留「可见 + 可点」且 innerText 以目标文本开头的候选；
- *   2. 有 innerText **恰好等于**目标文本的就只在这一层里挑（否则「保存更改」会抢走「保存」）；
+ *   1. 只保留「可见 + 可点」且文本命中模式的候选；
+ *   2. 有文本**恰好等于**目标文本的就只在这一层里挑（否则「保存更改」会抢走「保存」）；
  *   3. 再去掉「包含其它命中元素」的祖先（点在外层容器上事件不一定会冒泡到控件）；
  *   4. 最后优先 `<a href>`（Google 的条目就是链接），否则取子树最小的那个。
+ * 命中后会给元素打上 `data-abb-text-hit="1"` 标记，供「DOM 点击无效时改用坐标点击」兜底
+ * （真机教训：Google 的 Material 列表项对 DOM click() 不响应）。
  * 返回 { tag, href }；找不到返回 null。导出供单测校验。
  */
-export function textClickScript(text: string): string {
+export function textClickScript(text: string, mode: "prefix" | "contains" = "prefix"): string {
   return `(() => {
     const want = ${JSON.stringify(text)};
+    const mode = ${JSON.stringify(mode)};
+    const MARK = '${TEXT_HIT_ATTRIBUTE}';
+    for (const old of document.querySelectorAll('[' + MARK + ']')) old.removeAttribute(MARK);
     const isClickable = (el) => {
       const r = el.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return false;
@@ -134,11 +146,12 @@ export function textClickScript(text: string): string {
       return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
     };
     const label = (el) => (el.innerText || '').trim();
+    const hits = (el) => (mode === 'contains' ? label(el).includes(want) : label(el).startsWith(want));
     const candidates = Array.from(
       document.querySelectorAll(
         'a[href], button, [role="button"], [role="menuitem"], [role="link"], input[type="submit"], li',
       ),
-    ).filter((el) => isClickable(el) && label(el).startsWith(want));
+    ).filter((el) => isClickable(el) && hits(el));
     if (candidates.length === 0) return null;
 
     const exact = candidates.filter((el) => label(el) === want);
@@ -151,6 +164,7 @@ export function textClickScript(text: string): string {
     const target =
       pool.find((el) => el.tagName === 'A' && el.getAttribute('href')) ??
       pool.slice().sort((a, b) => a.children.length - b.children.length)[0];
+    target.setAttribute(MARK, '1');
     target.click();
     return { tag: target.tagName, href: target.getAttribute('href') };
   })()`;
@@ -410,12 +424,15 @@ export class StagehandGoogleEngine {
    * `locator(':is(a,button,[role="button"]):has-text("电话号码")').count() === 0`，
    * 而页面内 `el.click()` 能正常触发 Google 条目的导航。
    */
-  async clickByText(text: string): Promise<{ tag: string; href: string | null } | null> {
+  async clickByText(
+    text: string,
+    mode: "prefix" | "contains" = "prefix",
+  ): Promise<{ tag: string; href: string | null } | null> {
     const { page } = this.ensureReady();
     if (typeof page.evaluate !== "function") return null;
     try {
       const hit = await page.evaluate<{ tag: string; href: string | null } | null>(
-        textClickScript(text),
+        textClickScript(text, mode),
       );
       return hit ?? null;
     } catch {

@@ -18,8 +18,37 @@ function runScript(script, elements) {
     "getComputedStyle",
     `return ${script}`,
   );
-  return fn({ querySelectorAll: () => elements }, (el) => el.style);
+  const document = {
+    // 脚本开头会清掉上一次的标记（按属性选择器查）；假 DOM 里返回空数组即可
+    querySelectorAll: (selector) => (String(selector).includes("data-abb-text-hit") ? [] : elements),
+  };
+  return fn(document, (el) => el.style);
 }
+
+/** 真机（2026-09-24）这一项的完整文本，注意它是「Get a verification code from the …」开头 */
+const AUTH_OPTION_TEXT = "Get a verification code from the Google Authenticator app";
+
+test("clickByText 脚本：contains 模式能命中「Get a verification code from the Google Authenticator app」（真机登录卡在这里）", () => {
+  const div = el({ tagName: "DIV", innerText: AUTH_OPTION_TEXT, children: [] });
+  const li = el({ tagName: "LI", innerText: AUTH_OPTION_TEXT, children: [div] });
+
+  // prefix（默认）模式：候选文本不以目标开头 → 找不到。真机上就是这一步返回 null，
+  // 于是登录停在「选择验证方式」页，验证码根本没机会被填。
+  assert.equal(runScript(textClickScript("Google Authenticator app"), [li, div]), null);
+
+  // contains 模式：命中内层可点元素（不是外层 li）
+  const hit = runScript(textClickScript("Google Authenticator app", "contains"), [li, div]);
+  assert.equal(hit.tag, "DIV");
+  assert.equal(div.clicked, true);
+  assert.equal(li.clicked, false);
+});
+
+test("clickByText 脚本：命中的元素会被打上标记，供坐标点击兜底使用", () => {
+  const div = el({ tagName: "DIV", innerText: AUTH_OPTION_TEXT });
+  runScript(textClickScript("Authenticator", "contains"), [div]);
+  assert.equal(div.attrs["data-abb-text-hit"], "1");
+});
+
 
 /** 造一个页面内元素替身 */
 function el({
@@ -36,9 +65,16 @@ function el({
     innerText,
     children,
     style,
+    attrs: {},
     clicked: false,
     getBoundingClientRect: () => ({ width, height }),
     getAttribute: (name) => (name === "href" ? href : null),
+    setAttribute(name, value) {
+      this.attrs[name] = value;
+    },
+    removeAttribute(name) {
+      delete this.attrs[name];
+    },
     click() {
       this.clicked = true;
     },

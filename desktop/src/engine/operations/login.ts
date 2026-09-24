@@ -2,54 +2,184 @@
  * Google 登录（Node 重写）
  * 对标 core/stagehand_engine/operations/login.py
  *
- * 流程：导航登录页 → 查已登录 → 处理账号选择器 → 输邮箱 → 检测页态 →
- *       输密码 → 再检测 → TOTP → 验证成功。
+ * 流程：检查是否已登录 → 打开登录页 →（账号选择页则点「使用其他账号」）→ 输入邮箱 →
+ *       输入密码 → 验证器（TOTP）→ 打开 myaccount 验证登录结果。
  *
- * _detectPageState 的关键词判定顺序严格照搬 Python，不可调整：
- * 账号不存在/停用优先于验证码，验证码优先于密码错误，
- * 因为一个页面上可能同时出现多组关键词，顺序决定归类结果。
+ * ==================== 与 Python 的有意偏差（真机测试发现，用户批准） ====================
+ * 1. 成功判定：Python 用 LoginKeywords.LOGIN_SUCCESS（含 "account"）匹配页面文本，
+ *    而 Google 登录页本身就有 "Use your Google Account"、"Create account"，
+ *    一打开登录页就被判为「已登录」。这里改为只认 URL 证据：
+ *    打开 myaccount.google.com 后仍停留在该域名，且页面里出现目标邮箱，才算登录成功 / 已登录。
+ * 2. 页面状态：Python 按关键词顺序判定，"验证码" 同时出现在 TOTP 与 CAPTCHA 关键词里，
+ *    "phone number" 出现在大量页面上，容易误判。这里优先看 Google 登录页的固定元素
+ *    （#identifierId / input[name=Passwd] / #totpPin）是否可见，再看 URL 的 /challenge/ 路径，
+ *    最后才看少量精确文本。
+ * 3. 输入方式：固定元素优先（fill / click / Enter），定位不到才退回 AI act()。
+ *    act() 仍使用 Python 原版的提示词。
+ * 4. 密码只写入一次：Python 在 act("在密码输入框中输入密码") 之后还会 keyboard.type(password)，
+ *    而这条指令本身不含密码，AI 可能先填入别的内容，导致密码被写两次或写错。
+ *    这里删掉该 act，按「fill 一次；fill 失败才点击输入框后 type 一次」写入。
+ * 5. 两步验证：只处理直接出现验证器输入框（TOTP）的情况；短信、手机提示、
+ *    「Verify it's you」选择页等一律判失败并给出明确提示（用户确认）。
+ * 6. 等待：固定 sleep 改为轮询页面状态直到跳转（带上限），Google 页面加载时快时慢。
+ * 7. 登录页 URL 带 hl=en 与 continue=myaccount，保证页面语言与跳转目标确定。
+ * 8. 验证码生成避开 30 秒窗口的最后 5 秒，防止提交时已过期。
+ * 9. 通过 options.log 输出每一步（不含密码、密钥、验证码）。
+ * 10. 提交方式（真机测试发现）：ixBrowser 窗口里常开着多个标签页，登录页不在前台时
+ *     按坐标的鼠标点击会落空。打开登录页后先切到前台，提交时依次尝试
+ *     Enter → 点击按钮 → 派发点击事件 → AI，每次都确认页面真的跳转了。
  */
-import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { generateTotp } from "../totp.ts";
-import { GoogleURLs, Timeouts, LoginKeywords } from "../constants.ts";
-import {
-  createLoginResult,
-  type LoginResult,
-  type LoginState,
-  type OperationStatus,
-} from "../types.ts";
+import { Timeouts } from "../constants.ts";
+import { createLoginResult, type LoginResult, type LoginState, type OperationStatus } from "../types.ts";
 
-/** 账号选择器页面的特征词 */
-const CHOOSER_KEYWORDS = [
-  "use another account",
-  "使用其他账号",
-  "add another account",
-  "choose an account",
+/** 登录操作用到的引擎能力（StagehandGoogleEngine 满足；单测用假引擎） */
+export interface LoginEngine {
+  navigate(url: string, options?: { timeoutMs?: number }): Promise<{ success: boolean; error?: string }>;
+  wait(milliseconds: number): Promise<void>;
+  getCurrentUrl(): Promise<string>;
+  /** 页面可见文本 */
+  getPageContent(): Promise<string>;
+  /** 页面 HTML（用于查找 aria-label 等属性里的邮箱） */
+  getPageHtml(): Promise<string>;
+  isVisible(selector: string): Promise<boolean>;
+  fill(selector: string, value: string): Promise<boolean>;
+  click(selector: string): Promise<boolean>;
+  /** 在元素上直接派发 click 事件（不依赖坐标命中） */
+  jsClick(selector: string): Promise<boolean>;
+  typeText(text: string): Promise<boolean>;
+  pressKey(key: string): Promise<boolean>;
+  /** 把当前页切到浏览器前台 */
+  bringToFront(): Promise<void>;
+  /**
+   * 按可见文本点击（页面内派发 DOM 点击）。mode="contains" 用于文本前缀不确定的长句，
+   * 例如「Get a verification code from the Google Authenticator app」。
+   * 可选：假引擎可以不实现（此时登录流程跳过「选择验证方式」页的处理）。
+   */
+  clickByText?(
+    text: string,
+    mode?: "prefix" | "contains",
+  ): Promise<{ tag: string; href: string | null } | null>;
+  act(instruction: string): Promise<{ success: boolean }>;
+}
+
+/** 登录入口（hl=en 固定页面语言，continue 固定登录后跳到 myaccount） */
+export const SIGNIN_URL =
+  "https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fmyaccount.google.com%2F&flowName=GlifWebSignIn&flowEntry=ServiceLogin&hl=en";
+
+/** 验证登录结果用的页面：首页 + 个人信息页（个人信息页一定显示邮箱） */
+export const MYACCOUNT_URLS = [
+  "https://myaccount.google.com/?hl=en",
+  "https://myaccount.google.com/personal-info?hl=en",
 ];
 
-/** 登录成功时的 URL 特征（多账号视图也算） */
-const SUCCESS_URLS = ["myaccount.google.com", "one.google.com", "accounts.google.com/b/"];
+const MYACCOUNT_HOST = "myaccount.google.com";
+const SIGNIN_HOST = "accounts.google.com";
 
-/** _detectPageState 的返回集合 */
-export type PageState =
+/** Google 登录页的固定元素 */
+export const LoginSelectors = {
+  EMAIL: ["#identifierId", 'input[type="email"]'],
+  EMAIL_NEXT: ["#identifierNext button", "#identifierNext"],
+  PASSWORD: ['input[name="Passwd"]', '#password input[type="password"]'],
+  PASSWORD_NEXT: ["#passwordNext button", "#passwordNext"],
+  TOTP: ["#totpPin", 'input[name="totpPin"]'],
+  TOTP_NEXT: ["#totpNext button", "#totpNext"],
+  CAPTCHA: ["#captchaimg", 'iframe[title*="reCAPTCHA"]', 'iframe[src*="recaptcha"]'],
+} as const;
+
+/** 精确文本（小写比较）。只在元素判断之后兜底使用；账号健康巡检也复用这里的停用词表 */
+export const TEXT = {
+  CAPTCHA: ["type the text you hear or see", "confirm you're not a robot", "i'm not a robot", "请输入您听到或看到的文字"],
+  ACCOUNT_DISABLED: ["account disabled", "your account has been disabled", "帐号已停用", "账号已停用", "帐号已被停用"],
+  ACCOUNT_NOT_FOUND: ["couldn't find your google account", "找不到您的 google 帐号", "找不到您的 google 账号"],
+  WRONG_PASSWORD: ["wrong password", "密码错误", "密码不正确"],
+  WRONG_CODE: ["wrong code", "wrong number of digits", "验证码错误", "代码错误"],
+  CHOOSER: ["choose an account", "use another account", "选择账号", "使用其他账号"],
+  PHONE_PROMPT: ["check your phone", "google prompt", "tap yes", "检查您的手机"],
+  SMS: ["text message", "短信"],
+  VERIFY_IT_IS_YOU: ["verify it's you", "验证是您本人", "验证是否是您本人"],
+} as const;
+
+/** 当前页面所处的登录阶段 */
+export type LoginStage =
+  | "email"
+  | "chooser"
+  | "password"
+  | "wrong_password"
+  | "totp"
+  | "wrong_totp"
   | "account_not_found"
   | "account_disabled"
   | "captcha"
-  | "wrong_password"
-  | "security_challenge"
-  | "2fa_totp"
   | "2fa_sms"
-  | "2fa_email"
   | "2fa_prompt"
-  | "password"
-  | "success"
+  | "2fa_other"
+  | "verify_selection"
+  /** 已离开 accounts.google.com 的登录流程（是否真的登录成功，由 myaccount 验证决定） */
+  | "left_signin"
+  /** 登录后的提示页（设置通行密钥、补充辅助信息等），仍在 accounts.google.com */
+  | "interstitial"
   | "unknown";
 
-export class LoginOperation {
-  private readonly engine: StagehandGoogleEngine;
+/** 非验证器两步验证的失败提示 */
+const TWO_FA_MESSAGES: Partial<Record<LoginStage, string>> = {
+  "2fa_sms": "需要短信验证码两步验证（仅支持验证器 TOTP）",
+  "2fa_prompt": "需要在手机上确认登录（仅支持验证器 TOTP）",
+  "2fa_other": "需要其他方式的两步验证（仅支持验证器 TOTP）",
+  verify_selection: "Google 要求选择验证方式（Verify it's you），没有直接出现验证器输入框",
+};
 
-  constructor(engine: StagehandGoogleEngine) {
+/**
+ * 「选择验证方式」页里指向验证器的那一项的措辞（英文页 / 中文页）。
+ * 真机（2026-09-24）实际文本是「Get a verification code from the Google Authenticator app」——
+ * 前缀不是这个关键词，所以必须用 contains 模式匹配（用前缀匹配会返回 null，登录就卡在这一页）。
+ */
+export const AUTHENTICATOR_OPTION_TEXTS = [
+  "Google Authenticator app",
+  "Authenticator app",
+  "身份验证器",
+  "验证器应用",
+];
+
+/** 文本点击命中后打在元素上的标记属性（与 stagehand-engine 的 TEXT_HIT_ATTRIBUTE 同一个值） */
+const TEXT_HIT_SELECTOR = '[data-abb-text-hit="1"]';
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function pathOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
+const hasAny = (text: string, words: readonly string[]) => words.some((w) => text.includes(w));
+
+export interface LoginOperationOptions {
+  /** 当前时间（毫秒），单测注入 */
+  now?: () => number;
+  /** 轮询间隔（毫秒） */
+  pollIntervalMs?: number;
+}
+
+export class LoginOperation {
+  private readonly engine: LoginEngine;
+  private readonly now: () => number;
+  private readonly pollMs: number;
+  /** 当前这次 execute 的步骤日志（submitAndWait 等内部步骤也要写） */
+  private log: ((msg: string) => void) | null = null;
+
+  constructor(engine: LoginEngine, options: LoginOperationOptions = {}) {
     this.engine = engine;
+    this.now = options.now ?? Date.now;
+    this.pollMs = options.pollIntervalMs ?? 1000;
   }
 
   async execute(options: {
@@ -57,308 +187,353 @@ export class LoginOperation {
     password: string;
     totpSecret?: string | null;
     recoveryEmail?: string | null;
+    log?: ((msg: string) => void) | null;
   }): Promise<LoginResult> {
-    const { email, password, totpSecret = null } = options;
-    const start = Date.now();
+    const { email, password } = options;
+    const totpSecret = options.totpSecret ?? null;
+    const log = (msg: string) => options.log?.(msg);
+    this.log = log;
+    const start = this.now();
     const done = (
       r: { success: boolean; status: OperationStatus; login_state: LoginState } & Partial<LoginResult>,
-    ): LoginResult => createLoginResult({ account_email: email, duration_ms: Date.now() - start, ...r });
+    ): LoginResult => createLoginResult({ account_email: email, duration_ms: this.now() - start, ...r });
+    const fail = (
+      login_state: LoginState,
+      error_type: string,
+      error: string,
+      extra: Partial<LoginResult> & { status?: OperationStatus } = {},
+    ): LoginResult => {
+      log(`[X] ${error}`);
+      return done({ success: false, status: extra.status ?? "failed", login_state, error, error_type, ...extra });
+    };
 
     try {
-      // 1. 导航到登录页
-      const nav = await this.engine.navigate(GoogleURLs.LOGIN, { timeoutMs: Timeouts.NAVIGATION });
+      // 1. 已登录就直接返回（只认 myaccount 域名 + 目标邮箱）
+      log("检查窗口当前登录状态...");
+      const pre = await this.checkSignedIn(email);
+      if (pre.signedIn) {
+        log("myaccount 页面显示该账号，已处于登录状态");
+        return done({ success: true, status: "success", login_state: "logged_in", message: "已登录" });
+      }
+      if (pre.otherAccount) log("窗口当前登录的是其他账号，继续登录目标账号");
+
+      // 2. 打开登录页
+      log("打开 Google 登录页");
+      const nav = await this.engine.navigate(SIGNIN_URL, { timeoutMs: Timeouts.NAVIGATION });
       if (!nav.success) {
-        return done({
-          success: false,
-          status: "failed",
-          login_state: "unknown",
-          error: `无法导航到登录页: ${nav.error ?? ""}`,
-          error_type: "navigation_failed",
-        });
+        return fail("unknown", "navigation_failed", `无法导航到登录页: ${nav.error ?? ""}`);
       }
-      await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+      // 窗口里可能开着多个标签页：把登录用的这一页切到前台，避免坐标点击落空（真机测试发现）
+      await this.engine.bringToFront();
+      let stage = await this.waitForStage(["unknown"], 15_000);
 
-      // 2. 已登录就直接返回
-      if (await this.checkAlreadyLoggedIn()) {
-        return done({
-          success: true,
-          status: "success",
-          login_state: "logged_in",
-          message: "已登录",
-        });
+      // 3. 账号选择页：点「使用其他账号」回到邮箱输入
+      if (stage === "chooser") {
+        log("检测到账号选择页，点击「使用其他账号」");
+        await this.engine.act("点击使用其他账号或添加其他账号");
+        stage = await this.waitForStage(["chooser", "unknown"], 15_000);
       }
 
-      // 3. 账号选择器（多账号时会先出现这个页）
-      await this.handleAccountChooser();
-
-      // 4. 输入邮箱
-      if (!(await this.enterEmail(email))) {
-        return done({
-          success: false,
-          status: "failed",
-          login_state: "logged_out",
-          error: "无法输入邮箱",
-          error_type: "email_input_failed",
-        });
-      }
-      await this.engine.wait(Timeouts.AFTER_CLICK);
-
-      // 5. 下一步
-      await this.engine.act("点击下一步按钮");
-      await this.engine.wait(Timeouts.AFTER_CLICK * 2);
-
-      // 6. 邮箱页之后的页态检查（三种失败要早返回）
-      const state = await this.detectPageState();
-      if (state === "account_not_found") {
-        return done({
-          success: false,
-          status: "failed",
-          login_state: "account_not_found",
-          error: "账号不存在",
-          error_type: "account_not_found",
-        });
-      }
-      if (state === "account_disabled") {
-        return done({
-          success: false,
-          status: "blocked",
-          login_state: "account_disabled",
-          error: "账号已被停用",
-          error_type: "account_disabled",
-        });
-      }
-      if (state === "captcha") {
-        return done({
-          success: false,
-          status: "blocked",
-          login_state: "captcha_required",
-          error: "需要验证码",
-          error_type: "captcha_required",
-        });
+      // 4. 邮箱
+      if (stage === "email") {
+        log(`输入邮箱: ${email}`);
+        if (!(await this.fillFirst(LoginSelectors.EMAIL, email))) {
+          const r = await this.engine.act(`在邮箱或电话号码输入框中输入: ${email}`);
+          if (!r.success) return fail("logged_out", "email_input_failed", "无法输入邮箱");
+        }
+        await this.engine.wait(Timeouts.AFTER_INPUT);
+        log("提交邮箱");
+        stage = await this.submitAndWait(LoginSelectors.EMAIL_NEXT, "点击下一步按钮", ["email", "unknown"], 20_000);
+        if (stage === "email") return fail("logged_out", "email_submit_failed", "提交邮箱后页面没有跳转");
       }
 
-      // 7. 输入密码
-      if (!(await this.enterPassword(password))) {
-        return done({
-          success: false,
-          status: "failed",
-          login_state: "need_password",
-          error: "无法输入密码",
-          error_type: "password_input_failed",
-        });
-      }
-      await this.engine.wait(Timeouts.AFTER_CLICK);
+      const blocked = this.blockedResult(stage, totpSecret, fail);
+      if (blocked) return blocked;
 
-      // 8. 提交
-      await this.engine.act("点击下一步按钮或登录按钮");
-      await this.engine.wait(Timeouts.AFTER_2FA);
-
-      // 9. 密码提交后的页态
-      const postState = await this.detectPageState();
-
-      if (postState === "wrong_password") {
-        return done({
-          success: false,
-          status: "failed",
-          login_state: "wrong_password",
-          error: "密码错误",
-          error_type: "wrong_password",
-          can_retry: true,
-          retry_delay_seconds: 5,
-        });
+      // 5. 密码（只写入一次）
+      if (stage === "password") {
+        log("输入密码");
+        if (!(await this.writePasswordOnce(password))) {
+          return fail("need_password", "password_input_failed", "无法输入密码");
+        }
+        await this.engine.wait(Timeouts.AFTER_INPUT);
+        log("提交密码");
+        stage = await this.submitAndWait(LoginSelectors.PASSWORD_NEXT, "点击下一步按钮或登录按钮", ["password", "unknown"], 25_000);
+        // submitAndWait 只在耗尽超时后才会返回 from 里的值：stage 仍是 password（页面没动）
+        // 或 unknown（一直停在 /challenge/pwd 的过渡态没渲染出下一步），两者都是「提交密码没成功」。
+        if (stage === "password" || stage === "unknown") {
+          return fail("need_password", "password_submit_failed", "提交密码后页面没有跳转");
+        }
       }
 
-      if (postState === "security_challenge") {
-        return done({
-          success: false,
-          status: "partial",
-          login_state: "security_challenge",
-          message: "需要安全验证",
-          error_type: "security_challenge",
-        });
-      }
-
-      // 10. 两步验证
-      if (postState === "2fa_totp") {
-        if (totpSecret) {
-          if (!(await this.handleTotp(totpSecret))) {
-            return done({
-              success: false,
-              status: "failed",
-              login_state: "need_2fa",
-              error: "两步验证失败",
-              error_type: "totp_failed",
-              need_2fa: true,
-              two_fa_method: "totp",
-            });
+      // 5.5 「选择验证方式」页（真机常见）：先把验证器选出来，否则根本走不到验证码输入框。
+      // 以前这里直接判 need_2fa，真机表现就是「一直没把验证码填进去」；那一项的文本是长句
+      // 「Get a verification code from the Google Authenticator app」，必须用 contains 模式匹配。
+      if (stage === "verify_selection" && totpSecret) {
+        const picked = await this.chooseAuthenticator(log);
+        if (picked) {
+          stage = await this.waitForStage(["verify_selection", "unknown"], 20_000);
+          if (stage === "verify_selection") {
+            // 真机教训（踢出设备）：Google 的 Material 列表项对 DOM click() 不响应，改用坐标点击
+            log("选择验证器后页面没有跳转，改用坐标点击");
+            await this.engine.click(TEXT_HIT_SELECTOR);
+            stage = await this.waitForStage(["verify_selection", "unknown"], 20_000);
           }
-        } else {
-          return done({
-            success: false,
-            status: "partial",
-            login_state: "need_2fa",
-            message: "需要 TOTP 两步验证",
+        }
+      }
+      const blocked2 = this.blockedResult(stage, totpSecret, fail);
+      if (blocked2) return blocked2;
+
+      // 6. 验证器（TOTP）
+      if (stage === "totp" && totpSecret) {
+        const code = await this.freshTotp(totpSecret);
+        log("输入验证器验证码");
+        if (!(await this.fillFirst(LoginSelectors.TOTP, code))) {
+          const r = await this.engine.act(`在验证码输入框中输入: ${code}`);
+          if (!r.success) {
+            return fail("need_2fa", "totp_failed", "无法输入验证器验证码", { need_2fa: true, two_fa_method: "totp" });
+          }
+        }
+        await this.engine.wait(Timeouts.AFTER_INPUT);
+        log("提交验证器验证码");
+        stage = await this.submitAndWait(LoginSelectors.TOTP_NEXT, "点击下一步按钮或验证按钮", ["totp", "unknown"], 25_000);
+        if (stage === "wrong_totp" || stage === "totp") {
+          return fail("need_2fa", "totp_failed", stage === "wrong_totp" ? "验证器验证码被拒绝" : "提交验证码后页面没有跳转", {
             need_2fa: true,
             two_fa_method: "totp",
           });
         }
-      } else if (postState === "2fa_sms" || postState === "2fa_email" || postState === "2fa_prompt") {
-        return done({
-          success: false,
-          status: "partial",
-          login_state: "need_2fa",
-          message: `需要两步验证 (${postState})`,
-          need_2fa: true,
-          two_fa_method: postState.replace("2fa_", ""),
-        });
+        const blocked3 = this.blockedResult(stage, totpSecret, fail);
+        if (blocked3) return blocked3;
       }
 
-      // 11. 最终验证
-      await this.engine.wait(Timeouts.AFTER_2FA);
-      if (await this.verifyLoginSuccess()) {
-        return done({
-          success: true,
-          status: "success",
-          login_state: "logged_in",
-          message: "登录成功",
-        });
+      // 7. 最终验证：只有 myaccount 显示目标邮箱才算成功
+      log("打开 myaccount 验证登录结果");
+      const post = await this.checkSignedIn(email);
+      if (post.signedIn) {
+        log("[OK] myaccount 页面显示该账号，登录成功");
+        return done({ success: true, status: "success", login_state: "logged_in", message: "登录成功" });
       }
-      return done({
-        success: false,
-        status: "failed",
-        login_state: "unknown",
-        error: "登录验证失败",
-        error_type: "verification_failed",
-      });
+      const where = post.otherAccount ? "myaccount 显示的是其他账号" : `最终页面 ${hostOf(post.url)}${pathOf(post.url)}`;
+      return fail("unknown", "verification_failed", `登录验证失败（${where}，登录阶段: ${stage}）`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return done({
-        success: false,
-        status: "failed",
-        login_state: "unknown",
-        error: msg,
-        error_type: "exception",
-      });
+      return fail("unknown", "exception", msg);
     }
   }
 
-  /** URL 命中或页面出现成功关键词即算已登录 */
-  private async checkAlreadyLoggedIn(): Promise<boolean> {
+  /** 把「不能继续」的阶段转换成失败结果；可以继续时返回 null */
+  private blockedResult(
+    stage: LoginStage,
+    totpSecret: string | null,
+    fail: (
+      state: LoginState,
+      type: string,
+      error: string,
+      extra?: Partial<LoginResult> & { status?: OperationStatus },
+    ) => LoginResult,
+  ): LoginResult | null {
+    switch (stage) {
+      case "account_not_found":
+        return fail("account_not_found", "account_not_found", "账号不存在");
+      case "account_disabled":
+        return fail("account_disabled", "account_disabled", "账号已被停用", { status: "blocked" });
+      case "captcha":
+        return fail("captcha_required", "captcha_required", "需要人机验证（验证码），已停止", { status: "blocked" });
+      case "wrong_password":
+        return fail("wrong_password", "wrong_password", "密码错误");
+      case "totp":
+        if (totpSecret) return null;
+        return fail("need_2fa", "need_2fa", "需要验证器（TOTP）验证码，但账号未配置 2FA 密钥", {
+          status: "partial",
+          need_2fa: true,
+          two_fa_method: "totp",
+        });
+      case "2fa_sms":
+      case "2fa_prompt":
+      case "2fa_other":
+      case "verify_selection": {
+        const method = stage === "verify_selection" ? "selection" : stage.replace("2fa_", "");
+        return fail("need_2fa", "need_2fa", TWO_FA_MESSAGES[stage] ?? "需要两步验证", {
+          status: "partial",
+          need_2fa: true,
+          two_fa_method: method,
+        });
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * 打开 myaccount，判断是否以目标邮箱登录。
+   * 未登录时 myaccount 会跳回 accounts.google.com 或 www.google.com/account/about。
+   */
+  async checkSignedIn(email: string): Promise<{ signedIn: boolean; otherAccount: boolean; url: string }> {
+    const target = email.trim().toLowerCase();
+    let url = "";
+    let onMyAccount = false;
+    for (const pageUrl of MYACCOUNT_URLS) {
+      const nav = await this.engine.navigate(pageUrl, { timeoutMs: Timeouts.NAVIGATION });
+      if (!nav.success) continue;
+      await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+      url = await this.engine.getCurrentUrl();
+      if (hostOf(url) !== MYACCOUNT_HOST) return { signedIn: false, otherAccount: false, url };
+      onMyAccount = true;
+      const text = (await this.engine.getPageContent()).toLowerCase();
+      const html = (await this.engine.getPageHtml()).toLowerCase();
+      if (target && (text.includes(target) || html.includes(target))) {
+        return { signedIn: true, otherAccount: false, url };
+      }
+    }
+    return { signedIn: false, otherAccount: onMyAccount, url };
+  }
+
+  /** 识别当前页面所处阶段（元素 → URL → 精确文本） */
+  async detectStage(): Promise<LoginStage> {
     const url = await this.engine.getCurrentUrl();
-    if (url.includes("myaccount.google.com")) return true;
+    const host = hostOf(url);
+    const path = pathOf(url);
+    if (host && host !== SIGNIN_HOST) return "left_signin";
 
-    const pageLower = (await this.engine.getPageContent()).toLowerCase();
-    return LoginKeywords.LOGIN_SUCCESS.some((k) => pageLower.includes(k.toLowerCase()));
-  }
+    // Google 文案用弯引号（Couldn’t / it’s），统一成直引号再比较
+    const text = (await this.engine.getPageContent()).toLowerCase().replace(/[\u2018\u2019]/g, "'");
 
-  /** 检测到账号选择器就点「使用其他账号」进入邮箱输入流程 */
-  private async handleAccountChooser(): Promise<boolean> {
-    try {
-      const pageLower = (await this.engine.getPageContent()).toLowerCase();
-      const isChooser = CHOOSER_KEYWORDS.some((k) => pageLower.includes(k.toLowerCase()));
-      if (!isChooser) return false;
-
-      await this.engine.act("点击使用其他账号或添加其他账号");
-      await this.engine.wait(Timeouts.AFTER_CLICK);
-      return true;
-    } catch {
-      return false;
+    if (path.includes("/challenge/recaptcha") || hasAny(text, TEXT.CAPTCHA) || (await this.anyVisible(LoginSelectors.CAPTCHA))) {
+      return "captcha";
     }
-  }
+    if (path.includes("/disabled") || hasAny(text, TEXT.ACCOUNT_DISABLED)) return "account_disabled";
+    if (hasAny(text, TEXT.ACCOUNT_NOT_FOUND)) return "account_not_found";
 
-  private async enterEmail(email: string): Promise<boolean> {
-    try {
-      const result = await this.engine.act(`在邮箱或电话号码输入框中输入: ${email}`);
-      return result.success;
-    } catch {
-      return false;
+    if (await this.anyVisible(LoginSelectors.TOTP)) return hasAny(text, TEXT.WRONG_CODE) ? "wrong_totp" : "totp";
+    if (await this.anyVisible(LoginSelectors.PASSWORD)) {
+      return hasAny(text, TEXT.WRONG_PASSWORD) ? "wrong_password" : "password";
     }
+    if (await this.anyVisible(LoginSelectors.EMAIL)) return "email";
+
+    if (path.includes("/challenge/")) {
+      // 走到这里说明该阶段的输入框都不可见 —— 页面要么还在渲染，要么确实是别的验证方式。
+      // pwd / totp 是「本流程自己的」challenge 页：输入框没出来只是渲染未完成，
+      // 必须继续等，不能当成其他两步验证（真机实测：提交密码后会短暂停在
+      // /v3/signin/challenge/pwd 且页面文本为空，旧实现在这里误判成 2fa_other 直接中止）。
+      if (path.includes("/challenge/pwd") || path.includes("/challenge/totp")) return "unknown";
+      if (path.includes("/challenge/ipp") || path.includes("/challenge/sms")) return "2fa_sms";
+      if (path.includes("/challenge/dp") || path.includes("/challenge/az")) return "2fa_prompt";
+      if (path.includes("/challenge/selection")) return "verify_selection";
+      return "2fa_other";
+    }
+    if (hasAny(text, TEXT.CHOOSER)) return "chooser";
+    if (path.includes("/speedbump/")) return "interstitial";
+    if (hasAny(text, TEXT.PHONE_PROMPT)) return "2fa_prompt";
+    if (hasAny(text, TEXT.VERIFY_IT_IS_YOU)) return "verify_selection";
+    if (hasAny(text, TEXT.SMS)) return "2fa_sms";
+    return "unknown";
   }
 
   /**
-   * 输入密码，三级降级。
+   * 轮询直到页面进入 from 以外的阶段；超时返回最后一次看到的阶段。
+   * 用次数而不是墙钟计时，单测里 wait() 不真等也能结束。
+   */
+  private async waitForStage(from: readonly LoginStage[], timeoutMs: number): Promise<LoginStage> {
+    const polls = Math.max(1, Math.ceil(timeoutMs / this.pollMs));
+    let stage: LoginStage = "unknown";
+    for (let i = 0; i < polls; i++) {
+      await this.engine.wait(this.pollMs);
+      stage = await this.detectStage();
+      if (!from.includes(stage)) return stage;
+    }
+    return stage;
+  }
+
+  /**
+   * 在「选择验证方式」页点开验证器那一项。
    *
-   * 注意：这里**刻意保留**了 Python 版的一个可疑行为——act() 成功之后
-   * 仍会执行 keyboard.type()，导致密码可能被输入两次。
-   * 原样照搬是为了让后续全量测试能复现同样的表现；
-   * 真机验证时若确认 act 恒失败（指令里不含密码值，AI 无从猜测），
-   * 这条分支实际上不会触发，届时可安全去掉。
+   * 只用确定性的文本点击（不交给 AI 判断）：命中返回 true，页面上没有验证器项返回 false
+   * （此时调用方保持原来的 need_2fa 结论，不会假装成功）。
    */
-  private async enterPassword(password: string): Promise<boolean> {
-    try {
-      const result = await this.engine.act("在密码输入框中输入密码");
-
-      if (!result.success) {
-        // 降级 1：直接按选择器填充
-        if (await this.engine.fill('input[type="password"]', password)) return true;
-      }
-
-      // 降级 2：直接敲键盘
-      await this.engine.typeText(password);
+  private async chooseAuthenticator(log: (msg: string) => void): Promise<boolean> {
+    const clickByText = this.engine.clickByText?.bind(this.engine);
+    if (!clickByText) return false;
+    for (const text of AUTHENTICATOR_OPTION_TEXTS) {
+      const hit = await clickByText(text, "contains");
+      if (!hit) continue;
+      log(`「选择验证方式」页：已选择 ${text}`);
       return true;
-    } catch {
-      return false;
     }
+    log("「选择验证方式」页：没有找到验证器选项");
+    return false;
+  }
+
+  private async anyVisible(selectors: readonly string[]): Promise<boolean> {
+    for (const s of selectors) if (await this.engine.isVisible(s)) return true;
+    return false;
+  }
+
+  private async firstVisible(selectors: readonly string[]): Promise<string | null> {
+    for (const s of selectors) if (await this.engine.isVisible(s)) return s;
+    return null;
+  }
+
+  /** 往第一个可见的输入框 fill；没有可见输入框或 fill 失败返回 false */
+  private async fillFirst(selectors: readonly string[], value: string): Promise<boolean> {
+    const sel = await this.firstVisible(selectors);
+    if (!sel) return false;
+    return this.engine.fill(sel, value);
   }
 
   /**
-   * 检测当前页态。
-   * 判定顺序严格照搬 Python：顺序变了归类就会变。
+   * 提交当前表单并等页面跳转。依次尝试：Enter（刚填写的输入框仍有焦点）→ 点击固定按钮 →
+   * 在按钮上派发 click 事件（不依赖坐标，窗口不在前台也有效）→ AI act；
+   * 每种方式之后都确认页面确实离开了 from 阶段，没跳转才换下一种（真机测试发现坐标点击会落空）。
+   * 同一页面重复提交不会产生副作用（邮箱 / 密码 / 同一个验证码）。
    */
-  private async detectPageState(): Promise<PageState> {
-    try {
-      const pageLower = (await this.engine.getPageContent()).toLowerCase();
-      const hit = (kws: readonly string[]) => kws.some((k) => pageLower.includes(k.toLowerCase()));
-
-      if (hit(LoginKeywords.ACCOUNT_NOT_FOUND)) return "account_not_found";
-      if (hit(LoginKeywords.ACCOUNT_DISABLED)) return "account_disabled";
-      if (hit(LoginKeywords.CAPTCHA)) return "captcha";
-      if (hit(LoginKeywords.WRONG_PASSWORD)) return "wrong_password";
-      if (hit(LoginKeywords.SECURITY_CHALLENGE)) return "security_challenge";
-      if (hit(LoginKeywords.TWO_FA_TOTP)) return "2fa_totp";
-      if (hit(LoginKeywords.TWO_FA_SMS)) return "2fa_sms";
-      if (hit(LoginKeywords.TWO_FA_EMAIL)) return "2fa_email";
-      if (hit(LoginKeywords.TWO_FA_PROMPT)) return "2fa_prompt";
-      if (hit(LoginKeywords.PASSWORD_PAGE)) return "password";
-
-      const url = await this.engine.getCurrentUrl();
-      if (url.includes("myaccount.google.com") || url.includes("one.google.com")) return "success";
-
-      return "unknown";
-    } catch {
-      return "unknown";
+  private async submitAndWait(
+    buttons: readonly string[],
+    actInstruction: string,
+    from: readonly LoginStage[],
+    timeoutMs: number,
+  ): Promise<LoginStage> {
+    const perTry = Math.min(8_000, timeoutMs);
+    const tries: Array<[string, () => Promise<boolean>]> = [
+      ["按 Enter 提交", () => this.engine.pressKey("Enter")],
+      ["点击按钮提交", async () => {
+        const btn = await this.firstVisible(buttons);
+        return btn ? this.engine.click(btn) : false;
+      }],
+      ["派发点击事件提交", async () => {
+        const btn = await this.firstVisible(buttons);
+        return btn ? this.engine.jsClick(btn) : false;
+      }],
+      ["AI 点击提交", async () => (await this.engine.act(actInstruction)).success],
+    ];
+    let stage: LoginStage = "unknown";
+    for (const [name, attempt] of tries) {
+      if (!(await attempt())) continue;
+      stage = await this.waitForStage(from, perTry);
+      if (!from.includes(stage)) return stage;
+      this.log?.(`${name}后页面没有跳转，换下一种方式`);
     }
+    // 最后再多等一会儿（慢网络）
+    const rest = timeoutMs - perTry;
+    return rest > 0 ? this.waitForStage(from, rest) : stage;
   }
 
-  /** 生成 TOTP 并提交；act 失败时降级为直接敲键盘 */
-  private async handleTotp(totpSecret: string): Promise<boolean> {
-    try {
-      const code = generateTotp(totpSecret);
-
-      const result = await this.engine.act(`在验证码输入框中输入: ${code}`);
-      if (!result.success) {
-        await this.engine.typeText(code);
-      }
-      await this.engine.wait(Timeouts.AFTER_INPUT);
-
-      await this.engine.act("点击下一步按钮或验证按钮");
-      await this.engine.wait(Timeouts.AFTER_2FA);
-
-      return true;
-    } catch {
-      return false;
-    }
+  /**
+   * 密码只写入一次：fill 成功就结束；fill 失败才点击密码框并 type 一次。
+   * 不使用 act()——AI 指令里不能带密码，而不带密码的指令会让 AI 自己往框里填东西。
+   */
+  private async writePasswordOnce(password: string): Promise<boolean> {
+    const sel = await this.firstVisible(LoginSelectors.PASSWORD);
+    if (!sel) return false;
+    if (await this.engine.fill(sel, password)) return true;
+    if (!(await this.engine.click(sel))) return false;
+    return this.engine.typeText(password);
   }
 
-  private async verifyLoginSuccess(): Promise<boolean> {
-    try {
-      const url = await this.engine.getCurrentUrl();
-      if (SUCCESS_URLS.some((u) => url.includes(u))) return true;
-
-      const pageLower = (await this.engine.getPageContent()).toLowerCase();
-      return LoginKeywords.LOGIN_SUCCESS.some((k) => pageLower.includes(k.toLowerCase()));
-    } catch {
-      return false;
-    }
+  /** 生成验证码；当前 30 秒窗口剩余不足 5 秒时等到下一个窗口 */
+  private async freshTotp(secret: string): Promise<string> {
+    const left = 30 - (Math.floor(this.now() / 1000) % 30);
+    if (left < 5) await this.engine.wait((left + 1) * 1000);
+    return generateTotp(secret, this.now());
   }
 }

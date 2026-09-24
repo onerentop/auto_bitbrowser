@@ -4,7 +4,9 @@
  *
  * 与其他 auto_* 不同：本函数用 use_config=True 连接，
  * 即 AI 配置从 ConfigManager 读取（调用方无需传 model/api_key）。
- * 登录成功后顺带检测 Pro 状态并落库。
+ *
+ * 有意偏差：登录的每一步经 callback 写入任务日志（Python 只写 logger）；
+ * 失败提示在通用文案后附上具体原因（如「需要短信验证码两步验证」），便于判断下一步怎么处理。
  */
 import type { AccountRepository } from "../db/account-repository.ts";
 import { printBanner, withEngine } from "./shared.ts";
@@ -86,6 +88,7 @@ export async function autoGoogleLogin(
         password,
         totpSecret: secretKey || null,
         recoveryEmail: recoveryEmail || null,
+        log,
       });
 
       const state = result.login_state ?? "unknown";
@@ -105,12 +108,13 @@ export async function autoGoogleLogin(
       }
 
       // 失败：按 login_state 映射错误类型
-      let errorMsg = result.message || result.error || "登录失败";
-      let errorType = "login_failed";
+      const detail = result.message || result.error || "";
+      let errorMsg = detail || "登录失败";
+      let errorType = result.error_type || "login_failed";
       const mapped = STATE_TO_ERROR[state];
       if (mapped) {
         errorType = mapped[0];
-        errorMsg = mapped[1];
+        errorMsg = detail && detail !== mapped[1] ? `${mapped[1]}: ${detail}` : mapped[1];
       }
 
       log(`[X] ${errorMsg}`);
