@@ -143,7 +143,10 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
         dataSource={rows}
         loading={{ spinning: props.loading, tip: "正在加载窗口列表..." }}
         pagination={false}
-        scroll={{ y: 480 }}
+        // 虚拟滚动：只渲染可视区域的行（几百个窗口时整表渲染明显卡顿）；树形展开 / 行勾选照常可用。
+        // 虚拟表要求 scroll.x 是数字（否则告警并退化为 1）；容器更宽时各列按容器宽度补齐。
+        virtual
+        scroll={{ x: 760, y: 480 }}
         expandable={{
           expandedRowKeys: expanded,
           onExpandedRowsChange: (keys) => setExpanded(keys),

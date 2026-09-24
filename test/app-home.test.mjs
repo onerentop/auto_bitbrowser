@@ -414,14 +414,16 @@ test("openBrowsers：已有任务运行时返回 TASK_BUSY", async (t) => {
 // ==================== handler：列表 ====================
 
 test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只剩默认分组", async (t) => {
-  const page1 = Array.from({ length: 100 }, (_, i) => ({ profile_id: i + 1, name: `w${i + 1}`, note: "", group_id: 2 }));
-  const page2 = [{ profile_id: 101, name: "last", note: "", group_id: 0 }];
+  // 第 1 页恰好满一页（条数 = 请求的 limit），逼出第 2 页
+  const fullPage = (limit) =>
+    Array.from({ length: limit }, (_, i) => ({ profile_id: i + 1, name: `w${i + 1}`, note: "", group_id: 2 }));
+  const page2 = [{ profile_id: 100_001, name: "last", note: "", group_id: 0 }];
   const s = setup({
     async getGroupList() {
       return [{ id: 2, title: "业务" }];
     },
     async getProfileList(q) {
-      return q.page === 1 ? page1 : q.page === 2 ? page2 : [];
+      return q.page === 1 ? fullPage(q.limit) : q.page === 2 ? page2 : [];
     },
   });
   t.after(s.cleanup);
@@ -429,10 +431,10 @@ test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只
   const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null);
-  assert.equal(env.data.totalBrowsers, 101);
+  assert.equal(env.data.totalBrowsers, 1001);
   assert.deepEqual(env.data.groups.map((g) => [g.groupName, g.browsers.length]), [
     ["未分组", 1],
-    ["业务", 100],
+    ["业务", 1000],
   ]);
 
   const bad = setup({
@@ -455,12 +457,12 @@ test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只
 });
 
 test("listBrowsers：翻页中途失败 → 返回已取到的部分，不报错", async (t) => {
-  const page1 = Array.from({ length: 100 }, (_, i) => ({ profile_id: i + 1, name: `w${i + 1}`, note: "", group_id: 0 }));
+  /** @type {number[]} */
   const pages = [];
   const s = setup({
     async getProfileList(q) {
       pages.push(q.page);
-      if (q.page === 1) return page1;
+      if (q.page === 1) return Array.from({ length: q.limit }, (_, i) => ({ profile_id: i + 1, name: `w${i + 1}`, note: "", group_id: 0 }));
       throw new Error("boom"); // 不可重试错误：立即放弃后续页
     },
   });
@@ -469,8 +471,37 @@ test("listBrowsers：翻页中途失败 → 返回已取到的部分，不报错
   const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null, "getBrowserList 吞掉翻页错误，返回部分数据");
-  assert.equal(env.data.totalBrowsers, 100);
+  assert.equal(env.data.totalBrowsers, 1000);
   assert.deepEqual(pages, [1, 2]);
+});
+
+// 真机实测（374 个窗口）：ixBrowser 每次 profile-list 固定约 3.3s，与 limit 几乎无关；
+// 原先「分组 → 每页 100 条串行翻页」要 ~12s。首页改为分组与窗口并发 + 一次大页。
+test("listBrowsers：分组与窗口列表并发请求，窗口列表按大页（≥1000）一次取完", async (t) => {
+  /** @type {any[]} */
+  const queries = [];
+  let profileCalledWhileGroupPending = false;
+  const s = setup({
+    async getGroupList() {
+      await new Promise((r) => setTimeout(r, 10));
+      profileCalledWhileGroupPending = queries.length > 0;
+      return [{ id: 2, title: "业务" }];
+    },
+    async getProfileList(q) {
+      queries.push(q);
+      const start = (q.page - 1) * q.limit;
+      const n = Math.max(0, Math.min(q.limit, 374 - start));
+      return Array.from({ length: n }, (_, i) => ({ profile_id: start + i + 1, name: `w${start + i + 1}`, note: "", group_id: 2 }));
+    },
+  });
+  t.after(s.cleanup);
+  /** @type {any} */
+  const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
+  assert.equal(env.ok, true);
+  assert.equal(env.data.totalBrowsers, 374);
+  assert.ok(profileCalledWhileGroupPending, "窗口列表应与分组列表并发发出");
+  assert.equal(queries.length, 1, "374 个窗口应一次取完");
+  assert.ok(queries[0].limit >= 1000, `limit 应 ≥ 1000，实际 ${queries[0].limit}`);
 });
 
 test("listBrowsers：第一页就失败 → 空树（只剩「未分组」），error 仍为 null", async (t) => {

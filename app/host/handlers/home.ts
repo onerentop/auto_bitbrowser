@@ -39,6 +39,9 @@ export const HOME_CONFIG_KEYS = {
 /** 单次批量上限：防止误传超大数组 */
 const MAX_BATCH = 10_000;
 
+/** 首页窗口列表的每页条数：ixBrowser 单次请求的耗时基本是固定开销，页越大、请求次数越少 */
+export const HOME_LIST_PAGE_SIZE = 1000;
+
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -163,15 +166,22 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       }
     },
 
-    /** 加载窗口列表并组装树 */
+    /**
+     * 加载窗口列表并组装树。
+     * 真机实测（374 个窗口）：ixBrowser 每次 profile-list 固定约 3.3s，与 limit 几乎无关，
+     * 原先「先分组、再每页 100 条串行翻页」要 ~12s；改为分组与窗口并发 + 大页，约 3.5s。
+     * 超过一页时仍按 getBrowserList 的规则继续翻页，不会漏数据。
+     */
     "abb/home/listBrowsers": async (...args: unknown[]): Promise<HomeBrowserTree> => {
       expectNoArgs(args);
       let groups: unknown[] = [];
       let browsers: unknown[] = [];
       let error: string | null = null;
       try {
-        groups = await getGroupList(deps());
-        browsers = await getBrowserList(deps(), { fetchAll: true });
+        [groups, browsers] = await Promise.all([
+          getGroupList(deps()),
+          getBrowserList(deps(), { fetchAll: true, limit: HOME_LIST_PAGE_SIZE }),
+        ]);
       } catch (e) {
         error = errText(e);
       }
