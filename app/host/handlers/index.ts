@@ -10,6 +10,7 @@ import { createHealthHandlers } from "./health.ts";
 import { createTaskHandlers } from "./task.ts";
 import { createSettingsHandlers } from "./settings.ts";
 import { createHomeHandlers } from "./home.ts";
+import { createAccountDataHandlers } from "./account-data.ts";
 import { createAccountsHandlers } from "./accounts.ts";
 import { createAiTasksHandlers } from "./ai-tasks.ts";
 import { createTotpHandlers } from "./totp.ts";
@@ -35,6 +36,7 @@ export function createHostHandlers(ctx: HostContext): HostHandlerTable {
     createSettingsHandlers(ctx),
     createHomeHandlers(ctx),
     createAccountsHandlers(ctx),
+    createAccountDataHandlers(ctx),
     createAiTasksHandlers(ctx),
     createTotpHandlers(ctx),
     createTaskHistoryHandlers(ctx),

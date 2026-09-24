@@ -3,6 +3,7 @@
  *
  * 通道一览（定义见 app/shared/channels/accounts.ts）：
  *   list / getDefaults / bindCandidates / bind / unbind / deleteOne  —— 同步查询或单条写库
+ *   （账号数据的 get / add / update / import / exportText 在 handlers/account-data.ts）
  *   precheck / start                                                   —— 批量操作（start 启动后台任务）
  *
  * 批量操作全部走 ctx.tasks（全局单任务，重复启动抛 TASK_BUSY）；
@@ -13,7 +14,6 @@ import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
   ACCOUNTS_ACTIONS,
   ACCOUNTS_INVOKE,
-  type AccountListRow,
   type AccountsAction,
   type AccountsBindCandidates,
   type AccountsBindResult,
@@ -47,9 +47,11 @@ import {
   healthCheckSummaryLine,
   type HealthCheckResult,
 } from "../../../src/application/health-check.ts";
-
-/** 窗口列表查询参数（ixBrowser 每次取前 500 个窗口） */
-export const WINDOW_LIST_QUERY = { page: 1, limit: 500 } as const;
+import { buildAccountRows } from "../../../src/application/account-list.ts";
+import { getGroupList } from "../../../src/ixbrowser/groups.ts";
+import type { IxBrowserClient } from "../../../src/ixbrowser/client.ts";
+import { BACKOFF_FACTOR, BASE_DELAY, MAX_RETRIES, isRetryableError } from "../../../src/ixbrowser/window.ts";
+import { HOME_LIST_PAGE_SIZE } from "./home.ts";
 
 /** 并发数范围（1-10） */
 export const CONCURRENCY_MIN = 1;
@@ -65,8 +67,12 @@ export interface AccountsHandlerDeps {
   closeBrowser?: (browserId: string) => Promise<unknown>;
   /** 删除窗口 */
   deleteBrowser?: (browserId: string) => Promise<{ success: boolean }>;
-  /** 取窗口列表（每次取前 500 个），失败抛错 */
+  /** 取全部窗口（默认 listAllWindows 翻页取全量），失败抛错 */
   listWindows?: () => Promise<WindowLike[]>;
+  /** 取分组列表（默认 getGroupList，出错返回 []） */
+  listGroups?: () => Promise<unknown[]>;
+  /** 测试注入：跳过 ixBrowser 重试的真实等待（默认 listWindows / listGroups 用） */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * 账号健康巡检的单账号判定（本地新增）。默认走 autoHealthCheck（真机连窗口只读判定），
    * 单测注入假实现以保持离线。
@@ -157,6 +163,40 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 翻页上限（每页 HOME_LIST_PAGE_SIZE 个，足够覆盖任何实际规模；防止服务端异常时死循环） */
+const MAX_WINDOW_PAGES = 100;
+
+/**
+ * 取 ixBrowser 全部窗口：按页取到「本页不满一页」为止。
+ * 每页遇到可重试错误（连接断开 / 超时等，判定与退避同 window.ts）先重试，重试用完仍失败才抛错；
+ * 不像 getBrowserList 那样静默返回部分数据——账号列表要区分「窗口不存在」与「窗口信息没取到」。
+ */
+export async function listAllWindows(
+  client: Pick<IxBrowserClient, "getProfileList">,
+  options: { sleep?: (ms: number) => Promise<void>; log?: (message: string) => void } = {},
+): Promise<WindowLike[]> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const fetchPage = async (page: number): Promise<WindowLike[]> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await client.getProfileList({ page, limit: HOME_LIST_PAGE_SIZE });
+      } catch (error) {
+        if (attempt >= MAX_RETRIES || !isRetryableError(errorText(error))) throw error;
+        const delay = BASE_DELAY * BACKOFF_FACTOR ** attempt;
+        options.log?.(`获取窗口列表第 ${page} 页失败: ${errorText(error)}，${delay.toFixed(1)}秒后重试...`);
+        await sleep(delay * 1000);
+      }
+    }
+  };
+  const all: WindowLike[] = [];
+  for (let page = 1; page <= MAX_WINDOW_PAGES; page++) {
+    const data = await fetchPage(page);
+    all.push(...data);
+    if (data.length < HOME_LIST_PAGE_SIZE) break;
+  }
+  return all;
+}
+
 /** 默认批处理器工厂；必须注入 db，否则批处理器会跳过写库（导出供单测校验） */
 export function createDefaultProcessor(
   ctx: HostContext,
@@ -170,7 +210,9 @@ export function createDefaultProcessor(
 export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDeps = {}): HostHandlerTable {
   // 以下全部惰性：工厂执行时不打开数据库、不读配置
   const repo = () => ctx.accountRepo();
-  const listWindows = deps.listWindows ?? (async () => ctx.ix().getProfileList({ ...WINDOW_LIST_QUERY }));
+  const listWindows = deps.listWindows ?? (() => listAllWindows(ctx.ix(), { log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
+  const listGroups =
+    deps.listGroups ?? (() => getGroupList({ client: ctx.ix(), log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
 
   const createProcessor =
     deps.createProcessor ??
@@ -299,35 +341,22 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
   };
 
   return {
+    /**
+     * 账号列表 + 窗口名 / 分组。分组与窗口列表并发请求，窗口列表翻页取全量（以前只取第 1 页 500 个）。
+     * ixBrowser 不可达时窗口名留空、绑定了窗口的账号归「窗口信息获取失败」，不报错。
+     * 不下发密码 / 密钥 / 辅助邮箱原文（见 buildAccountRows）。
+     */
     [ACCOUNTS_INVOKE.accountsList]: async (): Promise<AccountsListResult> => {
       const accounts = repo().getAllAccounts();
-
-      // 窗口名称映射：ixBrowser 不可达时名称留空，不报错
-      const nameMap = new Map<string, string>();
       let windowError: string | null = null;
-      try {
-        const windows = await listWindows();
-        for (const w of windows) {
-          const id = w.profile_id === null || w.profile_id === undefined ? "" : String(w.profile_id);
-          if (id) nameMap.set(id, typeof w.name === "string" ? w.name : "");
-        }
-      } catch (error) {
-        windowError = errorText(error);
-      }
-
-      const rows = accounts.map((a): AccountListRow => {
-        const browserId = a.browser_profile_id ? String(a.browser_profile_id) : "";
-        const str = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
-        return {
-          email: a.email,
-          login_status: str(a.login_status),
-          last_error: str(a["last_error"]),
-          browser_profile_id: browserId,
-          window_name: browserId ? (nameMap.get(browserId) ?? "") : "",
-          updated_at: str(a.updated_at),
-        };
-      });
-      return { rows, windowError };
+      const [groups, windows] = await Promise.all([
+        listGroups(),
+        listWindows().catch((error: unknown) => {
+          windowError = errorText(error);
+          return null;
+        }),
+      ]);
+      return { ...buildAccountRows(accounts, groups, windows), windowError };
     },
 
     [ACCOUNTS_INVOKE.accountsGetDefaults]: (): AccountsDefaults => {

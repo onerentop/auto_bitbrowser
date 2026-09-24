@@ -26,7 +26,7 @@ import {
 } from "../../../../shared/logic/settings-data.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { useHostStatus } from "../../stores/host-status.ts";
-import { BatchImportModal } from "./BatchImportModal.tsx";
+import { BatchImportModal } from "../../components/BatchImportModal.tsx";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 

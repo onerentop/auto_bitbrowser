@@ -40,7 +40,7 @@ import { createHostContext } from "../app/host/context.ts";
 import { createSettingsHandlers } from "../app/host/handlers/settings.ts";
 import { ERROR_CODES } from "../app/shared/envelope.ts";
 import { IPC } from "../app/shared/ipc.ts";
-import { SETTINGS_INVOKE, SETTINGS_NUMBER_RANGES, SETTINGS_TASK_TYPES, clampSettingsNumber, clampSettingsNumbers } from "../app/shared/channels/settings.ts";
+import { SETTINGS_INVOKE, SETTINGS_NUMBER_RANGES, clampSettingsNumber, clampSettingsNumbers } from "../app/shared/channels/settings.ts";
 
 const tmpDirs = [];
 function makeTmp() {
@@ -391,7 +391,7 @@ function makeHandlers(options = {}) {
     openDatabase: () => new DatabaseSync(":memory:"),
     ixClient: options.ixClient,
   });
-  const handlers = createSettingsHandlers(ctx, { fetchImpl: options.fetchImpl, sleep: async () => {} });
+  const handlers = createSettingsHandlers(ctx, { fetchImpl: options.fetchImpl });
   // handlers 只登记了白名单里的通道；返回值形状由各用例自行断言
   const call = (channel, ...args) => /** @type {(...a: any[]) => any} */ (handlers[channel])(...args);
   return { ctx, handlers, call, events, finished, dataRoot };
@@ -431,12 +431,6 @@ test("settings handler：参数校验（类型 / 范围 / 枚举 / 必填）", a
   await rejectsInvalid(() => call(I.settingsProxiesImport, "no valid line"));
   await rejectsInvalid(() => call(I.settingsProxiesBindings, "1"));
   await rejectsInvalid(() => call(I.settingsProxiesUnbind, "  "));
-  await rejectsInvalid(() => call(I.settingsAccountsAdd, { email: "abc", password: "", recovery_email: "", secret_key: "" }));
-  await rejectsInvalid(() => call(I.settingsAccountsUpdate, { email: "", password: "", recovery_email: "", secret_key: "" }));
-  await rejectsInvalid(() => call(I.settingsAccountsImport, 42));
-  await rejectsInvalid(() => call(I.settingsAccountsImport, "bad\n# only comment"));
-  await rejectsInvalid(() => call(I.settingsAccountsDelete, []));
-  await rejectsInvalid(() => call(I.settingsAccountsDelete, [1]));
   await rejectsInvalid(() => call(I.settingsGetTheme, "x"));
   await rejectsInvalid(() => call(I.settingsGetTheme, undefined));
 });
@@ -504,131 +498,6 @@ test("settings handler：代理 增 / 导入 / 列表 / 编辑 / 删除 / 绑定
   assert.equal(await call(I.settingsProxiesDelete, [{ index: 0, key: "h1:80" }, { index: 2, key: "h3:82" }]), 2);
   list = await call(I.settingsProxiesList);
   assert.deepEqual(list.map((p) => p.key), ["h2:81"]);
-});
-
-test("settings handler：账号 添加 / 编辑 / 导入（已存在只更新非空字段）", async () => {
-  const { call, ctx } = makeHandlers();
-  const I = SETTINGS_INVOKE;
-  assert.equal(await call(I.settingsAccountsAdd, { email: " a@b.com ", password: " pw ", recovery_email: "r@x.com", secret_key: "S" }), true);
-  let a = ctx.accountRepo().getAccountByEmail("a@b.com");
-  assert.ok(a);
-  assert.equal(a.status, "pending");
-  assert.equal(a.password, " pw ");
-
-  ctx.accountRepo().upsertAccount({ email: "a@b.com", status: "subscribed" });
-  await call(I.settingsAccountsUpdate, { email: "a@b.com", password: "pw2", recovery_email: "", secret_key: "S" });
-  a = ctx.accountRepo().getAccountByEmail("a@b.com");
-  assert.ok(a);
-  assert.equal(a.status, "subscribed", "编辑不改状态");
-  assert.equal(a.password, "pw2");
-
-  const r = await call(I.settingsAccountsImport, "a@b.com----pw3----new@r.com\nbad\nn@m.com----p----rr@x.com----K");
-  assert.deepEqual(r, { success_count: 2, fail_count: 0 });
-  a = ctx.accountRepo().getAccountByEmail("a@b.com");
-  assert.ok(a);
-  assert.equal(a.password, "pw3");
-  assert.equal(a.recovery_email, "new@r.com");
-  assert.equal(a.secret_key, "S", "空 2FA 不覆盖");
-  assert.equal(a.status, "subscribed");
-  const n = ctx.accountRepo().getAccountByEmail("n@m.com");
-  assert.ok(n);
-  assert.equal(n.status, "pending");
-  assert.equal(n.secret_key, "K");
-
-  const list = await call(I.settingsAccountsList);
-  assert.deepEqual(list.map((x) => x.email), ["a@b.com", "n@m.com"]);
-  assert.deepEqual(Object.keys(list[0]).sort(), ["email", "password", "recovery_email", "secret_key", "status"]);
-});
-
-/**
- * 记录调用的假 ixBrowser 客户端；getProfileList 被调到说明又在按邮箱找窗口
- * @param {(id?: string) => void} [onDelete]
- */
-function recordingIx(onDelete = () => {}) {
-  const calls = [];
-  const ixClient = {
-    async getProfileList() {
-      calls.push("list");
-      return [];
-    },
-    async closeProfile(id) {
-      calls.push(`close:${id}`);
-      throw new Error("未打开");
-    },
-    async deleteProfile(id) {
-      calls.push(`delete:${id}`);
-      onDelete(id);
-      return true;
-    },
-  };
-  return { calls, ixClient };
-}
-
-test("settings handler：删除账号作为后台任务，窗口取数据库绑定，先删账号再删窗口", async () => {
-  let ctxRef;
-  const aliveAtWindowDelete = [];
-  const { calls, ixClient } = recordingIx(() => aliveAtWindowDelete.push(ctxRef.accountRepo().getAccountByEmail("a@b.com")));
-  const { call, ctx, events, finished } = makeHandlers({ ixClient });
-  ctxRef = ctx;
-  ctx.accountRepo().upsertAccount({ email: "a@b.com", password: "p" });
-  ctx.accountRepo().bindAccountToBrowser("a@b.com", "7");
-  ctx.accountRepo().upsertAccount({ email: "c@d.com", password: "p" });
-
-  const info = await call(SETTINGS_INVOKE.settingsAccountsDelete, ["a@b.com", "c@d.com", "a@b.com", ""]);
-  assert.equal(info.type, SETTINGS_TASK_TYPES.deleteAccounts);
-  assert.equal(info.label, "删除 2 个账号");
-  await rejectsInvalid(() => call(SETTINGS_INVOKE.settingsAccountsDelete, []));
-  await assert.rejects(
-    async () => call(SETTINGS_INVOKE.settingsAccountsDelete, ["c@d.com"]),
-    (/** @type {{ code?: string }} */ e) => e.code === ERROR_CODES.TASK_BUSY,
-  );
-
-  const done = await finished;
-  assert.equal(done.outcome, "succeeded");
-  assert.deepEqual(done.result, { total: 2, deleted_accounts: 2, deleted_windows: 1, failed_count: 0, failed_list: [] });
-  // 只删绑定的窗口 7；关闭失败不影响删除；不再去 ixBrowser 按邮箱找窗口
-  assert.deepEqual(calls, ["close:7", "delete:7"]);
-  // 删窗口时账号已经从库里删掉
-  assert.deepEqual(aliveAtWindowDelete, [null]);
-  assert.equal(ctx.accountRepo().getAllAccounts().length, 0);
-  const logs = events.filter(([c]) => c === IPC.event.taskLog).map(([, p]) => p.message);
-  assert.ok(logs.includes("开始删除 2 个账号，将同时删除已绑定的 ixBrowser 窗口"));
-  assert.ok(logs.includes("已删除: a@b.com"));
-  assert.ok(logs.includes("删除完成: 已删除 2 个账号，1 个窗口"));
-});
-
-test("settings handler：删除账号时库里没删掉的计失败，其绑定窗口不删", async () => {
-  const { calls, ixClient } = recordingIx();
-  const { call, ctx, events, finished } = makeHandlers({ ixClient });
-  const repo = ctx.accountRepo();
-  repo.upsertAccount({ email: "x@y.com", password: "p" });
-  repo.bindAccountToBrowser("x@y.com", "5");
-  const realDelete = repo.deleteAccount.bind(repo);
-  repo.deleteAccount = (email) => (email === "x@y.com" ? false : realDelete(email));
-
-  // ghost@z.com 库里本来就没有
-  await call(SETTINGS_INVOKE.settingsAccountsDelete, ["x@y.com", "ghost@z.com"]);
-  const done = await finished;
-  assert.equal(done.outcome, "succeeded");
-  assert.deepEqual(done.result, {
-    total: 2,
-    deleted_accounts: 0,
-    deleted_windows: 0,
-    failed_count: 2,
-    failed_list: [
-      { email: "x@y.com", error: "数据库中未删除该账号" },
-      { email: "ghost@z.com", error: "数据库中未删除该账号" },
-    ],
-  });
-  assert.deepEqual(calls, []);
-  assert.ok(repo.getAccountByEmail("x@y.com"));
-  const items = events.filter(([c]) => c === IPC.event.taskItem).map(([, p]) => [p.key, p.status]);
-  assert.deepEqual(items, [
-    ["x@y.com", "失败"],
-    ["ghost@z.com", "失败"],
-  ]);
-  const logs = events.filter(([c]) => c === IPC.event.taskLog).map(([, p]) => p.message);
-  assert.ok(logs.includes("删除完成: 已删除 0 个账号，失败 2 个"));
 });
 
 // ==================== 评审修复补测 ====================
@@ -766,51 +635,4 @@ test("settings handler：删除代理只回写一次，并级联删除被删代�
   assert.deepEqual(repo.getProxyBindingDetails(ids.a), []);
   assert.deepEqual(repo.getProxyBindingDetails(ids.c), []);
   assert.equal(repo.getProxyBindingDetails(ids.b).length, 1, "未删的代理绑定保留");
-});
-
-test("settings handler：删除账号任务中途停止，剩余账号保留", async () => {
-  let ctxRef;
-  const ixClient = {
-    async getProfileList() {
-      return [];
-    },
-    async closeProfile() {
-      ctxRef.tasks.stop(); // 处理第一个账号的窗口时用户点了停止
-    },
-    async deleteProfile() {
-      return true;
-    },
-  };
-  const { call, ctx, finished } = makeHandlers({ ixClient });
-  ctxRef = ctx;
-  for (const e of ["a@b.com", "c@d.com", "e@f.com"]) ctx.accountRepo().upsertAccount({ email: e, password: "p" });
-  ctx.accountRepo().bindAccountToBrowser("a@b.com", "1");
-
-  await call(SETTINGS_INVOKE.settingsAccountsDelete, ["a@b.com", "c@d.com", "e@f.com"]);
-  const done = await finished;
-  assert.equal(done.outcome, "stopped");
-  assert.deepEqual(ctx.accountRepo().getAllAccounts().map((a) => a.email).sort(), ["c@d.com", "e@f.com"]);
-});
-
-test("settings handler：删除未绑定窗口的账号，ixBrowser 里同名窗口保留", async () => {
-  const calls = [];
-  const ixClient = {
-    async getProfileList() {
-      calls.push("list");
-      return [{ profile_id: 9, name: "a@b.com", username: "a@b.com" }];
-    },
-    async closeProfile(id) {
-      calls.push(`close:${id}`);
-    },
-    async deleteProfile(id) {
-      calls.push(`delete:${id}`);
-      return true;
-    },
-  };
-  const { call, ctx, finished } = makeHandlers({ ixClient });
-  ctx.accountRepo().upsertAccount({ email: "a@b.com", password: "p" });
-  await call(SETTINGS_INVOKE.settingsAccountsDelete, ["a@b.com"]);
-  const done = await finished;
-  assert.deepEqual(done.result, { total: 1, deleted_accounts: 1, deleted_windows: 0, failed_count: 0, failed_list: [] });
-  assert.deepEqual(calls, []);
 });

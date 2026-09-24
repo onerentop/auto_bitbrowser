@@ -6,14 +6,14 @@
  */
 import { useDeferredValue, useMemo, useState, type ReactElement } from "react";
 import { App, Card, Input, Modal, Space, Table, Typography } from "antd";
-import type { ImportResultDto } from "../../../../shared/channels/settings.ts";
+import type { ImportResultDto } from "../../../shared/channels/settings.ts";
 import {
   countImportRows,
   parseImportText,
   truncateInvalidLine,
   type LineParseResult,
-} from "../../../../shared/logic/settings-data.ts";
-import { describeError } from "../../lib/ipc.ts";
+} from "../../../shared/logic/settings-data.ts";
+import { describeError } from "../lib/ipc.ts";
 
 export interface BatchImportModalProps<T> {
   open: boolean;

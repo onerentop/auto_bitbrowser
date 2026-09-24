@@ -13,6 +13,7 @@
  *   - start：   后端重新做一遍同样的筛选（防止两次调用之间数据变化），然后启动后台任务
  */
 import type { TaskInfo } from "../ipc.ts";
+import type { ImportResultDto } from "./settings.ts";
 
 /** 「删除选中」（只删账号、不删窗口）任务的 label；渲染层据此区分删除完成提示的两种文案（:1789-1792） */
 export const DELETE_ACCOUNTS_ONLY_LABEL = "删除选中";
@@ -34,11 +35,25 @@ export const ACCOUNTS_INVOKE = {
   accountsUnbind: "abb/accounts/unbind",
  /** 删除单个账号，不删窗口（。:1631；有任务在跑时抛 TASK_BUSY） */
   accountsDeleteOne: "abb/accounts/deleteOne",
+  // ---------- 账号数据（从设置页迁来） ----------
+  /** 按邮箱取账号原文（编辑弹窗用） */
+  accountsGet: "abb/accounts/get",
+  /** 添加账号（新增 status=pending） */
+  accountsAdd: "abb/accounts/add",
+  /** 编辑账号（不改状态） */
+  accountsUpdate: "abb/accounts/update",
+  /** 批量导入（后端重新解析文本，整批一个事务） */
+  accountsImport: "abb/accounts/import",
+  /** 导出选中：后端生成导出文本 */
+  accountsExportText: "abb/accounts/exportText",
 } as const;
 
 // ==================== 数据类型 ====================
 
-/** 表格一行（字段名与 accounts 表列名一致） */
+/**
+ * 列表一行（字段名与 accounts 表列名一致）。
+ * **只下发有 / 无与登录状态**，不下发密码 / 2FA 密钥 / 辅助邮箱原文（编辑时用 abb/accounts/get 单独取）。
+ */
 export interface AccountListRow {
   email: string;
   login_status: string | null;
@@ -47,12 +62,33 @@ export interface AccountListRow {
   browser_profile_id: string;
   /** 由 browser_profile_id 映射；ixBrowser 不可达或未找到时为空串 */
   window_name: string;
+  /** 窗口所在分组；未绑定窗口 / 窗口不存在时为下面的伪分组 */
+  group_id: number;
+  group_name: string;
+  has_password: boolean;
+  has_recovery_email: boolean;
+  has_secret: boolean;
+  last_login_at: string | null;
   updated_at: string | null;
+}
+
+/** 伪分组：账号没有绑定窗口 */
+export const UNBOUND_GROUP_ID = -1;
+/** 伪分组：绑定的窗口在 ixBrowser 里找不到（或窗口列表取失败） */
+export const MISSING_WINDOW_GROUP_ID = -2;
+
+/** 分组标签的一项 */
+export interface AccountGroupCount {
+  groupId: number;
+  groupName: string;
+  count: number;
 }
 
 export interface AccountsListResult {
   rows: AccountListRow[];
- /** 取窗口列表失败的原因（:385 的「获取窗口列表失败」日志）；成功为 null */
+  /** 真实分组按 ID 升序，伪分组（未绑定 / 窗口不存在）排最后；只列有账号的分组 */
+  groups: AccountGroupCount[];
+  /** 取窗口列表失败的原因；成功为 null */
   windowError: string | null;
 }
 
@@ -154,6 +190,20 @@ export interface AccountsUnbindResult {
   browserId: string;
 }
 
+/** 编辑弹窗 / 添加 / 编辑用的账号原文（只在编辑时按邮箱单独取，列表里不下发） */
+export interface AccountDetail {
+  email: string;
+  password: string;
+  recovery_email: string;
+  secret_key: string;
+}
+
+/** 导出：后端生成文本（含原文，这是导出的用途）；count 为实际导出的账号数 */
+export interface AccountsExportResult {
+  text: string;
+  count: number;
+}
+
 // ==================== 通道 → 类型 ====================
 
 export interface AccountsInvokeMap {
@@ -168,4 +218,9 @@ export interface AccountsInvokeMap {
   "abb/accounts/bind": { args: [email: string, browserId: string]; result: AccountsBindResult };
   "abb/accounts/unbind": { args: [email: string]; result: AccountsUnbindResult };
   "abb/accounts/deleteOne": { args: [email: string]; result: boolean };
+  "abb/accounts/get": { args: [email: string]; result: AccountDetail };
+  "abb/accounts/add": { args: [account: AccountDetail]; result: boolean };
+  "abb/accounts/update": { args: [account: AccountDetail]; result: boolean };
+  "abb/accounts/import": { args: [text: string]; result: ImportResultDto };
+  "abb/accounts/exportText": { args: [emails: string[]]; result: AccountsExportResult };
 }

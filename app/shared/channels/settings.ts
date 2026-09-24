@@ -1,5 +1,5 @@
 /**
- * 设置页（配置 / 代理 / 账号数据） 的 IPC 通道与类型
+ * 设置页（配置 / 代理） 的 IPC 通道与类型（账号数据已迁到账号管理页，见 channels/accounts.ts）
  *
  * 命名 `abb/settings/动作`。每新增一个通道：
  *   1. 在 SETTINGS_INVOKE 里登记常量
@@ -11,7 +11,6 @@
  * 常量键统一带 settings 前缀：IPC.invoke 是各领域常量展开合并的，
  * 键名重复会静默覆盖，前缀避免与「账号管理」「首页」的通道键撞名。
  */
-import type { TaskInfo } from "../ipc.ts";
 
 export const SETTINGS_INVOKE = {
   // ---------- 配置 ----------
@@ -33,13 +32,6 @@ export const SETTINGS_INVOKE = {
   settingsProxiesImport: "abb/settings/proxiesImport",
   settingsProxiesBindings: "abb/settings/proxiesBindings",
   settingsProxiesUnbind: "abb/settings/proxiesUnbind",
-  // ---------- 账号数据 ----------
-  settingsAccountsList: "abb/settings/accountsList",
-  settingsAccountsAdd: "abb/settings/accountsAdd",
-  settingsAccountsUpdate: "abb/settings/accountsUpdate",
-  settingsAccountsImport: "abb/settings/accountsImport",
-  /** 删除账号 + 对应 ixBrowser 窗口（后台任务） */
-  settingsAccountsDelete: "abb/settings/accountsDelete",
 } as const;
 
 // ==================== 配置 ====================
@@ -183,43 +175,13 @@ export interface ProxyBindingDto {
   bound_at: string | null;
 }
 
-// ==================== 账号数据 ====================
+// ==================== 批量导入 ====================
 
-export interface SettingsAccountDto {
-  email: string;
-  password: string;
-  recovery_email: string;
-  secret_key: string;
-  status: string;
-}
-
-/** 添加 / 编辑账号输入 */
-export interface SettingsAccountInputDto {
-  email: string;
-  password: string;
-  recovery_email: string;
-  secret_key: string;
-}
-
-/** 批量导入结果（ 的统计） */
+/** 批量导入结果（代理页与账号管理页共用） */
 export interface ImportResultDto {
   success_count: number;
   fail_count: number;
 }
-
-/** 删除账号任务的结果（与账号管理页批量删除同一结构） */
-export interface DeleteAccountsResultDto {
-  total: number;
-  deleted_accounts: number;
-  deleted_windows: number;
-  failed_count: number;
-  failed_list: Array<{ email: string; error: string }>;
-}
-
-/** 设置页启动的后台任务类型（TaskInfo.type / TaskFinishedEvent.type） */
-export const SETTINGS_TASK_TYPES = {
-  deleteAccounts: "settings_delete_accounts",
-} as const;
 
 export interface SettingsInvokeMap {
   "abb/settings/load": { args: []; result: SettingsSnapshotDto };
@@ -234,9 +196,4 @@ export interface SettingsInvokeMap {
   "abb/settings/proxiesImport": { args: [text: string]; result: ImportResultDto };
   "abb/settings/proxiesBindings": { args: [proxyId: number]; result: ProxyBindingDto[] };
   "abb/settings/proxiesUnbind": { args: [browserId: string]; result: boolean };
-  "abb/settings/accountsList": { args: []; result: SettingsAccountDto[] };
-  "abb/settings/accountsAdd": { args: [account: SettingsAccountInputDto]; result: boolean };
-  "abb/settings/accountsUpdate": { args: [account: SettingsAccountInputDto]; result: boolean };
-  "abb/settings/accountsImport": { args: [text: string]; result: ImportResultDto };
-  "abb/settings/accountsDelete": { args: [emails: string[]]; result: TaskInfo };
 }

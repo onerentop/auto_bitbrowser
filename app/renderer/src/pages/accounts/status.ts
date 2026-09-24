@@ -1,10 +1,7 @@
 /**
- * 账号管理页：状态文案 / 颜色 / 筛选 / 统计（纯函数，无 React 依赖，可直接单测）
+ * 账号管理页：登录状态文案 / 颜色（纯函数，无 React 依赖，可直接单测）
  *
- * 状态文案与颜色沿用原有定义；
- * 筛选按单元格**显示文本**比对：先算文本再比对，
- * 保证 null / 未知状态等边角情况也有一致的处理。
- * Pro / Sub2API / 解锁状态三列及其筛选项已随对应功能按用户要求删除。
+ * 筛选 / 计数 / 排序在 app/shared/logic/account-list.ts。
  */
 import type { AccountListRow } from "../../../../shared/channels/accounts.ts";
 
@@ -43,37 +40,4 @@ export function loginView(row: Pick<AccountListRow, "login_status" | "last_error
   }
   // mapping.get(status, status or "未登录")
   return { text: pick(LOGIN_TEXT, status) ?? (status || "未登录"), color, tooltip: null };
-}
-
-/** 筛选下拉（与登录相关的 4 项） */
-export const FILTER_OPTIONS = ["全部", "未登录", "已登录", "登录失败"] as const;
-
-export type FilterOption = (typeof FILTER_OPTIONS)[number];
-
-/** 按显示文本判断一行是否可见 */
-export function matchesFilter(row: AccountListRow, filter: FilterOption): boolean {
-  switch (filter) {
-    case "全部":
-      return true;
-    case "未登录":
-      return loginView(row).text === "未登录";
-    case "已登录":
-      return loginView(row).text === "已登录";
-    case "登录失败":
-      return loginView(row).text.startsWith("失败");
-  }
-}
-
-/** 底部统计：统计全部账号（不受筛选影响） */
-export function computeStats(rows: readonly AccountListRow[]): { total: number; loggedIn: number } {
-  let loggedIn = 0;
-  for (const r of rows) {
-    if (r.login_status === "logged_in") loggedIn += 1;
-  }
-  return { total: rows.length, loggedIn };
-}
-
-export function statsText(rows: readonly AccountListRow[]): string {
-  const s = computeStats(rows);
-  return `总计 ${s.total} 个 | 已登录 ${s.loggedIn}`;
 }

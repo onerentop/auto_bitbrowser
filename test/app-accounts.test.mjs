@@ -15,9 +15,11 @@ import { ACCOUNTS_ACTIONS, ACCOUNTS_INVOKE } from "../app/shared/channels/accoun
 import { createHostContext } from "../app/host/context.ts";
 import { createDispatcher } from "../app/host/dispatch.ts";
 import { createAccountsHandlers, createDefaultProcessor, readLlmParams } from "../app/host/handlers/accounts.ts";
+import { createAccountDataHandlers } from "../app/host/handlers/account-data.ts";
 import { finishedNotice } from "../app/renderer/src/pages/accounts/finished-notice.ts";
 import { createBatchResult } from "../src/automation/batch/types.ts";
-import { FILTER_OPTIONS, loginView, matchesFilter, statsText } from "../app/renderer/src/pages/accounts/status.ts";
+import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
+import { accountSorter, countLogin, filterAccounts } from "../app/shared/logic/account-list.ts";
 
 const CH = ACCOUNTS_INVOKE;
 
@@ -25,6 +27,9 @@ function fakeIx(windows, { fail = false } = {}) {
   const calls = [];
   return {
     calls,
+    async getGroupList() {
+      return [];
+    },
     async getProfileList(q) {
       calls.push(["list", q]);
       if (fail) throw new Error("connect ECONNREFUSED 127.0.0.1:53200");
@@ -46,7 +51,7 @@ function fakeIx(windows, { fail = false } = {}) {
 
 /**
  * 建上下文：临时数据根（不碰仓库根的 config.json / accounts.db）、:memory: 库
- * @param {{ windows?: Array<{ profile_id: number, name: string }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
+ * @param {{ windows?: Array<{ profile_id: number, name: string, group_id?: number }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
  */
 function setup({ windows = [], ixFail = false, deps = {} } = {}) {
   const events = [];
@@ -62,7 +67,8 @@ function setup({ windows = [], ixFail = false, deps = {} } = {}) {
     openDatabase: () => new DatabaseSync(":memory:"),
     ixClient: /** @type {any} */ (ix), // 假客户端只实现账号页用到的四个方法
   });
-  const handlers = createAccountsHandlers(ctx, deps);
+  // 默认不真的等待重试退避（ixFail 的 ECONNREFUSED 属于可重试错误）
+  const handlers = { ...createAccountsHandlers(ctx, { sleep: async () => {}, ...deps }), ...createAccountDataHandlers(ctx) };
   const dispatch = createDispatcher(handlers);
   /** @returns {Promise<any>} 信封里的 data 形状由各用例自行断言 */
   const call = async (channel, ...args) => {
@@ -103,30 +109,167 @@ const OPTS = { concurrency: 2 };
 
 // ==================== 列表 ====================
 
-test("list：窗口名称由 browser_profile_id 映射，查询参数为 page=1 limit=500", async () => {
-  const s = setup({ windows: [{ profile_id: 101, name: "win-a" }] });
+test("list：窗口名 / 分组由 browser_profile_id 映射；分组与窗口并发请求；未绑定 / 窗口不存在归伪分组", async () => {
+  /** @type {string[]} */
+  const order = [];
+  const s = setup({
+    windows: [
+      { profile_id: 101, name: "win-a", group_id: 2 },
+      { profile_id: 102, name: "win-b" },
+    ],
+    deps: {
+      listGroups: async () => {
+        order.push("groups:start");
+        await new Promise((r) => setTimeout(r, 10));
+        order.push("groups:end");
+        return [{ id: 2, title: "业务组" }];
+      },
+    },
+  });
+  const origList = s.ix.getProfileList.bind(s.ix);
+  s.ix.getProfileList = async (q) => {
+    order.push("windows");
+    return origList(q);
+  };
   seed(s.ctx, [
     { email: "a@x.com", browser_profile_id: "101", login_status: "logged_in" },
     { email: "b@x.com", login_status: "login_failed", last_error: "boom" },
+    { email: "c@x.com", browser_profile_id: "999" },
+    { email: "d@x.com", browser_profile_id: "102" },
   ]);
   const r = await s.call(CH.accountsList);
   assert.equal(r.windowError, null);
-  assert.deepEqual(s.ix.calls[0], ["list", { page: 1, limit: 500 }]);
-  const a = r.rows.find((x) => x.email === "a@x.com");
-  assert.equal(a.window_name, "win-a");
-  assert.equal(a.browser_profile_id, "101");
-  const b = r.rows.find((x) => x.email === "b@x.com");
-  assert.equal(b.browser_profile_id, "");
-  assert.equal(b.last_error, "boom");
-  assert.equal(b.window_name, "");
+  assert.deepEqual(order.slice(0, 2), ["groups:start", "windows"], "窗口列表应与分组列表并发发出");
+  const by = Object.fromEntries(r.rows.map((x) => [x.email, x]));
+  assert.deepEqual([by["a@x.com"].window_name, by["a@x.com"].group_id, by["a@x.com"].group_name], ["win-a", 2, "业务组"]);
+  assert.deepEqual([by["b@x.com"].browser_profile_id, by["b@x.com"].group_name, by["b@x.com"].last_error], ["", "未绑定窗口", "boom"]);
+  assert.deepEqual([by["c@x.com"].window_name, by["c@x.com"].group_name], ["", "窗口不存在"]);
+  assert.deepEqual([by["d@x.com"].group_id, by["d@x.com"].group_name], [0, "未分组"]);
+  // 真实分组按 ID 升序，伪分组排最后
+  assert.deepEqual(r.groups.map((g) => [g.groupName, g.count]), [
+    ["未分组", 1],
+    ["业务组", 1],
+    ["未绑定窗口", 1],
+    ["窗口不存在", 1],
+  ]);
 });
 
-test("list：ixBrowser 不可达时名称为空、不报错", async () => {
+test("list：只下发有 / 无，不含密码 / 2FA 密钥 / 辅助邮箱原文", async () => {
+  const s = setup();
+  s.ctx.accountRepo().upsertAccount({ email: "a@x.com", password: "PW-SECRET-1", recovery_email: "rec@y.com", secret_key: "TOTPKEYXYZ" });
+  s.ctx.accountRepo().upsertAccount({ email: "b@x.com" });
+  const r = await s.call(CH.accountsList);
+  const by = Object.fromEntries(r.rows.map((x) => [x.email, x]));
+  assert.deepEqual([by["a@x.com"].has_password, by["a@x.com"].has_recovery_email, by["a@x.com"].has_secret], [true, true, true]);
+  assert.deepEqual([by["b@x.com"].has_password, by["b@x.com"].has_recovery_email, by["b@x.com"].has_secret], [false, false, false]);
+  const json = JSON.stringify(r);
+  for (const secret of ["PW-SECRET-1", "rec@y.com", "TOTPKEYXYZ"]) assert.ok(!json.includes(secret), `不应下发 ${secret}`);
+});
+
+test("list：窗口超过一页时翻页取全量（以前只取前 500 个）", async () => {
+  const all = Array.from({ length: 1234 }, (_, i) => ({ profile_id: i + 1, name: `w${i + 1}` }));
+  const s = setup();
+  /** @type {any[]} */
+  const queries = [];
+  s.ix.getProfileList = async (q) => {
+    queries.push(q);
+    const start = (q.page - 1) * q.limit;
+    return all.slice(start, start + q.limit);
+  };
+  seed(s.ctx, [{ email: "last@x.com", browser_profile_id: "1234" }]);
+  const r = await s.call(CH.accountsList);
+  assert.equal(r.rows[0].window_name, "w1234");
+  assert.deepEqual(queries.map((q) => q.page), [1, 2]);
+  assert.ok(queries[0].limit >= 1000);
+});
+
+test("list：ixBrowser 不可达时名称为空、绑定窗口的账号归「窗口信息获取失败」，不报错", async () => {
   const s = setup({ ixFail: true });
   seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
   const r = await s.call(CH.accountsList);
   assert.match(r.windowError, /ECONNREFUSED/);
   assert.equal(r.rows[0].window_name, "");
+  assert.equal(r.rows[0].group_name, "窗口信息获取失败");
+});
+
+test("list：窗口翻页遇到可重试错误先重试（1s/2s 退避）再成功；不可重试错误立刻放弃", async () => {
+  /** @type {number[]} */
+  const sleeps = [];
+  const s = setup({ deps: { sleep: async (ms) => void sleeps.push(ms) } });
+  let failures = 2;
+  s.ix.getProfileList = async () => {
+    if (failures-- > 0) throw new Error("exception desc:fetch failed network");
+    return [{ profile_id: 101, name: "win-a" }];
+  };
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
+  const r = await s.call(CH.accountsList);
+  assert.equal(r.windowError, null);
+  assert.equal(r.rows[0].window_name, "win-a");
+  assert.deepEqual(sleeps, [1000, 2000]);
+
+  const s2 = setup({ deps: { sleep: async (ms) => void sleeps.push(ms) } });
+  sleeps.length = 0;
+  s2.ix.getProfileList = async () => {
+    throw new Error("profile not exist");
+  };
+  seed(s2.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
+  const r2 = await s2.call(CH.accountsList);
+  assert.match(r2.windowError, /profile not exist/);
+  assert.deepEqual(sleeps, [], "不可重试错误不等待");
+});
+
+// ==================== 账号数据（从设置页迁来） ====================
+
+test("账号数据：get 取原文；add 新增 pending；update 不改状态；未知账号拒绝", async () => {
+  const s = setup();
+  assert.equal(await s.call(CH.accountsAdd, { email: " a@b.com ", password: " pw ", recovery_email: "r@x.com", secret_key: "S" }), true);
+  let a = s.ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
+  assert.equal(a.status, "pending");
+  assert.equal(a.password, " pw ", "密码不 strip");
+  assert.deepEqual(await s.call(CH.accountsGet, "a@b.com"), { email: "a@b.com", password: " pw ", recovery_email: "r@x.com", secret_key: "S" });
+
+  s.ctx.accountRepo().upsertAccount({ email: "a@b.com", status: "subscribed" });
+  await s.call(CH.accountsUpdate, { email: "a@b.com", password: "pw2", recovery_email: "", secret_key: "S" });
+  a = s.ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
+  assert.equal(a.status, "subscribed", "编辑不改状态");
+  assert.equal(a.password, "pw2");
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsGet, "nobody@x.com"), bad);
+  await assert.rejects(s.call(CH.accountsUpdate, { email: "nobody@x.com", password: "", recovery_email: "", secret_key: "" }), bad);
+  await assert.rejects(s.call(CH.accountsAdd, { email: "abc", password: "", recovery_email: "", secret_key: "" }), bad);
+  await assert.rejects(s.call(CH.accountsUpdate, { email: "", password: "", recovery_email: "", secret_key: "" }), bad);
+  await assert.rejects(s.call(CH.accountsAdd, { email: "a@b.com" }), bad, "缺字段");
+});
+
+test("账号数据：导入（已存在只更新非空字段，新账号 pending）；无有效行拒绝", async () => {
+  const s = setup();
+  s.ctx.accountRepo().upsertAccount({ email: "a@b.com", password: "p", secret_key: "S", status: "subscribed" });
+  const r = await s.call(CH.accountsImport, "a@b.com----pw3----new@r.com\nbad\nn@m.com----p----rr@x.com----K");
+  assert.deepEqual(r, { success_count: 2, fail_count: 0 });
+  const a = s.ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
+  assert.deepEqual([a.password, a.recovery_email, a.secret_key, a.status], ["pw3", "new@r.com", "S", "subscribed"]);
+  const n = s.ctx.accountRepo().getAccountByEmail("n@m.com");
+  assert.ok(n);
+  assert.deepEqual([n.status, n.secret_key], ["pending", "K"]);
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsImport, 42), bad);
+  await assert.rejects(s.call(CH.accountsImport, "bad\n# only comment"), bad);
+});
+
+test("账号数据：导出文本格式不变，按传入顺序、去重、库里没有的跳过", async () => {
+  const s = setup();
+  s.ctx.accountRepo().upsertAccount({ email: "a@b.com", password: "pa", recovery_email: "ra@x.com", secret_key: "KA" });
+  s.ctx.accountRepo().upsertAccount({ email: "c@d.com", password: "pc" });
+  const r = await s.call(CH.accountsExportText, ["c@d.com", "ghost@x.com", "a@b.com", "c@d.com", ""]);
+  assert.equal(r.count, 2);
+  assert.equal(r.text, '分隔符="----"\nc@d.com----pc--------\na@b.com----pa----ra@x.com----KA\n');
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsExportText, []), bad);
+  await assert.rejects(s.call(CH.accountsExportText, [1]), bad);
 });
 
 test("getDefaults：无配置时并发数为 Python 默认值 3", async () => {
@@ -639,8 +782,11 @@ test("handler 工厂不打开数据库（惰性）", () => {
       throw new Error("不应打开数据库");
     },
   });
-  const table = createAccountsHandlers(ctx);
-  assert.deepEqual(Object.keys(table).sort(), Object.values(ACCOUNTS_INVOKE).sort());
+  // 账号管理页的通道分两张表登记（批量任务 / 账号数据），合起来恰好覆盖 ACCOUNTS_INVOKE，且互不重叠
+  const tasks = Object.keys(createAccountsHandlers(ctx));
+  const data = Object.keys(createAccountDataHandlers(ctx));
+  assert.equal(tasks.filter((k) => data.includes(k)).length, 0);
+  assert.deepEqual([...tasks, ...data].sort(), Object.values(ACCOUNTS_INVOKE).sort());
 });
 
 // ==================== 账号健康巡检（F2） ====================
@@ -789,6 +935,12 @@ const row = (o) => ({
   last_error: null,
   browser_profile_id: "",
   window_name: "",
+  group_id: -1,
+  group_name: "未绑定窗口",
+  has_password: false,
+  has_recovery_email: false,
+  has_secret: false,
+  last_login_at: null,
   updated_at: null,
   ...o,
 });
@@ -805,15 +957,44 @@ test("登录状态文案与颜色（:505-523）", () => {
   assert.equal(loginView(row({ login_status: "weird" })).text, "weird");
 });
 
-test("筛选 4 项按显示文本判断（:591-636）", () => {
-  assert.deepEqual([...FILTER_OPTIONS], ["全部", "未登录", "已登录", "登录失败"]);
-  assert.equal(matchesFilter(row({ login_status: "login_failed", last_error: "x" }), "登录失败"), true);
-  assert.equal(matchesFilter(row({ login_status: null }), "未登录"), true);
-  assert.equal(matchesFilter(row({ login_status: "logged_in" }), "已登录"), true);
-  assert.equal(matchesFilter(row({ login_status: "logged_in" }), "未登录"), false);
-  assert.equal(matchesFilter(row({}), "全部"), true);
+test("filterAccounts：分组 / 登录状态 / 搜索（邮箱包含、窗口ID 前缀、窗口名包含）叠加；无条件原样返回", () => {
+  const rows = [
+    row({ email: "Alice@X.com", login_status: "logged_in", browser_profile_id: "101", window_name: "win-a", group_id: 2 }),
+    row({ email: "bob@x.com", login_status: "login_failed", last_error: "x", browser_profile_id: "1010", window_name: "店铺B", group_id: 2 }),
+    row({ email: "carol@x.com", login_status: null, group_id: -1 }),
+    row({ email: "dave@x.com", login_status: "not_logged", browser_profile_id: "203", group_id: 3 }),
+    row({ email: "eve@x.com", login_status: "logging_in", browser_profile_id: "204", group_id: 3 }),
+  ];
+  const q = (o) => ({ groupId: null, login: "all", text: "", ...o });
+  const emails = (list) => list.map((r) => r.email);
+  assert.equal(filterAccounts(rows, q({})), rows);
+  assert.deepEqual(emails(filterAccounts(rows, q({ login: "logged_in" }))), ["Alice@X.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ login: "login_failed" }))), ["bob@x.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ login: "not_logged" }))), ["carol@x.com", "dave@x.com"], "空与 not_logged 都算未登录");
+  assert.deepEqual(emails(filterAccounts(rows, q({ groupId: -1 }))), ["carol@x.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ text: "  ALICE " }))), ["Alice@X.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ text: "101" }))), ["Alice@X.com", "bob@x.com"], "窗口ID 前缀");
+  assert.deepEqual(emails(filterAccounts(rows, q({ text: "店铺" }))), ["bob@x.com"], "窗口名");
+  assert.deepEqual(emails(filterAccounts(rows, q({ groupId: 2, login: "logged_in", text: "win" }))), ["Alice@X.com"]);
+  assert.deepEqual(countLogin(rows), { all: 5, logged_in: 1, not_logged: 2, login_failed: 1 });
 });
 
-test("底部统计（:486，已去掉 Sub2API「已关联」计数）", () => {
-  assert.equal(statsText([row({ login_status: "logged_in" }), row({ login_status: "logged_in" }), row({})]), "总计 3 个 | 已登录 2");
+test("accountSorter：模拟 antd（降序时把结果取反），未绑定窗口 / 从未登录的空值无论升降序都在最后", () => {
+  const rows = [
+    row({ email: "b@x.com", browser_profile_id: "20", last_login_at: "2026-09-20 08:00:00" }),
+    row({ email: "a@x.com", browser_profile_id: "", last_login_at: null }),
+    row({ email: "C@x.com", browser_profile_id: "9", last_login_at: "2026-09-23 16:14:36" }),
+  ];
+  const antd = (key, order) =>
+    [...rows]
+      .sort((x, y) => {
+        const r = accountSorter(key)(x, y, order);
+        return order === "descend" ? -r : r;
+      })
+      .map((r) => r.email);
+  assert.deepEqual(antd("windowId", "ascend"), ["C@x.com", "b@x.com", "a@x.com"], "数值比较：9 < 20");
+  assert.deepEqual(antd("windowId", "descend"), ["b@x.com", "C@x.com", "a@x.com"]);
+  assert.deepEqual(antd("lastLogin", "descend"), ["C@x.com", "b@x.com", "a@x.com"]);
+  assert.deepEqual(antd("lastLogin", "ascend"), ["b@x.com", "C@x.com", "a@x.com"]);
+  assert.deepEqual(antd("email", "ascend"), ["a@x.com", "b@x.com", "C@x.com"], "不区分大小写");
 });

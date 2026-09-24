@@ -1,26 +1,26 @@
 /**
- * 账号管理页（账号列表 / 绑定解绑 / 批量任务）
+ * 账号管理页（账号列表 / 添加编辑导入导出 / 绑定解绑 / 批量任务）
  *
- * 布局用 antd 重新组织，功能与文案沿用原有定义：
- *   - 两行工具栏、全选 + 已选计数、表格、底部统计
- *   - 筛选在前端过滤，勾选只对当前筛选可见的行生效
- *   - 右键菜单
+ * 布局：操作卡片（账号数据 | 批量任务 | 删除）→ 列表卡片（刷新、搜索、登录状态、分组标签、平铺虚拟表格）。
+ *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表只显示密码 / 密钥 / 辅助邮箱有无，
+ *     编辑时才按邮箱取原文
+ *   - 筛选全部在前端叠加（分组 / 登录状态 / 搜索）；被筛选隐藏的勾选保留，批量操作作用于全部勾选，确认前提示隐藏数
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
- *   - 任务运行中，除「停止」外所有操作禁用；任务结束后刷新列表
- *   - 「一键加入家庭组」与右键「加入家庭组」：用户确认不需要，桌面版不提供
- *   - 按用户要求删除：OAuth（批量 / 单个 / 一键登录+OAuth）与「自动绑定代理」、检测 Pro、
- *     刷新家庭组、开启共享、检测 403、批量解锁 403，以及 Pro / Sub2API / 解锁状态三列和对应筛选项
- * 日志区与进度条由全局 TaskDock 承担。
+ *   - 任务运行中写操作禁用；停止用底部任务坞；任务结束后刷新列表
+ *   - 右键菜单：编辑 / 绑定 / 重绑 / 解绑 / 登录 / 删除 / 删除+窗口
+ * 按用户要求已删除：OAuth、检测 Pro、家庭组、403 相关、独立的「停止」按钮与「全选」复选框。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   App,
   Button,
   Card,
-  Checkbox,
+  Divider,
   Dropdown,
+  Empty,
+  Input,
   InputNumber,
-  Select,
+  Segmented,
   Space,
   Table,
   Tag,
@@ -29,24 +29,55 @@ import {
   type MenuProps,
   type TableColumnsType,
 } from "antd";
-import { CloudDownloadOutlined, DeleteOutlined, PauseOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  CheckCircleFilled,
+  CloudDownloadOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  MinusCircleOutlined,
+  PlusOutlined,
+  SyncOutlined,
+  UploadOutlined,
+} from "@ant-design/icons";
 import type {
   AccountListRow,
   AccountsAction,
+  AccountsListResult,
   ConfirmStep,
   SelectedRow,
 } from "../../../shared/channels/accounts.ts";
+import {
+  ACCOUNT_LOGIN_FILTERS,
+  accountSorter,
+  countLogin,
+  filterAccounts,
+  type AccountLoginFilter,
+} from "../../../shared/logic/account-list.ts";
+import {
+  ACCOUNT_IMPORT_FORMAT_HINT,
+  ACCOUNT_PREVIEW_COLUMNS,
+  formatAccountPreviewRow,
+  parseAccountImportLine,
+} from "../../../shared/logic/settings-data.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
-import { logLocal, markTaskStarted, onTaskFinished, stopTask, useTaskState } from "../stores/task.ts";
+import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
+import { BatchImportModal } from "../components/BatchImportModal.tsx";
+import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
-import { FILTER_OPTIONS, loginView, matchesFilter, statsText, type FilterOption } from "./accounts/status.ts";
+import { loginView } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
 
-/** 本页启动的任务类型：结束后刷新列表 */
-// 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error）
+/** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete", "health_check"]);
 
+const EXPORT_FILE_NAME = "accounts_export.txt";
+
+/** 表格外框与表头占用的高度（表体高度 = 容器高度 - 该值） */
+const TABLE_CHROME = 40;
+
+const EMPTY_LIST: readonly AccountListRow[] = [];
 
 function toSelected(row: AccountListRow): SelectedRow {
   return { email: row.email, browserId: row.browser_profile_id };
@@ -57,6 +88,27 @@ function Multiline({ text }: { text: string }): ReactElement {
   return <div style={{ whiteSpace: "pre-wrap" }}>{text}</div>;
 }
 
+/** 有 / 无 的小图标 */
+function Flag({ on, label }: { on: boolean; label: string }): ReactNode {
+  return (
+    <Tooltip title={on ? `有${label}` : `没有${label}`}>
+      {on ? <CheckCircleFilled style={{ color: "#52c41a" }} /> : <MinusCircleOutlined style={{ color: "rgba(128,128,128,0.6)" }} />}
+    </Tooltip>
+  );
+}
+
+/** 用 Blob + <a download> 触发下载（桌面端不走文件保存对话框） */
+function downloadText(fileName: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 interface ContextMenuState {
   row: AccountListRow;
   x: number;
@@ -64,18 +116,27 @@ interface ContextMenuState {
 }
 
 export function AccountsPage(): ReactElement {
-  const { modal, notification } = App.useApp();
+  const { modal, notification, message } = App.useApp();
   const { running } = useTaskState();
   const busy = running !== null;
 
-  const [rows, setRows] = useState<AccountListRow[]>([]);
+  const [list, setList] = useState<AccountsListResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState<FilterOption>("全部");
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [checked, setChecked] = useState<string[]>([]);
   const [concurrency, setConcurrency] = useState(3);
   const [bindEmail, setBindEmail] = useState<string | null>(null);
+  /** null = 关闭；"" = 添加；邮箱 = 编辑 */
+  const [editEmail, setEditEmail] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const closeBind = useCallback(() => setBindEmail(null), []);
+  const closeEdit = useCallback(() => setEditEmail(null), []);
+
+  // 筛选条件
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const [groupId, setGroupId] = useState<number | null>(null);
+  const [login, setLogin] = useState<AccountLoginFilter>("all");
 
   // ---------- 数据加载 ----------
 
@@ -88,9 +149,11 @@ export function AccountsPage(): ReactElement {
       const r = await invoke(IPC.invoke.accountsList);
       if (seq !== loadSeq.current) return;
       if (r.windowError) logLocal(`获取窗口列表失败: ${r.windowError}`);
-      setRows(r.rows);
-      // 表格重建后勾选全部清空
-      setSelected(new Set());
+      setList(r);
+      // 刷新后保留仍存在账号的勾选
+      const emails = new Set(r.rows.map((x) => x.email));
+      setChecked((prev) => prev.filter((e) => emails.has(e)));
+      setGroupId((g) => (g !== null && !r.groups.some((x) => x.groupId === g) ? null : g));
       logLocal(`加载完成，共 ${r.rows.length} 个账号`);
     } catch (e) {
       if (seq !== loadSeq.current) return;
@@ -128,21 +191,32 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 筛选与勾选 ----------
 
-  const visibleRows = useMemo(() => rows.filter((r) => matchesFilter(r, filter)), [rows, filter]);
-  /** 只算当前可见行里的勾选（跳过隐藏行） */
-  const checkedRows = useMemo(() => visibleRows.filter((r) => selected.has(r.email)), [visibleRows, selected]);
-  const allVisibleChecked = visibleRows.length > 0 && checkedRows.length === visibleRows.length;
+  const rows = list?.rows ?? EMPTY_LIST;
+  const visible = useMemo(
+    () => filterAccounts(rows, { groupId, login, text: deferredSearch }),
+    [rows, groupId, login, deferredSearch],
+  );
+  const loginCounts = useMemo(() => countLogin(rows), [rows]);
+  const checkedSet = useMemo(() => new Set(checked), [checked]);
+  /** 全部勾选（含被筛选隐藏的），按列表顺序 */
+  const checkedRows = useMemo(() => rows.filter((r) => checkedSet.has(r.email)), [rows, checkedSet]);
+  const hiddenChecked = useMemo(() => {
+    const shown = new Set(visible.map((r) => r.email));
+    return checkedRows.filter((r) => !shown.has(r.email)).length;
+  }, [visible, checkedRows]);
 
-  const toggleAllVisible = (checked: boolean): void => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const r of visibleRows) {
-        if (checked) next.add(r.email);
-        else next.delete(r.email);
-      }
-      return next;
+  // 表格高度跟随容器（卡片占满页面剩余高度）
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [bodyHeight, setBodyHeight] = useState(400);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME));
     });
-  };
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // ---------- 提示与确认 ----------
 
@@ -172,13 +246,23 @@ export function AccountsPage(): ReactElement {
   /** precheck → 确认 → start 进行中（防止重复点击触发两轮确认） */
   const actionPending = useRef(false);
 
-  /** 批量操作统一入口：precheck → 逐个确认 → start */
+  /**
+   * 批量操作统一入口：（有隐藏勾选时先确认）→ precheck → 逐个确认 → start。
+   * 不传 target 时作用于全部勾选（含被筛选隐藏的）。
+   */
   const runAction = useCallback(
     async (action: AccountsAction, target?: SelectedRow[]): Promise<void> => {
       if (actionPending.current) return;
       actionPending.current = true;
       const targetRows = target ?? checkedRows.map(toSelected);
       try {
+        if (!target && hiddenChecked > 0 && targetRows.length > 0) {
+          const ok = await confirm({
+            title: "包含看不到的账号",
+            message: `已勾选 ${targetRows.length} 个账号，其中 ${hiddenChecked} 个被筛选隐藏，当前列表里看不到。\n\n确定对全部 ${targetRows.length} 个继续吗？`,
+          });
+          if (!ok) return;
+        }
         const pre = await invoke(IPC.invoke.accountsPrecheck, action, targetRows);
         if (!pre.ok) {
           notify(pre.level, pre.title, pre.message);
@@ -197,10 +281,28 @@ export function AccountsPage(): ReactElement {
         actionPending.current = false;
       }
     },
-    [checkedRows, concurrency, notify, confirm],
+    [checkedRows, hiddenChecked, concurrency, notify, confirm],
   );
 
-  // ---------- 单条操作（右键菜单） ----------
+  /** 导出选中（含隐藏的勾选）：后端生成文本，这里只负责下载 */
+  const exportSelected = async (): Promise<void> => {
+    if (checkedRows.length === 0) {
+      void message.info("请先勾选要导出的账号");
+      return;
+    }
+    try {
+      const r = await invoke(
+        IPC.invoke.accountsExportText,
+        checkedRows.map((x) => x.email),
+      );
+      downloadText(EXPORT_FILE_NAME, r.text);
+      void message.success(`已导出 ${r.count} 个账号到: ${EXPORT_FILE_NAME}`);
+    } catch (e) {
+      void message.error(`导出失败: ${describeError(e)}`);
+    }
+  };
+
+  // ---------- 单条操作（右键菜单 / 行内按钮） ----------
 
   /** 解绑窗口 */
   const unbind = async (row: AccountListRow): Promise<void> => {
@@ -242,17 +344,15 @@ export function AccountsPage(): ReactElement {
 
   const menuItems = (row: AccountListRow): MenuProps["items"] => {
     const hasBrowser = row.browser_profile_id !== "";
-    const items: NonNullable<MenuProps["items"]> = hasBrowser
-      ? [
-          { key: "rebind", label: "重新绑定窗口", disabled: busy },
-          { key: "unbind", label: "解绑窗口", disabled: busy },
-        ]
-      : [{ key: "bind", label: "绑定窗口", disabled: busy }];
-    items.push({ type: "divider" }, { key: "login", label: "登录", disabled: busy });
-    // 这里原本还有「加入家庭组」—— 用户确认不需要该功能，桌面版不提供
+    const items: NonNullable<MenuProps["items"]> = [{ key: "edit", label: "编辑账号" }, { type: "divider" }];
+    if (hasBrowser) {
+      items.push({ key: "rebind", label: "重新绑定窗口", disabled: busy }, { key: "unbind", label: "解绑窗口", disabled: busy });
+    } else {
+      items.push({ key: "bind", label: "绑定窗口", disabled: busy });
+    }
     items.push(
       { type: "divider" },
-      { key: "refresh", label: "刷新" },
+      { key: "login", label: "登录", disabled: busy },
       { type: "divider" },
       { key: "delete", label: "删除账号", danger: true, disabled: busy },
     );
@@ -263,6 +363,9 @@ export function AccountsPage(): ReactElement {
   const onMenuClick = (row: AccountListRow, key: string): void => {
     setCtxMenu(null);
     switch (key) {
+      case "edit":
+        setEditEmail(row.email);
+        break;
       case "bind":
       case "rebind":
         setBindEmail(row.email);
@@ -272,9 +375,6 @@ export function AccountsPage(): ReactElement {
         break;
       case "login":
         void runAction("single_login", [toSelected(row)]);
-        break;
-      case "refresh":
-        void load();
         break;
       case "delete":
         void deleteOne(row);
@@ -287,162 +387,219 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 表格列 ----------
 
-  const tag = (text: string, color: string, tooltip?: string | null): ReactNode => {
-    const t = <Tag color={color}>{text}</Tag>;
-    return tooltip ? <Tooltip title={tooltip}>{t}</Tooltip> : t;
-  };
-
   const columns: TableColumnsType<AccountListRow> = [
-    { title: "邮箱", dataIndex: "email", width: 240, ellipsis: true },
+    { title: "邮箱", key: "email", width: 240, ellipsis: true, sorter: accountSorter("email"), render: (_, r) => r.email },
     {
       title: "登录状态",
       key: "login",
-      width: 190,
+      width: 170,
+      ellipsis: true,
       render: (_, r) => {
         const v = loginView(r);
-        return tag(v.text, v.color, v.tooltip);
+        const t = <Tag color={v.color}>{v.text}</Tag>;
+        return v.tooltip ? <Tooltip title={v.tooltip}>{t}</Tooltip> : t;
       },
     },
-    { title: "窗口名称", key: "windowName", ellipsis: true, render: (_, r) => r.window_name || "-" },
-    { title: "窗口ID", key: "windowId", width: 100, render: (_, r) => r.browser_profile_id || "-" },
-    { title: "更新时间", key: "updatedAt", width: 170, render: (_, r) => r.updated_at || "-" },
+    {
+      title: "窗口ID",
+      key: "windowId",
+      width: 90,
+      sorter: accountSorter("windowId"),
+      defaultSortOrder: "descend",
+      render: (_, r) => r.browser_profile_id || <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    { title: "窗口名", key: "windowName", width: 180, ellipsis: true, render: (_, r) => r.window_name || "—" },
+    { title: "分组", key: "group", width: 120, ellipsis: true, render: (_, r) => <Tag bordered={false}>{r.group_name}</Tag> },
+    { title: "密码", key: "pw", width: 56, align: "center", render: (_, r) => <Flag on={r.has_password} label="密码" /> },
+    { title: "辅助邮箱", key: "rec", width: 76, align: "center", render: (_, r) => <Flag on={r.has_recovery_email} label="辅助邮箱" /> },
+    { title: "2FA 密钥", key: "secret", width: 76, align: "center", render: (_, r) => <Flag on={r.has_secret} label="2FA 密钥" /> },
+    {
+      title: "最后登录",
+      key: "lastLogin",
+      width: 150,
+      sorter: accountSorter("lastLogin"),
+      render: (_, r) => r.last_login_at ?? <Typography.Text type="secondary">—</Typography.Text>,
+    },
     {
       title: "操作",
       key: "action",
-      width: 100,
-      fixed: "right",
-      // 未登录显示「登录」；已登录原本显示「OAuth」，OAuth 已删除，这里留空
-      render: (_, r) =>
-        r.login_status !== "logged_in" ? (
-          <Button
-            type="link"
-            size="small"
-            icon={<CloudDownloadOutlined />}
-            disabled={busy}
-            onClick={() => void runAction("single_login", [toSelected(r)])}
-          >
-            登录
+      width: 130,
+      render: (_, r) => (
+        <Space size={0}>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditEmail(r.email)}>
+            编辑
           </Button>
-        ) : null,
+          {r.login_status !== "logged_in" && (
+            <Button
+              type="link"
+              size="small"
+              disabled={busy}
+              onClick={() => void runAction("single_login", [toSelected(r)])}
+            >
+              登录
+            </Button>
+          )}
+        </Space>
+      ),
     },
   ];
 
-  // ---------- 工具栏 ----------
+  // ---------- 渲染 ----------
 
-  const btn = (label: string, action: AccountsAction, tooltip?: string, extra?: { primary?: boolean; icon?: ReactNode }) => {
-    const b = (
+  const actionBtn = (
+    label: string,
+    action: AccountsAction,
+    tooltip: string,
+    extra?: { primary?: boolean; danger?: boolean; icon?: ReactNode },
+  ): ReactNode => (
+    <Tooltip title={tooltip}>
       <Button
         type={extra?.primary ? "primary" : "default"}
+        danger={extra?.danger}
         icon={extra?.icon}
         disabled={busy}
         onClick={() => void runAction(action)}
       >
         {label}
       </Button>
-    );
-    return tooltip ? <Tooltip title={tooltip}>{b}</Tooltip> : b;
-  };
+    </Tooltip>
+  );
+
+  const total = rows.length;
+  const filtered = visible.length !== total;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        Google 账号管理
-      </Typography.Title>
-
-      <Card size="small">
-        <Space wrap>
-          {btn("批量登录", "login", "批量登录选中的账号", { primary: true, icon: <CloudDownloadOutlined /> })}
-          <span style={{ width: 8 }} />
-          {btn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
-          {btn("健康巡检", "health_check", "只读检查选中账号在窗口里的登录状态（不提交密码，不产生新登录）")}
-        </Space>
-      </Card>
-
-      <Card size="small">
-        <Space wrap>
-          <Button icon={<ReloadOutlined />} disabled={busy} loading={loading} onClick={() => void load()}>
-            刷新
-          </Button>
-          <Button
-            icon={<PauseOutlined />}
-            disabled={!busy}
-            onClick={() => {
-              logLocal("正在停止...");
-              stopTask().catch((e: unknown) => notify("error", "停止失败", describeError(e)));
-            }}
-          >
-            停止
-          </Button>
-          <span style={{ width: 8 }} />
-          <Button icon={<DeleteOutlined />} disabled={busy} onClick={() => void runAction("delete")}>
-            删除选中
-          </Button>
-          <Tooltip title="删除选中账号及其对应的浏览器窗口">
-            <Button danger disabled={busy} onClick={() => void runAction("delete_with_windows")}>
-              删除+窗口
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 600 }}>
+      <Card size="small" title="Google 账号管理">
+        <Space wrap split={<Divider type="vertical" />}>
+          <Space wrap>
+            <Button icon={<PlusOutlined />} onClick={() => setEditEmail("")}>
+              添加账号
             </Button>
-          </Tooltip>
-          <span style={{ width: 8 }} />
-          <Typography.Text type="secondary">筛选:</Typography.Text>
-          <Select
-            style={{ minWidth: 130 }}
-            value={filter}
-            onChange={(v: FilterOption) => setFilter(v)}
-            options={FILTER_OPTIONS.map((f) => ({ value: f, label: f }))}
-          />
-          <Typography.Text type="secondary">并发数:</Typography.Text>
-          <InputNumber
-            min={1}
-            max={10}
-            precision={0}
-            value={concurrency}
-            onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
-            disabled={busy}
-          />
+            <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
+              批量导入
+            </Button>
+            <Tooltip title="导出勾选的账号（含密码 / 辅助邮箱 / 2FA 密钥原文）">
+              <Button icon={<UploadOutlined />} onClick={() => void exportSelected()}>
+                导出选中
+              </Button>
+            </Tooltip>
+          </Space>
+          <Space wrap>
+            {actionBtn(`批量登录${checked.length > 0 ? `（${checked.length}）` : ""}`, "login", "批量登录勾选的账号", {
+              primary: true,
+              icon: <CloudDownloadOutlined />,
+            })}
+            <Tooltip title="批量登录时同时打开的窗口数">
+              <Space size={4}>
+                <span>并发</span>
+                <InputNumber
+                  min={1}
+                  max={10}
+                  precision={0}
+                  value={concurrency}
+                  onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
+                  disabled={busy}
+                  style={{ width: 64 }}
+                />
+              </Space>
+            </Tooltip>
+            {actionBtn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
+            {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
+          </Space>
+          <Space wrap>
+            {actionBtn("删除选中", "delete", "只删除账号记录，不删浏览器窗口", { icon: <DeleteOutlined /> })}
+            {actionBtn("删除+窗口", "delete_with_windows", "删除勾选账号及其绑定的浏览器窗口", { danger: true })}
+          </Space>
         </Space>
       </Card>
 
-      <Space size={12}>
-        <Tooltip title="全选/取消全选当前显示的账号">
-          <Checkbox
-            checked={allVisibleChecked}
-            indeterminate={checkedRows.length > 0 && !allVisibleChecked}
-            onChange={(e) => toggleAllVisible(e.target.checked)}
-          >
-            全选
-          </Checkbox>
-        </Tooltip>
-        <Typography.Text type="secondary">已选: {checkedRows.length}</Typography.Text>
-      </Space>
-
-      <Table<AccountListRow>
+      <Card
         size="small"
-        rowKey="email"
-        loading={loading}
-        columns={columns}
-        dataSource={visibleRows}
-        scroll={{ x: 900 }}
-        pagination={{ defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200, 500] }}
-        rowSelection={{
-          hideSelectAll: true,
-          selectedRowKeys: checkedRows.map((r) => r.email),
-          onSelect: (record, checked) =>
-            setSelected((prev) => {
-              const next = new Set(prev);
-              if (checked) next.add(record.email);
-              else next.delete(record.email);
-              return next;
-            }),
-        }}
-        onRow={(record) => ({
-          onContextMenu: (e) => {
-            e.preventDefault();
-            setCtxMenu({ row: record, x: e.clientX, y: e.clientY });
-          },
-        })}
-      />
+        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+        styles={{ body: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 } }}
+      >
+        {/* 工具栏：刷新 + 搜索 + 登录状态 | 已选 + 计数 */}
+        <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
+          <Space wrap>
+            <Button icon={<SyncOutlined />} loading={loading} onClick={() => void load()}>
+              刷新
+            </Button>
+            <Input.Search
+              placeholder="搜索 邮箱 / 窗口ID / 窗口名"
+              allowClear
+              style={{ width: 260 }}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <Segmented<AccountLoginFilter>
+              value={login}
+              onChange={setLogin}
+              options={ACCOUNT_LOGIN_FILTERS.map((o) => ({ value: o.value, label: `${o.label} ${loginCounts[o.value]}` }))}
+            />
+          </Space>
+          <Space wrap>
+            {checked.length > 0 && (
+              <Typography.Text>
+                已选 <b>{checked.length}</b> 个
+                {hiddenChecked > 0 && <Typography.Text type="warning">（其中 {hiddenChecked} 个不在当前视图）</Typography.Text>}
+                <Button type="link" size="small" onClick={() => setChecked([])}>
+                  清空
+                </Button>
+              </Typography.Text>
+            )}
+            <Typography.Text type="secondary">{filtered ? `显示 ${visible.length} / 共 ${total}` : `共 ${total} 个账号`}</Typography.Text>
+          </Space>
+        </Space>
 
-      <Typography.Text type="secondary">{statsText(rows)}</Typography.Text>
+        {/* 分组标签：单选；数量为分组内账号总数（不随其它筛选变化） */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <Tag.CheckableTag checked={groupId === null} onChange={() => setGroupId(null)}>
+            全部 ({total})
+          </Tag.CheckableTag>
+          {(list?.groups ?? []).map((g) => (
+            <Tag.CheckableTag key={g.groupId} checked={groupId === g.groupId} onChange={() => setGroupId(g.groupId)}>
+              {g.groupName} ({g.count})
+            </Tag.CheckableTag>
+          ))}
+        </div>
+
+        <div ref={boxRef} style={{ flex: 1, minHeight: 240 }}>
+          <Table<AccountListRow>
+            size="small"
+            rowKey="email"
+            columns={columns}
+            dataSource={visible as AccountListRow[]}
+            loading={loading}
+            pagination={false}
+            showSorterTooltip={false}
+            // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，容器更宽时各列按容器宽度补齐
+            virtual
+            scroll={{ x: 1340, y: bodyHeight }}
+            locale={{
+              emptyText: (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={!list ? (loading ? "加载中..." : "暂无数据，点「刷新」加载") : total === 0 ? "还没有账号，点「添加账号」或「批量导入」" : "没有匹配的账号"}
+                />
+              ),
+            }}
+            rowSelection={{
+              columnWidth: 40,
+              selectedRowKeys: checked,
+              // 被筛选隐藏的勾选也要保留（antd 默认会丢掉不在 dataSource 里的 key）
+              preserveSelectedRowKeys: true,
+              onChange: (keys) => setChecked(keys.map(String)),
+            }}
+            onRow={(record) => ({
+              onContextMenu: (e) => {
+                e.preventDefault();
+                setCtxMenu({ row: record, x: e.clientX, y: e.clientY });
+              },
+            })}
+          />
+        </div>
+      </Card>
 
       {/* 右键菜单：在鼠标位置放一个 1px 锚点，受控打开 */}
       <Dropdown
@@ -470,10 +627,18 @@ export function AccountsPage(): ReactElement {
         />
       </Dropdown>
 
-      <BindWindowModal
-        email={bindEmail}
-        onClose={closeBind}
-        onBound={() => void load()}
+      <BindWindowModal email={bindEmail} onClose={closeBind} onBound={() => void load()} />
+      <AccountEditModal email={editEmail} onClose={closeEdit} onSaved={() => void load()} />
+      <BatchImportModal
+        open={importOpen}
+        title="批量导入账号"
+        formatHint={ACCOUNT_IMPORT_FORMAT_HINT}
+        columns={ACCOUNT_PREVIEW_COLUMNS}
+        parseLine={parseAccountImportLine}
+        formatPreviewRow={formatAccountPreviewRow}
+        onImport={(text) => invoke(IPC.invoke.accountsImport, text)}
+        onClose={() => setImportOpen(false)}
+        onDone={() => void load()}
       />
     </div>
   );
