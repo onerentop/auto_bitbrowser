@@ -2,7 +2,7 @@
  * 真机探针：直连本地 ixBrowser :53200，校验客户端解析结果与本地服务返回一致。
  * 只做只读调用（profile-list / group-list），不打开也不创建窗口。
  *
- * 跑法：cd desktop && node --experimental-strip-types src/ixbrowser/probe.ts
+ * 跑法：在仓库根执行 pnpm run probe:ix
  */
 import { IxBrowserClient, IxResponseError } from "./client.ts";
 

@@ -7,7 +7,7 @@
  *   1. 单例形态：可实例化的 class + 默认单例 configManager + 模块级便捷函数委托单例。
  *      理由：可测试性（测试可注入独立的 configFile，互不污染）。
  *   2. 无锁：Node 单线程事件循环下，这里的所有操作都是同步的，不存在交叉执行点。
- *   3. 配置文件路径：默认解析到仓库根的 config.json（本文件位于 desktop/src/core/ → 上溯三级），
+ *   3. 配置文件路径：默认解析到仓库根的 config.json（本文件位于 src/core/ → 上溯两级），
  *      构造参数 configFile 允许注入（测试用）。
  *   4. 打印：用可注入的 log（默认 console.log），文案逐字保留。
  *   5. b64/UTF-8 解码的**异常语义**：Node 的 Buffer 解码是静默容错的，为让非法输入
@@ -35,9 +35,9 @@ export type ConfigDict = Record<string, ConfigValue>;
 
 export type LogFn = (message: string) => void;
 
-/** 基础路径 = 仓库根（本文件在 desktop/src/core/，故上溯三级） */
+/** 基础路径 = 仓库根（本文件在 src/core/，故上溯两级） */
 export function getBasePath(): string {
-  return path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
+  return path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 }
 
 export const BASE_PATH: string = getBasePath();

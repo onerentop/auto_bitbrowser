@@ -1,6 +1,6 @@
 /**
  * ixBrowser 客户端单测 —— 用注入的 fetch 验证信封解包逻辑
- * 跑法：cd desktop && node --test test/ixbrowser.test.mjs
+ * 跑法：在仓库根执行 node --test --experimental-strip-types test/ixbrowser.test.mjs
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

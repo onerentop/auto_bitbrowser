@@ -1,6 +1,6 @@
 /**
  * 数据库探针：只读打开真实 accounts.db，打印各仓储方法的读取结果。
- * 跑法：cd desktop && node --experimental-strip-types src/db/probe.ts
+ * 跑法：在仓库根执行 pnpm run probe:db
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import { AccountRepository } from "./account-repository.ts";
 import { ProxyRepository } from "./proxy-repository.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(here, "..", "..", "..");
+const projectRoot = path.resolve(here, "..", "..");
 const dbPath = resolveDbPath(projectRoot);
 
 function line(s = "") {

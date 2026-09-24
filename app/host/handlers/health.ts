@@ -4,7 +4,7 @@
  * 两个通道：
  *   - abb/host/ping          后端进程自报 pid / Node 版本 / 运行时长，证明进程活着
  * - abb/ixbrowser/ping 真实调用已的 IxBrowserClient，证明后端进程
- *                            能 import 并运行 desktop/src/ 下的业务模块
+ *                            能 import 并运行 src/ 下的业务模块
  *
  * ixBrowser 本地服务没开是常态（尤其是开发时），因此 ixbrowser/ping
  * **不抛错**：不可达时返回 reachable=false + 原因，由界面展示。

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "auto_bitbrowser2 桌面端 —— services 层 Node 重写 POC",
+  "description": "auto_bitbrowser2 —— ixBrowser + Google 账号批量管理桌面应用（Electron + TypeScript）",
   "engines": {
     "node": ">=22.19"
   },

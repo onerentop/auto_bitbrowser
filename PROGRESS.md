@@ -11,9 +11,9 @@
 把下面这段直接粘给新会话：
 
 ```
-读 CLAUDE.md 与 desktop/PROGRESS.md 恢复上下文。
+读 CLAUDE.md 与 PROGRESS.md 恢复上下文。
 
-这是 Electron + TypeScript 的 ixBrowser 自动化工具（Google 账号批量管理），代码在 desktop/。
+这是 Electron + TypeScript 的 ixBrowser 自动化工具（Google 账号批量管理），代码在仓库根（`app/` + `src/`）。
 当前状态：业务后端与全部界面已完成，真实账号逐项验证进行中。
 
 注意事项：
@@ -26,7 +26,7 @@
 ### 第二步：验证环境没坏
 
 ```powershell
-cd D:\workspace\projects\auto_bitbrowser2\desktop
+cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
 pnpm test              # 应 548/548 通过
@@ -40,10 +40,10 @@ pnpm run typecheck:app # 应无输出
 | 位置 | 内容 |
 |---|---|
 | `CLAUDE.md` | 项目架构、通道约定、协作准则（**权威指引**） |
-| `desktop/PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
-| `desktop/src/` | 业务库（不依赖 Electron，可单独单测） |
-| `desktop/app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `desktop/test/` | 单测（548 个，含 `app-*.test.mjs`） |
+| `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
+| `src/` | 业务库（不依赖 Electron，可单独单测） |
+| `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
+| `test/` | 单测（548 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -62,7 +62,6 @@ pnpm run typecheck:app # 应无输出
 **质量门（全绿）**：
 
 ```powershell
-cd desktop
 pnpm run typecheck      # tsc strict 零错误
 pnpm test               # 548/548 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
@@ -130,7 +129,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 
 ### Electron 骨架的架构约定与审查修正
 
-- **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
+- **主进程是薄壳**：不 import `src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
 - **业务后端跑在 `utilityProcess`**（`out/main/host.js`），崩溃只影响后端，窗口不受影响；目前无自动重启，只有手动「重启后端」
 - 信封 `{ok,data} | {ok:false,error:{code,message}}`；错误码 `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`
 - `ixbrowser/ping` 只走 HTTP，不碰 `node:sqlite`（`node:sqlite` 已确认可在 Electron 主进程与 utilityProcess 中直接使用）
@@ -164,7 +163,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 | 点完「下一步 / 获取验证码」后从不点最终的保存 | 真机端到端运行：流程全部走到（点编辑 → 清空 → 输入新号 → 下一步），但**账号上的号码没变**、核对仍读到旧号；补上保存后一次运行即替换成功，独立复查确认页面显示新号 | 在核对之前补一次保存点击（`点击 '保存' 或 'Save' 或 '完成' 或 'Done' 或 '确认' 或 'Confirm' 按钮…`） |
 
 - 凭据处理与 `login.ts` 一致：**只经 `fill` 写入，不进 AI 指令**（AI 指令里出现密码即为泄漏点），回归用例对此有断言
-- 回归用例 `desktop/test/engine-replace-phone.test.mjs`（5 条）：缺陷 1/2 在修复前把 operation 换回 HEAD 版本时为 3 红 1 绿；缺陷 3 在移掉保存步骤时单独变红；修复后 **5/5 绿**
+- 回归用例 `test/engine-replace-phone.test.mjs`（5 条）：缺陷 1/2 在修复前把 operation 换回 HEAD 版本时为 3 红 1 绿；缺陷 3 在移掉保存步骤时单独变红；修复后 **5/5 绿**
 - 同类风险（本次未验证、未改动）：修改 2SV 手机 / 修改验证器的 operation 有同样的登录态判定，且「最终保存 / 提交」这一步是否完整也**未验证**（`RECOVERY_EMAIL` 的疑问已在下一节判定：地址有效）
 
 ### 替换辅助邮箱的真机缺陷与修复（2026-09-24）
@@ -178,7 +177,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 | 「重新验证身份」被误判为未登录 | 真机形态是**直接要身份验证器验证码**（`/v3/signin/challenge/totp`），该 URL 命中 `url.includes("accounts.google.com") && url.includes("signin")` → 假失败「需要先登录账号」 | 新增 `passReauthIfRequired` / `completeReauth`：**有验证码框先填验证码、否则填密码**（真机形态是直接验证码），最多两轮；凭据经 `execute(..., credentials)` 由 automation 层传入，仍只经 `fill` 写入、不进 AI 指令 |
 | 「请输入新邮箱验证码」被当成失败 | 点完「下一步」后 Google 弹「请输入已发送至新邮箱的 6 位数验证码」；实测点「取消」后页面**已经显示新邮箱**（带一个可选的「验证辅助邮箱」入口）——即那是可选校验，不是没做完 | 没有取码服务时不再返回失败，改由 `verifyReplacement` 的结果核对定论（真没生效仍会如实报失败） |
 
-- 回归用例 `desktop/test/engine-replace-email.test.mjs`（6 条）：换回 HEAD 版时 3 红 2 绿；缺陷 2 的用例单独先红；修复后 6/6 绿
+- 回归用例 `test/engine-replace-email.test.mjs`（6 条）：换回 HEAD 版时 3 红 2 绿；缺陷 2 的用例单独先红；修复后 6/6 绿
 - 复跑结果：一次运行成功（63.4s），独立只读复查显示「您的辅助邮箱 `ren***@gmail.com`（上次更新：6 分钟前）」
 - 用户决定：**新邮箱的可选验证不做**（页面保留「验证辅助邮箱」入口）
 - 已知：AI 任务只改 Google 账号、不写库（`accounts.db.recovery_email` 仍为 `NULL`）
@@ -194,7 +193,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 | 密钥视图里没有验证码输入框 | 点「更改身份验证器应用 → 无法扫描？」后面板只显示密钥文本，**必须先点「下一页」** Google 才给出验证码框；原实现直接输码 → 真机 act `success=false`、随后核对必然失败 | 在输码前补一次「下一页」点击（Step 3.5） |
 | 成功文案「身份验证器应用已更改」不在成功词表 | 第 2 次运行**真的把验证器改掉了**，但词表只有「已添加/added/成功/完成」→ 判「无法确定设置结果」；因 `saveNewSecret` 只在 success 时调用，**新密钥不落盘而账号已被改掉** → 会导致登录失败（本次已按产品同一条保存路径恢复，再复跑通过） | 成功词表补上 `已更改 / 更改 / changed` |
 
-- 回归用例 `desktop/test/engine-modify-auth.test.mjs`（7 条）：换回 HEAD 版 → 3 红 2 绿；只保留缺陷 1 修复 → 3 红 3 绿；临时还原旧词表 → 4 红 3 绿；修复后 **7/7 绿**
+- 回归用例 `test/engine-modify-auth.test.mjs`（7 条）：换回 HEAD 版 → 3 红 2 绿；只保留缺陷 1 修复 → 3 红 3 绿；临时还原旧词表 → 4 红 3 绿；修复后 **7/7 绿**
 - 新密钥落点一致：`accounts.db.secret_key` / `authenticator_modification_history` / `已修改密钥.txt` / 窗口 `tfa_secret`（同一指纹）；
   当时还会写窗口备注第 4 段，现已取消（见「修改账号密码」一节末尾）
 - 诚实记录：缺陷 3 的第一版回归用例**没红**——假引擎的成功标记当时写成英文 `Authenticator app added`，正好命中旧词表；改成真机文案后才成立
@@ -213,8 +212,8 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 | 结果核对只看「页面文本含新号码」且只认尾 4 位 | 复核导航失败会停在确认页，而确认页正文里本来就有完整新号 → **假成功** | 校验复核 `navigate` 成败与落点 URL；号码匹配收紧为「完整号码或尾 7 位」 |
 | AI act 报成功但无效果（点条目、点下一步） | 第 6 次运行：`act → success=true`，页面 URL/文本完全没变 | 四处确定性点击全部改走 `clickByText()` + 页面状态复核 |
 
-- 回归用例：`desktop/test/engine-modify-2sv.test.mjs`（11 条；假引擎里「新号码进列表」与「点保存」有真实因果）、
-  新增 `desktop/test/engine-click-by-text.test.mjs`（11 条；用假 DOM 在 Node 里执行页面内脚本）
+- 回归用例：`test/engine-modify-2sv.test.mjs`（11 条；假引擎里「新号码进列表」与「点保存」有真实因果）、
+  新增 `test/engine-click-by-text.test.mjs`（11 条；用假 DOM 在 Node 里执行页面内脚本）
 - 代码审查（独立上下文）指出 4 类真机后果严重的问题：确认页判定过宽会在弹层上盲点「保存」、复核导航失败假成功、
   选元素可能点到祖先 / 前缀撞名（「保存更改」抢「保存」）/ 不判 `opacity:0` 与 `disabled`、确认页只判一次。
   均已修并补「先红后绿」用例（修前 6 红 → 修后绿）
@@ -241,7 +240,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 「您的当前会话」）→ **坐标点击**条目进入 `/device-activity/id/XXX` → 详情页「退出账号」→ 确认框 → 退出后条目变
 「已退出账号」。点条目必须用坐标点击（页面内 `el.click()` 在该页面上无效）。
 
-- 回归用例 `desktop/test/engine-kick-devices.test.mjs`（10 条；假引擎按真机页面序列建模）+ 引擎新增 `evaluateScript()`
+- 回归用例 `test/engine-kick-devices.test.mjs`（10 条；假引擎按真机页面序列建模）+ 引擎新增 `evaluateScript()`
 
 ### 导入 TOTP 密钥的修复（2026-09-24）
 
@@ -253,7 +252,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 |---|---|---|
 | **导入只写窗口备注、不写窗口 `tfa_secret`** → ixBrowser 侧的 2FA 密钥一直为空，与「修改验证器」「批量绑定窗口」两处落点不一致 | 导入成功（备注更新成功、`ix_update_count=1`）后 `窗口 tfa_secret = (空)`，而 DB 与备注里都有密钥 | `runTotpImport` 的 `updateProfileNote(id, note)` 改为 `updateProfile(id, { note, tfa_secret })`（后来按「自动化不碰备注」的约定收窄为只写 `tfa_secret`）；handler 装配同步改。真机复跑：`tfa_secret` 由空 → `len=32 前4=R2TQ…`，`窗口 tfa_secret == DB 密钥: true` |
 
-- 回归用例 `desktop/test/app-totp.test.mjs`：修前 4 红 → 修后 **15/15 绿**
+- 回归用例 `test/app-totp.test.mjs`：修前 4 红 → 修后 **15/15 绿**
 - 本轮**未**改动（记在任务待办）：覆盖已有密钥不写 `authenticator_modification_history`、导入密钥无格式校验、
   前端 UI 层未做真机操作（「窗口备注整条覆盖」已随「自动化不碰备注」的约定消除）
 
@@ -455,7 +454,7 @@ grep 复核，未真机跑（验证它要真的改一次验证器）。
 | 项 | 值 |
 |---|---|
 | Node | 22.19（需 `--experimental-sqlite`、`--experimental-strip-types`） |
-| 包管理 | pnpm 10.28（见 `desktop/pnpm-lock.yaml`） |
+| 包管理 | pnpm 10.28（见 `pnpm-lock.yaml`） |
 | 运行探针 | `pnpm probe:ix`（ixBrowser 只读）、`pnpm probe:db`（数据库只读） |
 
 **已知告警（可忽略）**：

@@ -53,19 +53,17 @@
 ### 开发运行
 
 ```bash
-cd desktop
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 ### 校验命令
 
 ```bash
-cd desktop
-npm run typecheck        # 类型检查
-npm test                 # 单元测试
-npm run typecheck:app    # Electron 骨架（主进程 + 渲染层）类型检查
-npm run build:app        # 打包
+pnpm run typecheck       # 类型检查
+pnpm test                # 单元测试
+pnpm run typecheck:app   # Electron 骨架（主进程 + 渲染层）类型检查
+pnpm run build:app       # 打包
 ```
 
 ## ⚙️ 配置说明 (Configuration)

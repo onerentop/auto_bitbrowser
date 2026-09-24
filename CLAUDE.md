@@ -21,10 +21,10 @@
 驱动 ixBrowser 指纹浏览器批量管理 Google 账号：批量登录、账号信息修改（手机号 / 辅助邮箱 /
 2SV 手机 / 验证器 / 密码）、踢出设备、会话状态巡检、TOTP 密钥导入、任务结果持久化与导出。
 
-- 入口：`desktop/app/main/index.ts`（Electron 主进程）
-- 界面：`desktop/app/renderer/src/App.tsx`
-- 业务后端：`desktop/app/host/`（跑在 `utilityProcess` 里）
-- 业务库：`desktop/src/`（不依赖 Electron，可单独测试）
+- 入口：`app/main/index.ts`（Electron 主进程）
+- 界面：`app/renderer/src/App.tsx`
+- 业务后端：`app/host/`（跑在 `utilityProcess` 里）
+- 业务库：`src/`（不依赖 Electron，可单独测试）
 
 > 旧版本（Python 3.13 + PyQt6）已于 2026-09-24 整体移除，不再是本项目的对拍基准或回退方案。
 
@@ -45,7 +45,6 @@
 ## 快速开始
 
 ```powershell
-cd desktop
 pnpm install
 pnpm run dev                        # 启动应用（需 ixBrowser 已运行在 :53200）
 
@@ -59,7 +58,6 @@ pnpm run build:app                  # 打包
 真机诊断（需 ixBrowser 已启动）：
 
 ```powershell
-cd desktop
 pnpm run probe:ix                   # ixBrowser 连接探针
 pnpm run probe:db                   # 数据库探针
 ```
@@ -118,7 +116,7 @@ app/renderer/  ──IPC──▶  app/main/  ──▶  app/host/handlers/  ─
                                                                         └──▶  src/db/ · src/ixbrowser/ · src/core/
 ```
 
-- **主进程是薄壳**：不 import `desktop/src/` 任何模块（`pnpm run build:app` 后 `out/main/index.js` 里不应出现
+- **主进程是薄壳**：不 import `src/` 任何模块（`pnpm run build:app` 后 `out/main/index.js` 里不应出现
   IxBrowserClient / stagehand / playwright）。
 - **业务后端跑在 `utilityProcess`**：崩溃只影响后端，窗口不受影响。
 - **界面不直连底层**：一律经 `app/shared/channels/` 定义的通道 → `app/host/handlers/`。
@@ -137,35 +135,36 @@ app/renderer/  ──IPC──▶  app/main/  ──▶  app/host/handlers/  ─
 
 ```text
 auto_bitbrowser2/
-├── desktop/                          # 应用主体
-│   ├── app/
-│   │   ├── main/                     # Electron 主进程（薄壳、生命周期、IPC 注册）
-│   │   ├── host/
-│   │   │   ├── index.ts              # utilityProcess 入口
-│   │   │   ├── context.ts            # 数据根 / 数据库 / 配置 / ixBrowser 客户端
-│   │   │   ├── dispatch.ts           # 通道分发
-│   │   │   ├── task-runner.ts        # 任务坞：进度、停止、逐条目、任务历史落库
-│   │   │   └── handlers/             # accounts / ai-tasks / home / settings / totp …
-│   │   ├── renderer/src/
-│   │   │   ├── App.tsx               # 导航与页面注册
-│   │   │   ├── pages/                # HomePage / AccountsPage / AiTaskPage / TotpImportPage / SettingsPage / StatusPage
-│   │   │   └── stores/               # 后端状态、任务坞
-│   │   └── shared/                   # channels（通道 + 类型）、ipc（通道常量）
-│   ├── src/
-│   │   ├── engine/
-│   │   │   ├── stagehand-engine.ts   # StagehandGoogleEngine（引擎门面）
-│   │   │   ├── operations/           # login / replace-* / modify-* / kick-devices / change-password …
-│   │   │   ├── constants.ts types.ts totp.ts
-│   │   ├── automation/               # auto-*.ts（各业务流程）+ shared.ts（引擎连接包装）
-│   │   ├── application/              # ai-task-runner / account-task-orchestrator / health-check / totp-import / create-windows
-│   │   ├── db/
-│   │   │   ├── schema.ts connection.ts
-│   │   │   ├── account-repository.ts task-history-repository.ts …
-│   │   ├── ixbrowser/                # client.ts（ixBrowser 本地 API 客户端）/ window / groups / probe
-│   │   ├── services/                 # data-store（代理数据）/ proxy-allocator（代理分配）
-│   │   └── core/                     # config-manager / retry-helper / random-password / totp-extractor
-│   ├── test/                         # node:test 用例（*.test.mjs）
-│   └── PROGRESS.md                   # 开发进度 + 真机验证记录
+├── app/
+│   ├── main/                         # Electron 主进程（薄壳、生命周期、IPC 注册）
+│   ├── host/
+│   │   ├── index.ts                  # utilityProcess 入口
+│   │   ├── context.ts                # 数据根 / 数据库 / 配置 / ixBrowser 客户端
+│   │   ├── dispatch.ts               # 通道分发
+│   │   ├── task-runner.ts            # 任务坞：进度、停止、逐条目、任务历史落库
+│   │   └── handlers/                 # accounts / ai-tasks / home / settings / totp …
+│   ├── preload/                      # 预加载脚本（CJS）
+│   ├── renderer/src/
+│   │   ├── App.tsx                   # 导航与页面注册
+│   │   ├── pages/                    # HomePage / AccountsPage / AiTaskPage / TotpImportPage / SettingsPage / StatusPage
+│   │   └── stores/                   # 后端状态、任务坞
+│   └── shared/                       # channels（通道 + 类型）、ipc（通道常量）
+├── src/
+│   ├── engine/
+│   │   ├── stagehand-engine.ts       # StagehandGoogleEngine（引擎门面）
+│   │   ├── operations/               # login / replace-* / modify-* / kick-devices / change-password …
+│   │   └── constants.ts types.ts totp.ts
+│   ├── automation/                   # auto-*.ts（各业务流程）+ shared.ts（引擎连接包装）
+│   ├── application/                  # ai-task-runner / account-task-orchestrator / health-check / totp-import / create-windows
+│   ├── db/                           # schema.ts connection.ts account-repository.ts task-history-repository.ts …
+│   ├── ixbrowser/                    # client.ts（ixBrowser 本地 API 客户端）/ window / groups / probe
+│   ├── services/                     # data-store（代理数据）/ proxy-allocator（代理分配）
+│   └── core/                         # config-manager / retry-helper / random-password / totp-extractor
+├── test/                             # node:test 用例（*.test.mjs）
+├── out/                              # electron-vite 构建产物（gitignore）
+├── package.json  pnpm-lock.yaml  tsconfig*.json  electron.vite.config.ts
+├── PROGRESS.md                       # 开发进度 + 真机验证记录
+├── assets/                           # README 用的图片
 ├── data/config.example.json          # 配置模板
 ├── accounts.db                       # 运行时数据（gitignore）
 ├── config.json                       # 配置，敏感字段加密（gitignore）
@@ -215,7 +214,6 @@ auto_bitbrowser2/
 ## 测试与门禁
 
 ```powershell
-cd desktop
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
 pnpm test                   # 全量单测（当前基线 548 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误

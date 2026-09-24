@@ -7,7 +7,7 @@
  *   3. 拉起后端进程（utilityProcess），把状态变化推给渲染层
  *   4. 安装 IPC：白名单 → 路由（后端通道转发）→ 本地 handler
  *
- * 主进程**不 import 任何业务模块**（desktop/src/**）：批量任务、引擎、数据库
+ * 主进程**不 import 任何业务模块**（src/**）：批量任务、引擎、数据库
  * 全部跑在后端进程里，崩了也不影响窗口。
  */
 import { app, BrowserWindow, ipcMain } from "electron";

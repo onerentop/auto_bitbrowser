@@ -13,7 +13,7 @@ export interface DataRootInput {
   isPackaged: boolean;
   /** process.execPath */
   exePath: string;
-  /** app.getAppPath()：开发时是 desktop/（package.json 所在目录） */
+  /** app.getAppPath()：开发时是仓库根（package.json 所在目录） */
   appPath: string;
 }
 
@@ -21,6 +21,6 @@ export function resolveDataRoot(input: DataRootInput): string {
   const override = input.env["ABB_DATA_ROOT"]?.trim();
   if (override) return resolve(override);
   if (input.isPackaged) return dirname(input.exePath);
-  // desktop/ 的上一级就是仓库根
-  return resolve(input.appPath, "..");
+  // 开发时 appPath 就是仓库根（package.json 所在目录）
+  return resolve(input.appPath);
 }

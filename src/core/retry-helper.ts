@@ -53,10 +53,10 @@ const defaultSleep: SleepFn = (ms) => new Promise<void>((r) => setTimeout(r, ms)
 
 /**
  * 基础路径：打包态取 exe 目录，否则取仓库根。
- * Node 侧固定按源码位置推导：desktop/src/core → 上三级 = 仓库根。
+ * Node 侧固定按源码位置推导：src/core → 上两级 = 仓库根。
  */
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const BASE_PATH = path.resolve(HERE, "..", "..", "..");
+export const BASE_PATH = path.resolve(HERE, "..", "..");
 
 /** 失败任务队列的持久化文件（仓库根 / failed_tasks.json） */
 export const FAILED_TASKS_FILE = path.join(BASE_PATH, "failed_tasks.json");

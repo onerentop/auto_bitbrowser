@@ -77,10 +77,10 @@ desktop.ini
 *.bak
 failed_tasks.json
 
-# Node.js（根目录的临时测试工程，desktop/ 下的前端工程需要入库）
+# Node.js 依赖
 node_modules/
-/package.json
-/package-lock.json
+# pnpm 工程，npm 的锁文件不入库
+package-lock.json
 
 # 工具目录
 .claude/
@@ -94,7 +94,7 @@ nul
 .pi/
 
 # electron-vite 构建产物
-desktop/out/
+/out/
 
 # SQLite 运行时文件（*.db 已忽略，但 WAL/SHM 后缀不在其列）
 *.db-shm
@@ -106,4 +106,3 @@ desktop/out/
 .agents/
 .cursor/
 .claude-flow/
-desktop/.claude-flow/
