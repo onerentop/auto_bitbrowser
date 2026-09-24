@@ -1,7 +1,7 @@
 /**
  * 账号管理应用服务
  *
- * 负责登录 / 绑定 / 删除的判定与文案；
+ * 负责登录 / 删除的判定与文案（窗口绑定规则在 window-binding.ts）；
  * Pro 检测、会员刷新、开启共享、403 检测 / 解锁、家庭组加入 / 分配已随对应功能删除
  *
  * 设计取舍（判定分支与文案保持既有行为）：
@@ -46,7 +46,6 @@ function emailOf(account: AccountDict): string {
 
 export interface TaskConflictFlags {
   workerRunning?: boolean;
-  batchBindRunning?: boolean;
   batchDeleteRunning?: boolean;
   waitAction?: string;
 }
@@ -54,7 +53,6 @@ export interface TaskConflictFlags {
 /** 任务冲突检查：返回 [可以执行, 提示文案]（已删除功能的 flag 一并移除） */
 export function checkTaskConflicts(flags: TaskConflictFlags = {}): [boolean, string] {
   const checks: Array<[boolean, string]> = [
-    [!!flags.batchBindRunning, "批量绑定任务正在执行中"],
     [!!flags.batchDeleteRunning, "批量删除任务正在执行中"],
     [!!flags.workerRunning, "已有任务在执行中"],
   ];
@@ -83,67 +81,6 @@ export function resolveSelectedAccounts(
     browserIds.push(browserId && browserId !== "-" ? browserId : "");
   }
   return { accounts, browserIds };
-}
-
-/** 收集没有绑定窗口的邮箱 */
-export function collectUnboundEmails(selectedRows: ReadonlyArray<readonly [string, string]>): string[] {
-  const unbound: string[] = [];
-  for (const [email, browserId] of selectedRows) {
-    if (!email) continue;
-    if (!browserId || browserId === "-") unbound.push(email);
-  }
-  return unbound;
-}
-
-/**
- * 按窗口名称（去空白、小写）匹配邮箱
- *
- * matched：可绑定的 [email, browserId]；notMatched：未找到匹配窗口的邮箱；
- * alreadyBound：匹配到但窗口已被（任意）账号绑定的 [email, browserId]
- *
- * 设计取舍：匹配成功后立即把窗口记为已占用。
- * 若不这样做，两个邮箱（例如只有大小写不同）匹配到同一窗口时会把该窗口同时绑给两个账号。
- * 这里第二个及之后的匹配归入 alreadyBound（窗口已被本批次前面的账号占用，语义与
- * 「已被其他账号绑定」一致，界面按「已跳过」提示）。
- */
-export function matchAccountsToWindows(
-  repo: Pick<AccountLookup, "getAllAccounts">,
-  targetEmails: readonly string[],
-  windows: readonly WindowLike[],
-): { matched: Array<[string, string]>; notMatched: string[]; alreadyBound: Array<[string, string]> } {
-  const bound = new Set<string>();
-  for (const account of repo.getAllAccounts()) {
-    const id = getField(account, "browser_profile_id", "");
-    if (id) bound.add(String(id));
-  }
-
-  // 同名窗口后者覆盖前者
-  const windowMap = new Map<string, string>();
-  for (const w of windows) {
-    const rawName = getField(w, "name", "");
-    const name = typeof rawName === "string" ? rawName.trim().toLowerCase() : "";
-    const profileId = toStr(getField(w, "profile_id", ""));
-    if (name && profileId) windowMap.set(name, profileId);
-  }
-
-  const matched: Array<[string, string]> = [];
-  const notMatched: string[] = [];
-  const alreadyBound: Array<[string, string]> = [];
-  for (const email of targetEmails) {
-    const key = email.trim().toLowerCase();
-    const browserId = windowMap.get(key);
-    if (browserId === undefined) {
-      notMatched.push(email);
-      continue;
-    }
-    if (bound.has(browserId)) {
-      alreadyBound.push([email, browserId]);
-    } else {
-      matched.push([email, browserId]);
-      bound.add(browserId);
-    }
-  }
-  return { matched, notMatched, alreadyBound };
 }
 
 /** 取账号与其绑定的窗口 ID */

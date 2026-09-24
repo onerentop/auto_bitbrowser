@@ -1,7 +1,7 @@
 /**
  * 账号健康巡检的批量编排
  *
- * 与 executeBatchBind / executeBatchDelete 同一层级与风格：纯编排 + 注入依赖，单测全部离线。
+ * 与 executeBatchDelete 同一层级与风格：纯编排 + 注入依赖，单测全部离线。
  * 真正的只读判定在 src/automation/auto-health-check.ts，这里只负责逐个调用、计数、上报逐条目。
  */
 import {

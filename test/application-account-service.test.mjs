@@ -25,8 +25,6 @@ test("checkTaskConflicts：顺序与文案（:19-47）", () => {
     false,
     "已有任务在执行中，请等待完成后再删除",
   ]);
-  // 批量绑定排在最前
-  assert.deepEqual(svc.checkTaskConflicts({ workerRunning: true, batchBindRunning: true }), [false, "批量绑定任务正在执行中"]);
 });
 
 test("resolveSelectedAccounts：跳过空邮箱与不存在的账号，'-' 视为未绑定", () => {
@@ -41,33 +39,8 @@ test("resolveSelectedAccounts：跳过空邮箱与不存在的账号，'-' 视�
   assert.deepEqual(r.browserIds, ["11", ""]);
 });
 
-test("collectUnboundEmails / collectMissingBrowserEmails", () => {
-  assert.deepEqual(svc.collectUnboundEmails([["a", ""], ["b", "-"], ["c", "3"], ["", ""]]), ["a", "b"]);
+test("collectMissingBrowserEmails", () => {
   assert.deepEqual(svc.collectMissingBrowserEmails([{ email: "a" }, { email: "b" }], ["", "2"]), ["a"]);
-});
-
-test("matchAccountsToWindows：名称去空白小写匹配，已被绑定的窗口归入 alreadyBound", () => {
-  const repo = fakeRepo([
-    { email: "x@x.com", browser_profile_id: "200" },
-    { email: "a@x.com", browser_profile_id: null },
-  ]);
-  const windows = [
-    { name: "  A@X.com ", profile_id: 100 },
-    { name: "b@x.com", profile_id: 200 },
-    { name: "", profile_id: 300 },
-  ];
-  const r = svc.matchAccountsToWindows(repo, ["a@x.com", "B@x.com", "c@x.com"], windows);
-  assert.deepEqual(r.matched, [["a@x.com", "100"]]);
-  assert.deepEqual(r.alreadyBound, [["B@x.com", "200"]]);
-  assert.deepEqual(r.notMatched, ["c@x.com"]);
-});
-
-test("matchAccountsToWindows：两个大小写不同的邮箱匹配到同一窗口时，只有第一个绑定，第二个归入 alreadyBound", () => {
-  const repo = fakeRepo([]);
-  const r = svc.matchAccountsToWindows(repo, ["a@x.com", "A@X.com"], [{ name: "a@x.com", profile_id: 7 }]);
-  assert.deepEqual(r.matched, [["a@x.com", "7"]]);
-  assert.deepEqual(r.alreadyBound, [["A@X.com", "7"]]);
-  assert.deepEqual(r.notMatched, []);
 });
 
 test("getAccountAndBrowser", () => {
@@ -281,69 +254,6 @@ test("executeBatchDelete：结果形状，窗口删除失败被忽略，账号�
     progress: () => {},
   });
   assert.equal(r2.deleted_accounts, 1);
-});
-
-test("executeBatchBind：结果形状与停止（:233-259）", () => {
-  const bound = [];
-  const r = orch.executeBatchBind({
-    matchedPairs: [
-      ["a", "1"],
-      ["b", "2"],
-    ],
-    shouldStop: () => false,
-    bindAccount: (e, id) => {
-      if (e === "b") throw new Error("x");
-      bound.push([e, id]);
-    },
-    log: () => {},
-    progress: () => {},
-  });
-  assert.deepEqual(r, { total: 2, success_count: 1, failed_count: 1, failed_list: [{ email: "b", error: "x" }] });
-  const stopped = orch.executeBatchBind({
-    matchedPairs: [["a", "1"]],
-    shouldStop: () => true,
-    bindAccount: () => assert.fail("不应绑定"),
-    log: () => {},
-    progress: () => {},
-  });
-  assert.equal(stopped.success_count, 0);
-});
-
-test("executeBatchBind：bindAccount 返回 false 计为失败；窗口已被其他账号占用时跳过", () => {
-  const bound = [];
-  const logs = [];
-  const r = orch.executeBatchBind({
-    matchedPairs: [
-      ["a", "1"],
-      ["b", "2"],
-      ["c", "3"],
-      ["d", "4"],
-    ],
-    shouldStop: () => false,
-    bindAccount: (e, id) => {
-      if (e === "b") return false;
-      bound.push([e, id]);
-      return true;
-    },
-    ownerOf: (id) => (id === "3" ? "other" : id === "4" ? "d" : null),
-    log: (m) => logs.push(m),
-    progress: () => {},
-  });
-  assert.deepEqual(r, {
-    total: 4,
-    success_count: 2,
-    failed_count: 2,
-    failed_list: [
-      { email: "b", error: "写入数据库失败" },
-      { email: "c", error: "窗口 3 已被账号 other 绑定" },
-    ],
-  });
-  // 窗口已绑给自己（d -> 4）不算冲突
-  assert.deepEqual(bound, [
-    ["a", "1"],
-    ["d", "4"],
-  ]);
-  assert.ok(logs.includes("绑定失败: c - 窗口 3 已被账号 other 绑定"));
 });
 
 test("executeBatchDelete：deleteAccount 返回 false 计为失败且不删窗口；非数字窗口 ID 不调用 ixBrowser", async () => {

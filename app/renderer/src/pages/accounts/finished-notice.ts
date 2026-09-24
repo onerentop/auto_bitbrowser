@@ -1,7 +1,7 @@
 /**
  * 账号管理页任务完成后的提示框文案（按任务类型区分）：
- *   - 批量绑定完成
  *   - 批量删除完成
+ *   - 健康巡检完成
  * 只在任务成功结束时调用；失败 / 停止由全局任务坞提示。
  */
 import type { TaskFinishedEvent } from "../../../../shared/ipc.ts";
@@ -26,9 +26,6 @@ export function finishedNotice(e: Pick<TaskFinishedEvent, "type" | "label" | "ou
   const r = obj(e.result);
 
   switch (e.type) {
-    case "batch_bind":
-      return { title: "绑定完成", message: `成功绑定 ${num(r, "success_count")}/${num(r, "total")} 个账号` };
-
     case "batch_delete": {
       const deletedAccounts = num(r, "deleted_accounts");
       if (e.label === DELETE_ACCOUNTS_ONLY_LABEL) {

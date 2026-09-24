@@ -31,8 +31,6 @@ export const ACCOUNTS_INVOKE = {
   accountsBindCandidates: "abb/accounts/bindCandidates",
   /** 绑定账号到指定窗口（有任务在跑时抛 TASK_BUSY） */
   accountsBind: "abb/accounts/bind",
- /** 解绑窗口（。:1600；有任务在跑时抛 TASK_BUSY） */
-  accountsUnbind: "abb/accounts/unbind",
  /** 删除单个账号，不删窗口（。:1631；有任务在跑时抛 TASK_BUSY） */
   accountsDeleteOne: "abb/accounts/deleteOne",
   // ---------- 账号数据（从设置页迁来） ----------
@@ -69,6 +67,8 @@ export interface AccountListRow {
   has_recovery_email: boolean;
   has_secret: boolean;
   last_login_at: string | null;
+  /** 与邮箱同名的窗口个数（窗口名去空白、不区分大小写；窗口列表取失败时为 0）；≥2 说明需要人工确认绑定 */
+  same_name_windows: number;
   updated_at: string | null;
 }
 
@@ -105,7 +105,6 @@ export type AccountsAction =
  /** 行内 / 右键「登录」（。:801） */
   | "single_login"
   | "login"
-  | "batch_bind"
   /** 删除选中（仅账号） */
   | "delete"
   /** 删除选中 + 窗口 */
@@ -121,7 +120,6 @@ export type AccountsAction =
 export const ACCOUNTS_ACTIONS: readonly AccountsAction[] = [
   "single_login",
   "login",
-  "batch_bind",
   "delete",
   "delete_with_windows",
   "delete_one_with_window",
@@ -166,6 +164,8 @@ export type AccountsPrecheckResult =
 export interface BindWindowOption {
   profileId: string;
   name: string;
+  /** 窗口名与账号邮箱相同（去空白、不区分大小写）；这类选项排在最前 */
+  sameName: boolean;
 }
 
 export interface AccountsBindCandidates {
@@ -184,10 +184,28 @@ export interface AccountsBindResult {
   previousBrowserId: string;
 }
 
-export interface AccountsUnbindResult {
-  email: string;
-  /** 被解绑的窗口 ID；原本就未绑定时为空串 */
-  browserId: string;
+/**
+ * 导入 / 添加账号后自动按窗口名绑定的结果（规则见 src/application/window-binding.ts）：
+ * 窗口名（去空白、不区分大小写）= 邮箱，且恰好一个未被占用的同名窗口才绑定；同名多个不猜。
+ */
+export interface AutoBindSummary {
+  /** 绑定成功的账号数 */
+  bound: number;
+  /** 有多个同名窗口、需要手动选择的账号 */
+  ambiguous: Array<{ email: string; windowIds: string[] }>;
+  /** 没找到同名（且未被占用）窗口的账号 */
+  notFound: string[];
+  /** 写库失败的账号 */
+  failed: string[];
+  /** 本来就已绑定、没动的账号数 */
+  alreadyBound: number;
+  /** 没执行自动绑定的原因（取窗口列表失败 / 有任务正在执行），可直接展示；执行了为 null */
+  error: string | null;
+}
+
+/** 批量导入结果 + 自动绑定结果 */
+export interface AccountsImportResult extends ImportResultDto {
+  bind: AutoBindSummary;
 }
 
 /** 编辑弹窗 / 添加 / 编辑用的账号原文（只在编辑时按邮箱单独取，列表里不下发） */
@@ -216,11 +234,10 @@ export interface AccountsInvokeMap {
   };
   "abb/accounts/bindCandidates": { args: [email: string]; result: AccountsBindCandidates };
   "abb/accounts/bind": { args: [email: string, browserId: string]; result: AccountsBindResult };
-  "abb/accounts/unbind": { args: [email: string]; result: AccountsUnbindResult };
   "abb/accounts/deleteOne": { args: [email: string]; result: boolean };
   "abb/accounts/get": { args: [email: string]; result: AccountDetail };
-  "abb/accounts/add": { args: [account: AccountDetail]; result: boolean };
+  "abb/accounts/add": { args: [account: AccountDetail]; result: AutoBindSummary };
   "abb/accounts/update": { args: [account: AccountDetail]; result: boolean };
-  "abb/accounts/import": { args: [text: string]; result: ImportResultDto };
+  "abb/accounts/import": { args: [text: string]; result: AccountsImportResult };
   "abb/accounts/exportText": { args: [emails: string[]]; result: AccountsExportResult };
 }

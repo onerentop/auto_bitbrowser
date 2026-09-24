@@ -161,7 +161,7 @@ export interface IxBrowserPingResult {
 /** 正在运行的任务 */
 export interface TaskInfo {
   id: number;
-  /** 任务类型，如 login / batch_bind / batch_delete */
+  /** 任务类型，如 login / batch_delete / health_check */
   type: string;
   /** 展示用名称 */
   label: string;

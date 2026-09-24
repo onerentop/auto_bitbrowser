@@ -13,12 +13,16 @@ import {
   type ImportedAccount,
 } from "../../shared/logic/settings-data.ts";
 import { importAccounts } from "../../../src/application/account-import.ts";
+import { autoBindAccounts } from "../../../src/application/window-binding.ts";
+import type { WindowLike } from "../../../src/application/account-manager-service.ts";
 import {
   ACCOUNTS_INVOKE,
   type AccountDetail,
   type AccountsExportResult,
+  type AccountsImportResult,
+  type AutoBindSummary,
 } from "../../shared/channels/accounts.ts";
-import type { ImportResultDto } from "../../shared/channels/settings.ts";
+import { listAllWindows } from "./accounts.ts";
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
 import { MAX_IMPORT_TEXT_LENGTH, asArray, asRecord, asString, field, invalid } from "./settings/validate.ts";
@@ -42,8 +46,20 @@ export function parseEmailListArg(value: unknown, emptyMessage: string): string[
   return out;
 }
 
-export function createAccountDataHandlers(ctx: HostContext): HostHandlerTable {
+export interface AccountDataHandlerDeps {
+  /** 取全部窗口（默认 listAllWindows 翻页取全量），失败抛错 */
+  listWindows?: () => Promise<WindowLike[]>;
+  /** 测试注入：跳过 ixBrowser 重试的真实等待 */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export function createAccountDataHandlers(ctx: HostContext, deps: AccountDataHandlerDeps = {}): HostHandlerTable {
   const repo = () => ctx.accountRepo();
+  const listWindows =
+    deps.listWindows ?? (() => listAllWindows(ctx.ix(), { log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
+  // 有批量任务在跑时跳过自动绑定（账号照常保存）：与单条绑定的 TASK_BUSY 规则一致，不在任务运行中改绑定关系
+  const autoBind = (emails: readonly string[]): Promise<AutoBindSummary> =>
+    autoBindAccounts({ repo: repo(), listWindows, isBusy: () => ctx.tasks.busy }, emails);
   return {
     /** 按邮箱取原文（编辑弹窗打开时调用） */
     [ACCOUNTS_INVOKE.accountsGet]: (email: unknown): AccountDetail => {
@@ -59,11 +75,12 @@ export function createAccountDataHandlers(ctx: HostContext): HostHandlerTable {
       };
     },
 
-    /** 添加账号：只在添加时校验邮箱，新增 status=pending */
-    [ACCOUNTS_INVOKE.accountsAdd]: (account: unknown): boolean => {
+    /** 添加账号：只在添加时校验邮箱，新增 status=pending；添加后自动按窗口名绑定 */
+    [ACCOUNTS_INVOKE.accountsAdd]: async (account: unknown): Promise<AutoBindSummary> => {
       const data = parseAccountInputArg(account);
       if (!isValidNewAccountEmail(data.email)) invalid("请输入有效的邮箱地址");
-      return repo().upsertAccount({ ...data, status: "pending" });
+      if (!repo().upsertAccount({ ...data, status: "pending" })) throw new Error(`添加账号失败: ${data.email}`);
+      return autoBind([data.email]);
     },
 
     /** 编辑账号：不改状态 */
@@ -77,15 +94,18 @@ export function createAccountDataHandlers(ctx: HostContext): HostHandlerTable {
     /**
      * 批量导入：后端按同一纯函数重新解析文本（不信任渲染层预览），
      * 写库与计数规则见 src/application/account-import.ts（整批一个事务）。
+     * 导入后对这批里还没绑定窗口的账号自动按窗口名绑定（规则见 window-binding.ts）；取窗口失败不影响导入。
      */
-    [ACCOUNTS_INVOKE.accountsImport]: (text: unknown): ImportResultDto => {
+    [ACCOUNTS_INVOKE.accountsImport]: async (text: unknown): Promise<AccountsImportResult> => {
       const raw = asString(text, "text", MAX_IMPORT_TEXT_LENGTH);
       const valid: ImportedAccount[] = [];
       for (const row of parseImportText(raw, parseAccountImportLine)) {
         if (row.result.ok) valid.push(row.result.data);
       }
       if (valid.length === 0) invalid("没有可导入的有效数据");
-      return importAccounts(repo(), valid);
+      const result = importAccounts(repo(), valid);
+      const bind = await autoBind(valid.map((a) => a.email));
+      return { ...result, bind };
     },
 
     /** 导出选中：按传入顺序，库里没有的跳过；文本格式与原设置页导出一致 */

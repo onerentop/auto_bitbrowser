@@ -19,7 +19,14 @@ import { createAccountDataHandlers } from "../app/host/handlers/account-data.ts"
 import { finishedNotice } from "../app/renderer/src/pages/accounts/finished-notice.ts";
 import { createBatchResult } from "../src/automation/batch/types.ts";
 import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
-import { accountSorter, countLogin, filterAccounts } from "../app/shared/logic/account-list.ts";
+import {
+  accountSorter,
+  autoBindNotice,
+  countLogin,
+  defaultBindSelection,
+  filterAccounts,
+  hasSameNameWindows,
+} from "../app/shared/logic/account-list.ts";
 
 const CH = ACCOUNTS_INVOKE;
 
@@ -68,7 +75,10 @@ function setup({ windows = [], ixFail = false, deps = {} } = {}) {
     ixClient: /** @type {any} */ (ix), // 假客户端只实现账号页用到的四个方法
   });
   // 默认不真的等待重试退避（ixFail 的 ECONNREFUSED 属于可重试错误）
-  const handlers = { ...createAccountsHandlers(ctx, { sleep: async () => {}, ...deps }), ...createAccountDataHandlers(ctx) };
+  const handlers = {
+    ...createAccountsHandlers(ctx, { sleep: async () => {}, ...deps }),
+    ...createAccountDataHandlers(ctx, { sleep: async () => {} }),
+  };
   const dispatch = createDispatcher(handlers);
   /** @returns {Promise<any>} 信封里的 data 形状由各用例自行断言 */
   const call = async (channel, ...args) => {
@@ -222,7 +232,8 @@ test("list：窗口翻页遇到可重试错误先重试（1s/2s 退避）再成�
 
 test("账号数据：get 取原文；add 新增 pending；update 不改状态；未知账号拒绝", async () => {
   const s = setup();
-  assert.equal(await s.call(CH.accountsAdd, { email: " a@b.com ", password: " pw ", recovery_email: "r@x.com", secret_key: "S" }), true);
+  const added = await s.call(CH.accountsAdd, { email: " a@b.com ", password: " pw ", recovery_email: "r@x.com", secret_key: "S" });
+  assert.deepEqual(added, { bound: 0, ambiguous: [], notFound: ["a@b.com"], failed: [], alreadyBound: 0, error: null }, "没有同名窗口");
   let a = s.ctx.accountRepo().getAccountByEmail("a@b.com");
   assert.ok(a);
   assert.equal(a.status, "pending");
@@ -248,7 +259,11 @@ test("账号数据：导入（已存在只更新非空字段，新账号 pending
   const s = setup();
   s.ctx.accountRepo().upsertAccount({ email: "a@b.com", password: "p", secret_key: "S", status: "subscribed" });
   const r = await s.call(CH.accountsImport, "a@b.com----pw3----new@r.com\nbad\nn@m.com----p----rr@x.com----K");
-  assert.deepEqual(r, { success_count: 2, fail_count: 0 });
+  assert.deepEqual(r, {
+    success_count: 2,
+    fail_count: 0,
+    bind: { bound: 0, ambiguous: [], notFound: ["a@b.com", "n@m.com"], failed: [], alreadyBound: 0, error: null },
+  });
   const a = s.ctx.accountRepo().getAccountByEmail("a@b.com");
   assert.ok(a);
   assert.deepEqual([a.password, a.recovery_email, a.secret_key, a.status], ["pw3", "new@r.com", "S", "subscribed"]);
@@ -258,6 +273,60 @@ test("账号数据：导入（已存在只更新非空字段，新账号 pending
   const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
   await assert.rejects(s.call(CH.accountsImport, 42), bad);
   await assert.rejects(s.call(CH.accountsImport, "bad\n# only comment"), bad);
+});
+
+test("自动绑定：导入后按窗口名绑定——唯一同名才绑、同名多个不猜、被占用的不用、已绑定不动", async () => {
+  const s = setup({
+    windows: [
+      { profile_id: 11, name: " A@b.com " },
+      { profile_id: 21, name: "dup@x.com" },
+      { profile_id: 22, name: "dup@x.com" },
+      { profile_id: 31, name: "taken@x.com" },
+      { profile_id: 41, name: "old@x.com" },
+    ],
+  });
+  seed(s.ctx, [
+    { email: "owner@x.com", browser_profile_id: "31" },
+    { email: "old@x.com", browser_profile_id: "99" },
+  ]);
+  const r = await s.call(
+    CH.accountsImport,
+    ["a@b.com----p", "dup@x.com----p", "taken@x.com----p", "old@x.com----p", "none@x.com----p"].join("\n"),
+  );
+  assert.deepEqual(r.bind, {
+    bound: 1,
+    ambiguous: [{ email: "dup@x.com", windowIds: ["21", "22"] }],
+    notFound: ["taken@x.com", "none@x.com"],
+    failed: [],
+    alreadyBound: 1,
+    error: null,
+  });
+  const bound = (/** @type {string} */ e) => s.ctx.accountRepo().getAccountByEmail(e)?.browser_profile_id ?? null;
+  assert.equal(bound("a@b.com"), "11");
+  assert.equal(bound("dup@x.com"), null, "同名多个不猜");
+  assert.equal(bound("taken@x.com"), null);
+  assert.equal(bound("old@x.com"), "99", "已绑定不动");
+
+  // 列表标出同名窗口个数
+  const list = await s.call(CH.accountsList);
+  const by = Object.fromEntries(list.rows.map((x) => [x.email, x]));
+  assert.deepEqual([by["dup@x.com"].same_name_windows, by["a@b.com"].same_name_windows, by["none@x.com"].same_name_windows], [2, 1, 0]);
+});
+
+test("自动绑定：添加账号后绑定唯一同名窗口；ixBrowser 不可达时账号照样保存，只在结果里记 error", async () => {
+  const s = setup({ windows: [{ profile_id: 5, name: "new@x.com" }] });
+  const r = await s.call(CH.accountsAdd, { email: "new@x.com", password: "p", recovery_email: "", secret_key: "" });
+  assert.equal(r.bound, 1);
+  assert.equal(s.ctx.accountRepo().getAccountByEmail("new@x.com")?.browser_profile_id, "5");
+
+  const s2 = setup({ ixFail: true });
+  const r2 = await s2.call(CH.accountsAdd, { email: "new@x.com", password: "p", recovery_email: "", secret_key: "" });
+  assert.match(r2.error, /ECONNREFUSED/);
+  assert.equal(r2.bound, 0);
+  assert.ok(s2.ctx.accountRepo().getAccountByEmail("new@x.com"), "取窗口失败不影响添加");
+  const r3 = await s2.call(CH.accountsImport, "imp@x.com----p");
+  assert.equal(r3.success_count, 1);
+  assert.match(r3.bind.error, /ECONNREFUSED/);
 });
 
 test("账号数据：导出文本格式不变，按传入顺序、去重、库里没有的跳过", async () => {
@@ -287,8 +356,8 @@ test("参数校验：非法参数一律 INVALID_ARGUMENT", async () => {
     assert.equal(env.error.code, ERROR_CODES.INVALID_ARGUMENT, `${channel} ${JSON.stringify(args)}`);
   };
   await bad(CH.accountsPrecheck, ["nope", []]);
-  // 已删除的操作一律视为未知操作
-  for (const removed of ["oauth", "single_oauth", "login_and_oauth", "detect_pro", "refresh_membership_info", "enable_family_sharing", "detect_403", "unlock_403"]) {
+  // 已删除的操作一律视为未知操作（batch_bind 已由导入 / 添加后的自动绑定取代）
+  for (const removed of ["oauth", "single_oauth", "login_and_oauth", "detect_pro", "refresh_membership_info", "enable_family_sharing", "detect_403", "unlock_403", "batch_bind"]) {
     await bad(CH.accountsPrecheck, [removed, []]);
   }
   await bad(CH.accountsPrecheck, ["login", "not-array"]);
@@ -301,7 +370,6 @@ test("参数校验：非法参数一律 INVALID_ARGUMENT", async () => {
   await bad(CH.accountsStart, ["login", [], null]);
   await bad(CH.accountsBind, ["a@x.com", "abc"]);
   await bad(CH.accountsBind, ["", "12"]);
-  await bad(CH.accountsUnbind, [42]);
   await bad(CH.accountsDeleteOne, [""]);
   await bad(CH.accountsBindCandidates, [null]);
 });
@@ -329,25 +397,6 @@ test("precheck：批量登录的前置校验文案（:831-848）", async () => {
   assert.deepEqual(ok, { ok: true, confirms: [], logs: [], total: 1 });
 });
 
-
-test("precheck：批量绑定按窗口名匹配，ix 不可达时报错", async () => {
-  const s = setup({ windows: [{ profile_id: 7, name: "A@x.com" }, { profile_id: 8, name: "zz" }] });
-  seed(s.ctx, [{ email: "a@x.com" }, { email: "c@x.com" }, { email: "d@x.com", browser_profile_id: "5" }]);
-  const r = await s.call(CH.accountsPrecheck, "batch_bind", [
-    { email: "a@x.com", browserId: "" },
-    { email: "c@x.com", browserId: "" },
-    { email: "d@x.com", browserId: "5" },
-  ]);
-  assert.equal(r.ok, true);
-  assert.equal(r.total, 1);
-  assert.equal(r.confirms[0].message, "将绑定 1 个账号到对应窗口\n\n❌ 1 个账号未找到匹配窗口:\nc@x.com\n\n是否继续？");
-
-  const s2 = setup({ ixFail: true });
-  seed(s2.ctx, [{ email: "a@x.com" }]);
-  const e = await s2.call(CH.accountsPrecheck, "batch_bind", [{ email: "a@x.com", browserId: "" }]);
-  assert.equal(e.level, "error");
-  assert.match(e.message, /^批量绑定失败:\n/);
-});
 
 test("precheck：任务运行中返回冲突提示（删除带 wait_action）", async () => {
   const s = setup();
@@ -487,28 +536,15 @@ test("start：删除+窗口 —— 结果形状，窗口先关后删，账号从
   );
 });
 
-
-test("start：批量绑定 —— 结果形状 {total, success_count, failed_count} 并写库", async () => {
-  const s = setup({ windows: [{ profile_id: 7, name: "a@x.com" }] });
-  seed(s.ctx, [{ email: "a@x.com" }]);
-  const done = s.finished();
-  await s.call(CH.accountsStart, "batch_bind", [{ email: "a@x.com", browserId: "" }], OPTS);
-  const e = await done;
-  assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
-  const boundByEmail = s.ctx.accountRepo().getAccountByEmail("a@x.com");
-  assert.ok(boundByEmail);
-  assert.equal(boundByEmail.browser_profile_id, "7");
-  assert.deepEqual(s.items(), [["a@x.com", "成功", ""]]);
-});
-
 // ==================== 单条操作 ====================
 
-test("bindCandidates / bind / unbind / deleteOne", async () => {
+test("bindCandidates / bind（重新绑定）/ deleteOne", async () => {
   const s = setup({
     windows: [
       { profile_id: 1, name: "w1" },
       { profile_id: 2, name: "w2" },
       { profile_id: 3, name: "" },
+      { profile_id: 4, name: "c" },
     ],
   });
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }, { email: "b", browser_profile_id: "2" }, { email: "c" }]);
@@ -516,11 +552,21 @@ test("bindCandidates / bind / unbind / deleteOne", async () => {
   // a 自己绑定的窗口 1 可选；窗口 2 被 b 占用 → 排除
   const cand = await s.call(CH.accountsBindCandidates, "a");
   assert.equal(cand.currentBrowserId, "1");
-  assert.equal(cand.windowCount, 3);
+  assert.equal(cand.windowCount, 4);
   assert.deepEqual(cand.available, [
-    { profileId: "1", name: "w1" },
-    { profileId: "3", name: "未命名" },
+    { profileId: "1", name: "w1", sameName: false },
+    { profileId: "3", name: "未命名", sameName: false },
+    { profileId: "4", name: "c", sameName: false },
   ]);
+  // 与邮箱同名的窗口排最前并标注
+  const candC = await s.call(CH.accountsBindCandidates, "c");
+  assert.deepEqual(
+    candC.available.map((/** @type {any} */ o) => [o.profileId, o.sameName]),
+    [
+      ["4", true],
+      ["3", false],
+    ],
+  );
 
   // 绑定到被其它账号占用的窗口 → 拒绝
   const env = await s.dispatch(CH.accountsBind, ["c", "2"]);
@@ -528,11 +574,9 @@ test("bindCandidates / bind / unbind / deleteOne", async () => {
   assert.equal(env.error.code, ERROR_CODES.INVALID_ARGUMENT);
 
   assert.deepEqual(await s.call(CH.accountsBind, "a", "3"), { email: "a", browserId: "3", previousBrowserId: "1" });
-  assert.deepEqual(await s.call(CH.accountsUnbind, "a"), { email: "a", browserId: "3" });
-  assert.deepEqual(await s.call(CH.accountsUnbind, "a"), { email: "a", browserId: "" });
-  const unbound = s.ctx.accountRepo().getAccountByEmail("a");
-  assert.ok(unbound);
-  assert.equal(unbound.browser_profile_id, "");
+  const rebound = s.ctx.accountRepo().getAccountByEmail("a");
+  assert.ok(rebound);
+  assert.equal(rebound.browser_profile_id, "3");
 
   assert.equal(await s.call(CH.accountsDeleteOne, "c"), true);
   assert.equal(s.ctx.accountRepo().getAccountByEmail("c"), null);
@@ -636,48 +680,15 @@ test("delete_one_with_window：用数据库的窗口 ID；与行上不一致或�
   assert.equal(s.ctx.accountRepo().getAccountByEmail("a"), null);
 });
 
-test("batch_bind：两个大小写不同的邮箱匹配到同一窗口时只绑定第一个", async () => {
-  const s = setup({ windows: [{ profile_id: 7, name: "a@x.com" }] });
-  seed(s.ctx, [{ email: "a@x.com" }, { email: "A@X.com" }]);
-  const rows = [
-    { email: "a@x.com", browserId: "" },
-    { email: "A@X.com", browserId: "" },
-  ];
-  const pre = await s.call(CH.accountsPrecheck, "batch_bind", rows);
-  assert.equal(pre.total, 1);
-  assert.equal(pre.confirms[0].message, "将绑定 1 个账号到对应窗口\n\n⚠️ 1 个窗口已被其他账号绑定（已跳过）\n\n是否继续？");
-  const done = s.finished();
-  await s.call(CH.accountsStart, "batch_bind", rows, OPTS);
-  const e = await done;
-  assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
-  const boundA = s.ctx.accountRepo().getAccountByEmail("a@x.com");
-  assert.ok(boundA);
-  assert.equal(boundA.browser_profile_id, "7");
-  const boundUpper = s.ctx.accountRepo().getAccountByEmail("A@X.com");
-  assert.ok(boundUpper);
-  assert.ok(!boundUpper.browser_profile_id);
-});
-
-test("start：仓储写库返回 false 时绑定 / 删除计为失败", async () => {
-  const s = setup({ windows: [{ profile_id: 7, name: "a@x.com" }] });
-  seed(s.ctx, [{ email: "a@x.com" }, { email: "d", browser_profile_id: "31" }]);
+test("start：仓储写库返回 false 时删除计为失败", async () => {
+  const s = setup();
+  seed(s.ctx, [{ email: "d", browser_profile_id: "31" }]);
   const repo = s.ctx.accountRepo();
-  repo.bindAccountToBrowser = () => false;
   repo.deleteAccount = () => false;
 
-  let done = s.finished();
-  await s.call(CH.accountsStart, "batch_bind", [{ email: "a@x.com", browserId: "" }], OPTS);
-  let e = await done;
-  assert.deepEqual(e.result, {
-    total: 1,
-    success_count: 0,
-    failed_count: 1,
-    failed_list: [{ email: "a@x.com", error: "写入数据库失败" }],
-  });
-
-  done = s.finished();
+  const done = s.finished();
   await s.call(CH.accountsStart, "delete_with_windows", [{ email: "d", browserId: "31" }], OPTS);
-  e = await done;
+  const e = await done;
   assert.deepEqual(e.result, {
     total: 1,
     deleted_accounts: 0,
@@ -689,7 +700,7 @@ test("start：仓储写库返回 false 时绑定 / 删除计为失败", async ()
   assert.equal(s.ix.calls.filter((c) => c[0] === "close" || c[0] === "delete").length, 0);
 });
 
-test("bind / unbind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => {
+test("bind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => {
   const s = setup();
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
   /** @type {(value?: void) => void} */
@@ -698,7 +709,6 @@ test("bind / unbind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => 
   /** @type {Array<[string, unknown[]]>} 通道与参数（数组字面量推断不出元组） */
   const busyCases = [
     [CH.accountsBind, ["a", "2"]],
-    [CH.accountsUnbind, ["a"]],
     [CH.accountsDeleteOne, ["a"]],
   ];
   for (const [channel, args] of busyCases) {
@@ -710,6 +720,25 @@ test("bind / unbind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => 
   const boundRow = s.ctx.accountRepo().getAccountByEmail("a");
   assert.ok(boundRow);
   assert.equal(boundRow.browser_profile_id, "1");
+  release();
+});
+
+test("自动绑定：有任务在跑时添加 / 导入照常保存账号，但不自动绑定窗口", async () => {
+  const s = setup({ windows: [{ profile_id: 5, name: "new@x.com" }, { profile_id: 6, name: "imp@x.com" }] });
+  /** @type {(value?: void) => void} */
+  let release = () => {};
+  s.ctx.tasks.start("x", "占位", () => new Promise((r) => (release = r)));
+  const r = await s.call(CH.accountsAdd, { email: "new@x.com", password: "p", recovery_email: "", secret_key: "" });
+  assert.equal(r.bound, 0);
+  assert.match(r.error, /有任务正在执行/);
+  const i = await s.call(CH.accountsImport, "imp@x.com----p");
+  assert.equal(i.success_count, 1);
+  assert.match(i.bind.error, /有任务正在执行/);
+  for (const e of ["new@x.com", "imp@x.com"]) {
+    const a = s.ctx.accountRepo().getAccountByEmail(e);
+    assert.ok(a, `${e} 已保存`);
+    assert.ok(!a.browser_profile_id, `${e} 未绑定`);
+  }
   release();
 });
 
@@ -745,10 +774,7 @@ test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", ()
    * @returns {Pick<import("../app/shared/ipc.ts").TaskFinishedEvent, "type" | "label" | "outcome" | "result">}
    */
   const ev = (type, result, extra = {}) => ({ type, label: "", outcome: "succeeded", result, ...extra });
-  assert.deepEqual(finishedNotice(ev("batch_bind", { total: 3, success_count: 2 })), {
-    title: "绑定完成",
-    message: "成功绑定 2/3 个账号",
-  });
+  assert.equal(finishedNotice(ev("batch_bind", { total: 3, success_count: 2 })), null, "批量绑定已删除");
   assert.deepEqual(finishedNotice(ev("batch_delete", { deleted_accounts: 2, deleted_windows: 1 }, { label: "删除选中" })), {
     title: "删除完成",
     message: "已删除 2 个账号",
@@ -757,7 +783,6 @@ test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", ()
     title: "删除完成",
     message: "已删除 2 个账号\n已删除 1 个窗口",
   });
-  assert.equal(finishedNotice(ev("batch_bind", null, { outcome: "failed" })), null);
   assert.equal(finishedNotice(ev("batch_delete", {}, { outcome: "stopped" })), null);
   assert.equal(finishedNotice(ev("login", {})), null);
 });
@@ -941,6 +966,7 @@ const row = (o) => ({
   has_recovery_email: false,
   has_secret: false,
   last_login_at: null,
+  same_name_windows: 0,
   updated_at: null,
   ...o,
 });
@@ -997,4 +1023,49 @@ test("accountSorter：模拟 antd（降序时把结果取反），未绑定窗�
   assert.deepEqual(antd("lastLogin", "descend"), ["C@x.com", "b@x.com", "a@x.com"]);
   assert.deepEqual(antd("lastLogin", "ascend"), ["b@x.com", "C@x.com", "a@x.com"]);
   assert.deepEqual(antd("email", "ascend"), ["a@x.com", "b@x.com", "C@x.com"], "不区分大小写");
+});
+
+test("filterAccounts：只看同名窗口（≥2 个）可与其它条件叠加", () => {
+  const rows = [
+    row({ email: "a@x.com", same_name_windows: 2, group_id: 2 }),
+    row({ email: "b@x.com", same_name_windows: 1, group_id: 2 }),
+    row({ email: "c@x.com", same_name_windows: 3, group_id: 3 }),
+  ];
+  const q = (o) => ({ groupId: null, login: "all", text: "", ...o });
+  const emails = (list) => list.map((r) => r.email);
+  assert.deepEqual(emails(filterAccounts(rows, q({ sameNameOnly: true }))), ["a@x.com", "c@x.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ sameNameOnly: true, groupId: 3 }))), ["c@x.com"]);
+  assert.equal(filterAccounts(rows, q({ sameNameOnly: false })), rows);
+  assert.equal(hasSameNameWindows(row({ same_name_windows: 1 })), false);
+});
+
+test("defaultBindSelection：当前绑定 → 唯一同名 → 不选", () => {
+  const o = (profileId, sameName) => ({ profileId, sameName });
+  assert.equal(defaultBindSelection([o("1", false), o("2", true)], "1"), "1", "重新绑定时默认当前窗口");
+  assert.equal(defaultBindSelection([o("1", false), o("2", true)], ""), "2", "唯一同名");
+  assert.equal(defaultBindSelection([o("1", false), o("2", true)], "9"), "2", "当前窗口不在候选里时看同名");
+  assert.equal(defaultBindSelection([o("2", true), o("3", true)], ""), null, "同名多个不猜");
+  assert.equal(defaultBindSelection([o("1", false)], ""), null, "没有同名不默认第一个");
+});
+
+test("autoBindNotice：成功 / 需要处理 / 取窗口失败 / 无事可报", () => {
+  const base = { bound: 0, ambiguous: [], notFound: [], failed: [], alreadyBound: 0, error: null };
+  assert.equal(autoBindNotice({ ...base, alreadyBound: 3 }), null);
+  assert.deepEqual(autoBindNotice({ ...base, bound: 2 }), { level: "success", title: "自动绑定窗口", text: "已自动绑定 2 个账号" });
+  const w = autoBindNotice({
+    ...base,
+    bound: 1,
+    ambiguous: [{ email: "d@x.com", windowIds: ["1", "2"] }],
+    notFound: ["a", "b", "c", "d", "e", "f"],
+  });
+  assert.ok(w);
+  assert.equal(w.level, "warning");
+  assert.equal(
+    w.text,
+    "已自动绑定 1 个账号\n1 个账号有多个同名窗口，需要右键「绑定窗口」手动选择：d@x.com\n6 个账号没找到同名窗口：a、b、c、d、e 等 6 个",
+  );
+  const e = autoBindNotice({ ...base, error: "获取窗口列表失败：ECONNREFUSED" });
+  assert.ok(e);
+  assert.equal(e.level, "warning");
+  assert.match(e.text, /ECONNREFUSED/);
 });

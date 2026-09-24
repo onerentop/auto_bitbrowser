@@ -1,7 +1,7 @@
 /**
  * 账号任务编排执行器（Node 重写）
  *
- * 负责批量登录 / 批量绑定 / 批量删除。
+ * 负责批量登录 / 批量删除。
  *
  * 设计取舍：
  *   1. 依赖（批处理器、仓储、ixBrowser 回调）一律由调用方注入，本文件不触碰
@@ -26,13 +26,6 @@ export const MAX_RESULT_STRING = 500;
 
 // ==================== 结果骨架 ====================
 
-export interface BatchBindResults {
-  total: number;
-  success_count: number;
-  failed_count: number;
-  failed_list: Array<{ email: string; error: string }>;
-}
-
 export interface BatchDeleteResults {
   total: number;
   deleted_accounts: number;
@@ -45,11 +38,6 @@ export interface StoppedResult {
   type: "stopped";
   task_type: string;
   message: string;
-}
-
-/** 批量绑定结果骨架 */
-export function createBatchBindResults(total: number): BatchBindResults {
-  return { total, success_count: 0, failed_count: 0, failed_list: [] };
 }
 
 /** 批量删除结果骨架 */
@@ -70,60 +58,6 @@ function errorText(error: unknown): string {
 function emailOf(account: AccountDict): string {
   const v = account["email"];
   return v === null || v === undefined ? "" : String(v);
-}
-
-// ==================== 批量绑定 ====================
-
-/**
- * 批量绑定
- *
- * 设计取舍：
- *   1. bindAccount 返回 false（数据库未写入）时计为失败（不检查返回值会把写库失败当成成功计数）。
- *   2. 提供 ownerOf 时，每条执行前再查一次窗口当前归属；已被其他账号占用则记失败并跳过，
- *      避免预检与执行之间数据变化导致同一窗口绑给两个账号。
- */
-export function executeBatchBind(params: {
-  matchedPairs: ReadonlyArray<readonly [string, string]>;
-  shouldStop: () => boolean;
-  bindAccount: (email: string, browserId: string) => boolean | void;
-  /** 查询窗口当前绑定的账号邮箱（未绑定返回 null） */
-  ownerOf?: (browserId: string) => string | null;
-  log: LogFn;
-  progress: (current: number) => void;
-  /** 逐条目结果（任务历史用） */
-  item?: (key: string, status: string, message: string) => void;
-}): BatchBindResults {
-  const { matchedPairs, shouldStop, log, progress } = params;
-  const results = createBatchBindResults(matchedPairs.length);
-  const fail = (email: string, error: string): void => {
-    results.failed_count += 1;
-    results.failed_list.push({ email, error });
-    log(`绑定失败: ${email} - ${error}`);
-    params.item?.(email, "失败", error);
-  };
-  for (let index = 0; index < matchedPairs.length; index++) {
-    if (shouldStop()) {
-      log("用户停止任务");
-      break;
-    }
-    const [email, browserId] = matchedPairs[index] as readonly [string, string];
-    try {
-      const owner = params.ownerOf?.(browserId) ?? null;
-      if (owner && owner !== email) {
-        fail(email, `窗口 ${browserId} 已被账号 ${owner} 绑定`);
-      } else if (params.bindAccount(email, browserId) === false) {
-        fail(email, "写入数据库失败");
-      } else {
-        results.success_count += 1;
-        log(`绑定: ${email} -> ${browserId}`);
-        params.item?.(email, "成功", "");
-      }
-    } catch (error) {
-      fail(email, errorText(error));
-    }
-    progress(index + 1);
-  }
-  return results;
 }
 
 // ==================== 批量删除 ====================

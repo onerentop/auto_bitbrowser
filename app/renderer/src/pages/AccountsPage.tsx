@@ -1,5 +1,5 @@
 /**
- * 账号管理页（账号列表 / 添加编辑导入导出 / 绑定解绑 / 批量任务）
+ * 账号管理页（账号列表 / 添加编辑导入导出 / 绑定窗口 / 批量任务）
  *
  * 布局：操作卡片（账号数据 | 批量任务 | 删除）→ 列表卡片（刷新、搜索、登录状态、分组标签、平铺虚拟表格）。
  *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表只显示密码 / 密钥 / 辅助邮箱有无，
@@ -7,7 +7,8 @@
  *   - 筛选全部在前端叠加（分组 / 登录状态 / 搜索）；被筛选隐藏的勾选保留，批量操作作用于全部勾选，确认前提示隐藏数
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
  *   - 任务运行中写操作禁用；停止用底部任务坞；任务结束后刷新列表
- *   - 右键菜单：编辑 / 绑定 / 重绑 / 解绑 / 登录 / 删除 / 删除+窗口
+ *   - 右键菜单：编辑 / 绑定（或重新绑定）窗口 / 登录 / 删除 / 删除+窗口
+ *   - 导入 / 添加后后端按窗口名自动绑定（同名窗口多个时不猜，列表标出「同名×n」由用户右键确认）
  * 按用户要求已删除：OAuth、检测 Pro、家庭组、403 相关、独立的「停止」按钮与「全选」复选框。
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
@@ -15,6 +16,7 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Divider,
   Dropdown,
   Empty,
@@ -44,6 +46,7 @@ import type {
   AccountListRow,
   AccountsAction,
   AccountsListResult,
+  AutoBindSummary,
   ConfirmStep,
   SelectedRow,
 } from "../../../shared/channels/accounts.ts";
@@ -52,6 +55,8 @@ import {
   accountSorter,
   countLogin,
   filterAccounts,
+  hasSameNameWindows,
+  autoBindNotice,
   type AccountLoginFilter,
 } from "../../../shared/logic/account-list.ts";
 import {
@@ -70,7 +75,7 @@ import { loginView } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
-const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete", "health_check"]);
+const ACCOUNT_TASK_TYPES = new Set(["login", "batch_delete", "health_check"]);
 
 const EXPORT_FILE_NAME = "accounts_export.txt";
 
@@ -137,6 +142,7 @@ export function AccountsPage(): ReactElement {
   const deferredSearch = useDeferredValue(search);
   const [groupId, setGroupId] = useState<number | null>(null);
   const [login, setLogin] = useState<AccountLoginFilter>("all");
+  const [sameNameOnly, setSameNameOnly] = useState(false);
 
   // ---------- 数据加载 ----------
 
@@ -193,10 +199,11 @@ export function AccountsPage(): ReactElement {
 
   const rows = list?.rows ?? EMPTY_LIST;
   const visible = useMemo(
-    () => filterAccounts(rows, { groupId, login, text: deferredSearch }),
-    [rows, groupId, login, deferredSearch],
+    () => filterAccounts(rows, { groupId, login, text: deferredSearch, sameNameOnly }),
+    [rows, groupId, login, deferredSearch, sameNameOnly],
   );
   const loginCounts = useMemo(() => countLogin(rows), [rows]);
+  const sameNameCount = useMemo(() => rows.filter(hasSameNameWindows).length, [rows]);
   const checkedSet = useMemo(() => new Set(checked), [checked]);
   /** 全部勾选（含被筛选隐藏的），按列表顺序 */
   const checkedRows = useMemo(() => rows.filter((r) => checkedSet.has(r.email)), [rows, checkedSet]);
@@ -221,10 +228,19 @@ export function AccountsPage(): ReactElement {
   // ---------- 提示与确认 ----------
 
   const notify = useCallback(
-    (level: "info" | "warning" | "error", title: string, text: string): void => {
+    (level: "success" | "info" | "warning" | "error", title: string, text: string): void => {
       notification[level]({ message: title, description: <Multiline text={text} /> });
     },
     [notification],
+  );
+
+  /** 导入 / 添加后自动绑定窗口的结果提示（全部本来就已绑定时不提示） */
+  const showAutoBind = useCallback(
+    (s: AutoBindSummary): void => {
+      const n = autoBindNotice(s);
+      if (n) notify(n.level, n.title, n.text);
+    },
+    [notify],
   );
 
   const confirm = useCallback(
@@ -304,27 +320,6 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 单条操作（右键菜单 / 行内按钮） ----------
 
-  /** 解绑窗口 */
-  const unbind = async (row: AccountListRow): Promise<void> => {
-    if (!row.browser_profile_id) {
-      logLocal(`账号 ${row.email} 未绑定窗口`);
-      return;
-    }
-    const ok = await confirm({
-      title: "确认解绑",
-      message: `确定要解绑账号 ${row.email} 与窗口 ${row.browser_profile_id} 的绑定吗？`,
-    });
-    if (!ok) return;
-    try {
-      const r = await invoke(IPC.invoke.accountsUnbind, row.email);
-      logLocal(`已解绑账号 ${row.email} 与窗口 ${r.browserId}`);
-      void load();
-    } catch (e) {
-      logLocal(`解绑窗口失败: ${describeError(e)}`);
-      notify("error", "错误", `解绑窗口失败:\n${describeError(e)}`);
-    }
-  };
-
   /** 删除单个账号 */
   const deleteOne = async (row: AccountListRow): Promise<void> => {
     const ok = await confirm({
@@ -344,12 +339,12 @@ export function AccountsPage(): ReactElement {
 
   const menuItems = (row: AccountListRow): MenuProps["items"] => {
     const hasBrowser = row.browser_profile_id !== "";
-    const items: NonNullable<MenuProps["items"]> = [{ key: "edit", label: "编辑账号" }, { type: "divider" }];
-    if (hasBrowser) {
-      items.push({ key: "rebind", label: "重新绑定窗口", disabled: busy }, { key: "unbind", label: "解绑窗口", disabled: busy });
-    } else {
-      items.push({ key: "bind", label: "绑定窗口", disabled: busy });
-    }
+    // 没有「解绑」：解绑后账号无法登录 / 巡检，没有功能需要它；换窗口用「重新绑定」
+    const items: NonNullable<MenuProps["items"]> = [
+      { key: "edit", label: "编辑账号" },
+      { type: "divider" },
+      { key: "bind", label: hasBrowser ? "重新绑定窗口" : "绑定窗口", disabled: busy },
+    ];
     items.push(
       { type: "divider" },
       { key: "login", label: "登录", disabled: busy },
@@ -367,11 +362,7 @@ export function AccountsPage(): ReactElement {
         setEditEmail(row.email);
         break;
       case "bind":
-      case "rebind":
         setBindEmail(row.email);
-        break;
-      case "unbind":
-        void unbind(row);
         break;
       case "login":
         void runAction("single_login", [toSelected(row)]);
@@ -408,7 +399,24 @@ export function AccountsPage(): ReactElement {
       defaultSortOrder: "descend",
       render: (_, r) => r.browser_profile_id || <Typography.Text type="secondary">—</Typography.Text>,
     },
-    { title: "窗口名", key: "windowName", width: 180, ellipsis: true, render: (_, r) => r.window_name || "—" },
+    {
+      title: "窗口名",
+      key: "windowName",
+      width: 180,
+      ellipsis: true,
+      render: (_, r) => (
+        <>
+          {hasSameNameWindows(r) && (
+            <Tooltip title={`有 ${r.same_name_windows} 个同名窗口，右键「重新绑定窗口」可确认或更换`}>
+              <Tag color="orange" style={{ marginInlineEnd: 4 }}>
+                同名×{r.same_name_windows}
+              </Tag>
+            </Tooltip>
+          )}
+          {r.window_name || "—"}
+        </>
+      ),
+    },
     { title: "分组", key: "group", width: 120, ellipsis: true, render: (_, r) => <Tag bordered={false}>{r.group_name}</Tag> },
     { title: "密码", key: "pw", width: 56, align: "center", render: (_, r) => <Flag on={r.has_password} label="密码" /> },
     { title: "辅助邮箱", key: "rec", width: 76, align: "center", render: (_, r) => <Flag on={r.has_recovery_email} label="辅助邮箱" /> },
@@ -504,7 +512,6 @@ export function AccountsPage(): ReactElement {
                 />
               </Space>
             </Tooltip>
-            {actionBtn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
             {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
           </Space>
           <Space wrap>
@@ -537,6 +544,14 @@ export function AccountsPage(): ReactElement {
               onChange={setLogin}
               options={ACCOUNT_LOGIN_FILTERS.map((o) => ({ value: o.value, label: `${o.label} ${loginCounts[o.value]}` }))}
             />
+            {/* 勾着时即使刷新后计数归零也保留开关，否则筛选关不掉 */}
+            {(sameNameCount > 0 || sameNameOnly) && (
+              <Tooltip title="窗口名与邮箱相同的窗口有多个，自动绑定不会替你选，需要确认绑的是哪一个">
+                <Checkbox checked={sameNameOnly} onChange={(e) => setSameNameOnly(e.target.checked)}>
+                  只看同名窗口 ({sameNameCount})
+                </Checkbox>
+              </Tooltip>
+            )}
           </Space>
           <Space wrap>
             {checked.length > 0 && (
@@ -628,7 +643,14 @@ export function AccountsPage(): ReactElement {
       </Dropdown>
 
       <BindWindowModal email={bindEmail} onClose={closeBind} onBound={() => void load()} />
-      <AccountEditModal email={editEmail} onClose={closeEdit} onSaved={() => void load()} />
+      <AccountEditModal
+        email={editEmail}
+        onClose={closeEdit}
+        onSaved={(bind) => {
+          if (bind) showAutoBind(bind);
+          void load();
+        }}
+      />
       <BatchImportModal
         open={importOpen}
         title="批量导入账号"
@@ -636,7 +658,11 @@ export function AccountsPage(): ReactElement {
         columns={ACCOUNT_PREVIEW_COLUMNS}
         parseLine={parseAccountImportLine}
         formatPreviewRow={formatAccountPreviewRow}
-        onImport={(text) => invoke(IPC.invoke.accountsImport, text)}
+        onImport={async (text) => {
+          const r = await invoke(IPC.invoke.accountsImport, text);
+          showAutoBind(r.bind);
+          return r;
+        }}
         onClose={() => setImportOpen(false)}
         onDone={() => void load()}
       />

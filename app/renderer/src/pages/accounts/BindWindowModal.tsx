@@ -1,14 +1,13 @@
 /**
  * 「绑定窗口 / 重新绑定窗口」对话框
  *
- * 设计取舍（用户已批准）：
- *   原做法是列出前 10 个可用窗口，确认后**总是绑定第一个**。
- *   这里提供真正的下拉选择：Select 列出未被其它账号绑定的窗口，选中哪个就绑定哪个。
- * 提示文案沿用原有措辞。
+ * 下拉列出未被其它账号绑定的窗口，选中哪个就绑定哪个；
+ * 与邮箱同名的窗口排最前并标【同名】（同名窗口可能有多个，自动绑定不猜，由这里人工确认）。
  */
 import { useEffect, useState, type ReactElement } from "react";
 import { App, Modal, Select, Spin, Typography } from "antd";
 import type { BindWindowOption } from "../../../../shared/channels/accounts.ts";
+import { defaultBindSelection } from "../../../../shared/logic/account-list.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { logLocal, useTaskState } from "../../stores/task.ts";
 
@@ -50,9 +49,8 @@ export function BindWindowModal({ email, onClose, onBound }: BindWindowModalProp
           return;
         }
         setOptions(r.available);
-        // 默认选中当前绑定的窗口（重新绑定时），否则第一个
-        const current = r.available.find((w) => w.profileId === r.currentBrowserId);
-        setSelected((current ?? r.available[0])?.profileId ?? null);
+        // 默认选中：当前绑定 → 唯一的同名窗口 → 不选（让用户自己挑）
+        setSelected(defaultBindSelection(r.available, r.currentBrowserId));
       },
       (e: unknown) => {
         if (cancelled) return;
@@ -105,7 +103,11 @@ export function BindWindowModal({ email, onClose, onBound }: BindWindowModalProp
           value={selected}
           onChange={(v: string) => setSelected(v)}
           optionFilterProp="label"
-          options={options.map((w) => ({ value: w.profileId, label: `${w.profileId} - ${w.name}` }))}
+          placeholder="请选择窗口（【同名】= 窗口名与邮箱相同）"
+          options={options.map((w) => ({
+            value: w.profileId,
+            label: `${w.sameName ? "【同名】" : ""}${w.profileId} - ${w.name}`,
+          }))}
         />
       )}
     </Modal>

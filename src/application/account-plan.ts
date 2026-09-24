@@ -20,21 +20,16 @@ import {
   buildBatchDeleteConfirmMessage,
   checkTaskConflicts,
   collectMissingBrowserEmails,
-  collectUnboundEmails,
   getAccountAndBrowser,
-  matchAccountsToWindows,
   resolveSelectedAccounts,
   type AccountDict,
   type AccountLookup,
-  type WindowLike,
 } from "./account-manager-service.ts";
 
 export interface PlanEnv {
   repo: AccountLookup;
   /** 是否已有任务在跑 */
   busy: boolean;
-  /** 窗口列表查询参数（ixBrowser 每次取前 500 个窗口）；不可达时抛错 */
-  listWindows(): Promise<WindowLike[]>;
 }
 
 export type TaskSpec =
@@ -46,7 +41,6 @@ export type TaskSpec =
       /** 任务开始时写入的第一条日志 */
       startLog: string;
     }
-  | { kind: "bind"; label: string; matched: Array<[string, string]>; notMatchedCount: number }
   | {
       kind: "delete";
       label: string;
@@ -153,43 +147,6 @@ export async function planAction(action: AccountsAction, rows: readonly Selected
       const missing = collectMissingBrowserEmails(accounts, browserIds);
       if (missing.length) return warning(missingMessage(missing));
       return ok(login(accounts, browserIds), accounts.length);
-    }
-
-    // ---------- 批量绑定窗口 ----------
-    case "batch_bind": {
-      const busy = conflict();
-      if (busy) return busy;
-      const unbound = collectUnboundEmails(pairs);
-      if (unbound.length === 0) return info("请先选择未绑定窗口的账号");
-
-      let windows: WindowLike[];
-      try {
-        windows = await env.listWindows();
-      } catch (error) {
-        const e = error instanceof Error ? error.message : String(error);
-        return { ok: false, level: "error", title: "错误", message: `批量绑定失败:\n${e}` };
-      }
-      if (!windows.length) return warning("未找到可用的浏览器窗口\n请先在主界面创建窗口");
-
-      const { matched, notMatched, alreadyBound } = matchAccountsToWindows(env.repo, unbound, windows);
-      if (matched.length === 0) {
-        let msg = "未找到可用的匹配窗口!\n\n";
-        if (alreadyBound.length) msg += `⚠️ ${alreadyBound.length} 个窗口已被其他账号绑定\n`;
-        if (notMatched.length) msg += `❌ ${notMatched.length} 个账号未找到匹配窗口`;
-        return warning(msg);
-      }
-
-      let msg = `将绑定 ${matched.length} 个账号到对应窗口`;
-      if (alreadyBound.length) msg += `\n\n⚠️ ${alreadyBound.length} 个窗口已被其他账号绑定（已跳过）`;
-      if (notMatched.length) {
-        msg += `\n\n❌ ${notMatched.length} 个账号未找到匹配窗口:\n${notMatched.slice(0, 5).join(", ")}`;
-        if (notMatched.length > 5) msg += `\n...等 ${notMatched.length} 个`;
-      }
-      return ok(
-        { kind: "bind", label: "批量绑定窗口", matched, notMatchedCount: notMatched.length },
-        matched.length,
-        [{ title: "确认", message: `${msg}\n\n是否继续？` }],
-      );
     }
 
     // ---------- 批量删除 ----------

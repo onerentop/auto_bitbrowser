@@ -6,7 +6,7 @@
  */
 import { useEffect, useState, type ReactElement } from "react";
 import { App, Form, Input, Modal, Spin } from "antd";
-import type { AccountDetail } from "../../../../shared/channels/accounts.ts";
+import type { AccountDetail, AutoBindSummary } from "../../../../shared/channels/accounts.ts";
 import { isValidNewAccountEmail } from "../../../../shared/logic/settings-data.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 
@@ -16,8 +16,8 @@ export interface AccountEditModalProps {
   /** null = 关闭；"" = 添加；邮箱 = 编辑该账号 */
   email: string | null;
   onClose: () => void;
-  /** 保存成功后（刷新列表） */
-  onSaved: () => void;
+  /** 保存成功后（刷新列表）；添加时带上自动绑定窗口的结果 */
+  onSaved: (bind?: AutoBindSummary) => void;
 }
 
 export function AccountEditModal(props: AccountEditModalProps): ReactElement {
@@ -67,14 +67,15 @@ export function AccountEditModal(props: AccountEditModalProps): ReactElement {
     }
     setSubmitting(true);
     try {
+      let bind: AutoBindSummary | undefined;
       if (editing) {
         await invoke(IPC.invoke.accountsUpdate, data);
         void message.success("账号已保存");
       } else {
-        await invoke(IPC.invoke.accountsAdd, data);
+        bind = await invoke(IPC.invoke.accountsAdd, data);
         void message.success("账号已添加");
       }
-      props.onSaved();
+      props.onSaved(bind);
       props.onClose();
     } catch (e) {
       void message.error(describeError(e));

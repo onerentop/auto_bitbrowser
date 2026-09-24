@@ -1,9 +1,9 @@
 /**
- * 账号管理页 的后端 handler（账号列表 / 绑定解绑 / 批量任务）
+ * 账号管理页 的后端 handler（账号列表 / 绑定窗口 / 批量任务）
  *
  * 通道一览（定义见 app/shared/channels/accounts.ts）：
- *   list / getDefaults / bindCandidates / bind / unbind / deleteOne  —— 同步查询或单条写库
- *   （账号数据的 get / add / update / import / exportText 在 handlers/account-data.ts）
+ *   list / getDefaults / bindCandidates / bind / deleteOne  —— 同步查询或单条写库
+ *   （账号数据的 get / add / update / import / exportText 在 handlers/account-data.ts，add / import 后自动绑定窗口）
  *   precheck / start                                                   —— 批量操作（start 启动后台任务）
  *
  * 批量操作全部走 ctx.tasks（全局单任务，重复启动抛 TASK_BUSY）；
@@ -21,7 +21,6 @@ import {
   type AccountsListResult,
   type AccountsPrecheckResult,
   type AccountsRunOptions,
-  type AccountsUnbindResult,
   type SelectedRow,
 } from "../../shared/channels/accounts.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
@@ -34,7 +33,6 @@ import {
   createBatchProcessor,
   createIxWindowOps,
   executeAccountWorkerTask,
-  executeBatchBind,
   executeBatchDelete,
   workerFinishedLogLines,
   type LlmParams,
@@ -48,6 +46,7 @@ import {
   type HealthCheckResult,
 } from "../../../src/application/health-check.ts";
 import { buildAccountRows } from "../../../src/application/account-list.ts";
+import { rankBindCandidates } from "../../../src/application/window-binding.ts";
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
 import type { IxBrowserClient } from "../../../src/ixbrowser/client.ts";
 import { BACKOFF_FACTOR, BASE_DELAY, MAX_RETRIES, isRetryableError } from "../../../src/ixbrowser/window.ts";
@@ -223,7 +222,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
   const closeBrowser = deps.closeBrowser ?? windowOps.closeBrowser;
   const deleteBrowser = deps.deleteBrowser ?? windowOps.deleteBrowser;
 
-  const planEnv = (busy: boolean): PlanEnv => ({ repo: repo(), busy, listWindows });
+  const planEnv = (busy: boolean): PlanEnv => ({ repo: repo(), busy });
 
   // ---------- 各类任务的执行体 ----------
 
@@ -249,31 +248,6 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           });
           for (const line of workerFinishedLogLines(result)) api.log(line);
           return result;
-        });
-
-      case "bind":
-        return ctx.tasks.start("batch_bind", spec.label, async (api) => {
-          const total = spec.matched.length;
-          api.log(`开始批量绑定，共 ${total} 个账号...`);
-          api.progress(0, total);
-          const results = executeBatchBind({
-            matchedPairs: spec.matched,
-            shouldStop: api.shouldStop,
-            // 设计取舍：检查写库返回值，false 计为失败（否则写库失败会被静默当作成功）
-            bindAccount: (email, browserId) => repo().bindAccountToBrowser(email, browserId),
-            // 执行时再查一次窗口归属，已被其他账号占用的记失败并跳过
-            ownerOf: (browserId) => {
-              const owner = repo().getAccountByBrowser(browserId);
-              return owner ? String(owner["email"] ?? "") : null;
-            },
-            log: api.log,
-            progress: (i) => api.progress(i, total),
-            item: api.item,
-          });
-          api.log(`批量绑定完成: ${results.success_count}/${results.total}`);
-          if (results.failed_count) api.log(`绑定失败: ${results.failed_count} 个`);
-          if (spec.notMatchedCount) api.log(`未匹配: ${spec.notMatchedCount} 个`);
-          return results;
         });
 
       case "delete":
@@ -400,12 +374,15 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           .filter((acc) => acc.browser_profile_id && acc.email !== e)
           .map((acc) => String(acc.browser_profile_id)),
       );
-      const available = windows
-        .map((w) => ({
-          profileId: w.profile_id === null || w.profile_id === undefined ? "" : String(w.profile_id),
-          name: typeof w.name === "string" && w.name ? w.name : "未命名",
-        }))
-        .filter((w) => w.profileId && !boundByOthers.has(w.profileId));
+      const available = rankBindCandidates(
+        e,
+        windows
+          .map((w) => ({
+            profileId: w.profile_id === null || w.profile_id === undefined ? "" : String(w.profile_id),
+            name: typeof w.name === "string" && w.name ? w.name : "未命名",
+          }))
+          .filter((w) => w.profileId && !boundByOthers.has(w.profileId)),
+      );
       return {
         currentBrowserId: account.browser_profile_id ? String(account.browser_profile_id) : "",
         windowCount: windows.length,
@@ -430,17 +407,6 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       return { email: e, browserId: id, previousBrowserId: previous };
     },
 
-    /** 解绑窗口：把账号的 browser_profile_id 置空 */
-    [ACCOUNTS_INVOKE.accountsUnbind]: (email: unknown): AccountsUnbindResult => {
-      const e = requireEmail(email);
-      rejectIfBusy();
-      const account = repo().getAccountByEmail(e);
-      if (!account) throw invalid(`未找到账号: ${e}`);
-      const browserId = account.browser_profile_id ? String(account.browser_profile_id) : "";
-      if (!browserId) return { email: e, browserId: "" };
-      if (!repo().bindAccountToBrowser(e, "")) throw new Error(`解绑窗口失败: ${e}`);
-      return { email: e, browserId };
-    },
 
     /** 删除单个账号（不动窗口） */
     [ACCOUNTS_INVOKE.accountsDeleteOne]: (email: unknown): boolean => {
