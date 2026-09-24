@@ -28,7 +28,7 @@ export interface HostContext {
   accountRepo(): AccountRepository;
   ix(): IxBrowserClient;
   readonly tasks: TaskRunner;
-  /** 批量任务运行结果历史（本地新增能力，Python 侧没有） */
+  /** 批量任务运行结果历史（本地新增能力） */
   taskHistoryRepo(): TaskHistoryRepository;
   log(message: string): void;
 }
@@ -63,7 +63,7 @@ export function createHostContext(options: HostContextOptions): HostContext {
 
   const db = lazy(() => {
     const handle = open(dbPath);
-    // 对标 Python 各页面加载前的 DBManager.init_db()：建表 + 补列，幂等
+    // 建表 + 补列，幂等
     initDb(handle);
     return handle;
   });

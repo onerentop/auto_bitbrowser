@@ -1,15 +1,13 @@
 /**
- * 并发闸门（Node 重写）
+ * 并发闸门
  *
- * Python 侧 `batch_account_processor.py` 用 `asyncio.Semaphore(n)` + `async with`
- * 控制并发；Node 没有内置等价物，这里实现一个最小的计数信号量。
+ * Node 没有内置的计数信号量，这里实现一个最小的版本，用来控制并发。
  *
- * 语义与 asyncio.Semaphore 一致：
+ * 语义：
  *   - 初始计数为 n，acquire() 在计数为 0 时挂起，release() 唤醒**最早等待**的那个（FIFO）
- *   - 与 Python 一样不可重入，也不做超时
+ *   - 不可重入，也不做超时
  *
- * 另配一个 `gatherSettled()` 对应 Python 的
- * `asyncio.gather(*tasks, return_exceptions=True)`：等全部结束，异常不打断其它任务。
+ * 另配一个 `gatherSettled()`：等全部结束后统一返回每条结果，异常不打断其它任务。
  */
 
 export class Semaphore {
@@ -55,7 +53,7 @@ export class Semaphore {
   }
 
   /**
-   * 对应 Python 的 `async with semaphore:` —— 无论 fn 是否抛错都会释放许可。
+   * 包一层「取许可 → 执行 → 释放」：无论 fn 是否抛错都会释放许可。
    */
   async run<T>(fn: () => Promise<T>): Promise<T> {
     await this.acquire();
@@ -85,7 +83,7 @@ export async function gatherSettled<T>(tasks: Promise<T>[]): Promise<SettledResu
   );
 }
 
-/** 等待指定毫秒数（对应 asyncio.sleep，注意 Python 参数是秒） */
+/** 等待指定毫秒数 */
 export function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }

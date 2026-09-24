@@ -1,7 +1,7 @@
 /**
- * 「配置」标签 —— 对标 gui/setting_interface.py:127-743 的 ConfigTab
+ * 「配置」标签（分组卡片 + 表单，集中读写后端配置）
  *
- * 布局用 antd 重新组织（分组卡片 + 表单），字段、范围、默认值、文案照搬 Python。
+ * 布局用 antd 重新组织（分组卡片 + 表单），字段、范围、默认值与文案沿用原有定义。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import {
@@ -34,7 +34,7 @@ import { normalizeThemeMode, setThemeMode } from "../../stores/theme.ts";
 
 const APP_PASSWORDS_URL = "https://myaccount.google.com/apppasswords";
 
-/** 模型下拉选项（setting_interface.py:198-203, 233-238） */
+/** 模型下拉选项 */
 const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
 const ANTHROPIC_MODELS = [
   "claude-sonnet-4-20250514",
@@ -43,7 +43,7 @@ const ANTHROPIC_MODELS = [
   "claude-3-haiku-20240307",
 ];
 
-/** 主题选项（setting_interface.py:402） */
+/** 主题选项 */
 const THEME_OPTIONS = [
   { value: "auto", label: "跟随系统" },
   { value: "light", label: "浅色" },
@@ -54,7 +54,7 @@ type FormValues = Omit<SettingsSnapshotDto, SettingsNumberField> & Record<Settin
 
 const defaultNumber = (k: SettingsNumberField): number => SETTINGS_NUMBER_RANGES[k][2];
 
-/** 「恢复默认」的表单值（setting_interface.py:672-712），不含 data_dir */
+/** 「恢复默认」的表单值（不含 data_dir） */
 function defaultFormValues(): Omit<FormValues, "data_dir"> {
   return {
     ai_default_provider: "gemini",
@@ -80,7 +80,7 @@ function defaultFormValues(): Omit<FormValues, "data_dir"> {
   };
 }
 
-/** 数值输入：范围照搬各 SpinBox */
+/** 数值输入：范围取自 SETTINGS_NUMBER_RANGES */
 function NumberField(props: { name: SettingsNumberField; label: string }): ReactElement {
   const [min, max] = SETTINGS_NUMBER_RANGES[props.name];
   return (
@@ -113,7 +113,7 @@ export function ConfigTab(): ReactElement {
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostReady = useHostStatus()?.state === "ready";
 
-  /** 对标 _loadConfig（setting_interface.py:555-612） */
+  /** 从后端加载配置 */
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -123,7 +123,7 @@ export function ConfigTab(): ReactElement {
         s.ai_default_provider === "gemini" || s.ai_default_provider === "anthropic" ? s.ai_default_provider : undefined;
       const current = form.getFieldsValue(true) as Partial<FormValues>;
       form.setFieldsValue({
-        // 数值字段按 SETTINGS_NUMBER_RANGES 夹紧：对标 Python QSpinBox.setValue 的静默夹紧。
+        // 数值字段按 SETTINGS_NUMBER_RANGES 静默夹紧：
         // 不夹紧的话，config.json 里任一越界值会让后端校验拒绝整份配置，无法保存。
         ...clampSettingsNumbers(s),
         ai_default_provider: provider ?? current.ai_default_provider ?? "gemini",
@@ -156,7 +156,7 @@ export function ConfigTab(): ReactElement {
     [],
   );
 
-  /** 对标 _saveConfig（setting_interface.py:614-662）：界面层 strip，gmail 密码原样 */
+  /** 保存配置：界面层 strip，gmail 密码原样 */
   const save = async (): Promise<void> => {
     const v = form.getFieldsValue(true) as FormValues;
     const num = (k: SettingsNumberField): number => v[k] ?? defaultNumber(k);
@@ -195,7 +195,7 @@ export function ConfigTab(): ReactElement {
     }
   };
 
-  /** 对标 _resetToDefault（setting_interface.py:664-722）：只重置表单，不写盘，不动 data_dir */
+  /** 恢复默认：只重置表单，不写盘，不动 data_dir */
   const reset = (): void => {
     modal.confirm({
       title: "确认恢复",
@@ -211,7 +211,7 @@ export function ConfigTab(): ReactElement {
     });
   };
 
-  /** 对标 _testProviderConnection / _onTestFinished（setting_interface.py:470-546） */
+  /** 测试 AI 服务商连通性，并提示结果 */
   const testConnection = async (provider: AiProviderName): Promise<void> => {
     const v = form.getFieldsValue(true) as FormValues;
     const input =
@@ -248,7 +248,7 @@ export function ConfigTab(): ReactElement {
     }
   };
 
-  /** 对标 _copyToClipboard（setting_interface.py:548-553） */
+  /** 复制应用专用密码页面链接 */
   const copyLink = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(APP_PASSWORDS_URL);
@@ -261,8 +261,8 @@ export function ConfigTab(): ReactElement {
   };
 
   /**
-   * 对标 _onSelectDataDir（setting_interface.py:729-743）。
-   * 有意偏差：Python 弹文件夹对话框、选中即写入；这里没有对话框通道，改成输入框 +「应用」，同样立即写入。
+   * 应用数据目录。
+   * 有意偏差：原实现弹文件夹对话框、选中即写入；这里没有对话框通道，改成输入框 +「应用」，同样立即写入。
    */
   const applyDataDir = async (): Promise<void> => {
     const dir = dataDirInput.trim();
@@ -422,7 +422,7 @@ export function ConfigTab(): ReactElement {
 
           <Card size="small" title="外观">
             <Form.Item name="theme" label="应用主题">
-              {/* 对标 _onThemeChanged：切换立即生效，点「保存配置」才持久化 */}
+              {/* 切换主题立即生效，点「保存配置」才持久化 */}
               <Select
                 style={{ width: 200 }}
                 options={THEME_OPTIONS}

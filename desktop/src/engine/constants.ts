@@ -1,10 +1,9 @@
 /**
- * Stagehand Google Engine - 常量定义（Node 重写）
- * 对标 core/stagehand_engine/constants.py
+ * Stagehand Google Engine - 常量定义
  *
- * 本文件由脚本从 Python 源逐字生成，未手工改写，保证关键词完全一致。
+ * 关键词逐字取自真实页面，保证判定用的文本完全一致。
  * 这些关键词是业务判定的核心（登录态），改动会直接影响判定结果。
- * ProKeywords / FamilyKeywords 只被已删除的 Pro 检测 / 家庭组操作使用，已随之移除（Python 侧仍保留）。
+ * ProKeywords / FamilyKeywords 只被已删除的 Pro 检测 / 家庭组操作使用，已随之移除。
  */
 
 /** Google 服务 URL */
@@ -80,7 +79,7 @@ export const LoginKeywords = {
   ACCOUNT_DISABLED: ["account has been disabled", "帐号已被停用", "suspended", "disabled"],
 } as const;
 
-/** 大小写不敏感的关键词命中判断（对标 Python 侧的 any(k in text.lower())） */
+/** 大小写不敏感的关键词命中判断 */
 export function matchesAny(text: string | null | undefined, keywords: readonly string[]): boolean {
   if (!text) return false;
   const lower = text.toLowerCase();

@@ -1,7 +1,7 @@
 /**
- * 账号管理页任务完成后的提示框文案 —— 照搬 gui/account_manager_interface.py 各 finished 回调里的 _showInfo：
- *   - 批量绑定完成：_onBatchBindFinished（:1013）
- *   - 批量删除完成：_onBatchDeleteFinished（:1789-1792）
+ * 账号管理页任务完成后的提示框文案（按任务类型区分）：
+ *   - 批量绑定完成
+ *   - 批量删除完成
  * 只在任务成功结束时调用；失败 / 停止由全局任务坞提示。
  */
 import type { TaskFinishedEvent } from "../../../../shared/ipc.ts";

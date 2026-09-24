@@ -1,7 +1,7 @@
 /**
  * 后台任务 store —— 订阅后端推送的任务日志 / 进度 / 结束事件
  *
- * 对标 Python GUI 的 progress(str) / progress_value(int,int) / finished(dict) 三个信号。
+ * 后端推送三类事件：日志文本、进度值、任务结束。
  * 日志只保留最近 LOG_LIMIT 行，防止长任务把内存撑爆。
  *
  * 后端进程重启后任务必然丢失：订阅 hostStatus，进入 ready 时重新拉一次当前任务。
@@ -131,7 +131,7 @@ export function onTaskFinished(fn: (e: TaskFinishedEvent) => void): () => void {
 }
 
 /**
- * 订阅任务条目状态（逐行更新表格，对标 Python AI Worker 的 progress(email, status, message)）。
+ * 订阅任务条目状态（逐行更新表格）。
  * 直接订阅 IPC 事件：条目状态只对发起页面有意义，不进全局 store。返回取消函数。
  */
 export function onTaskItem(fn: (e: TaskItemEvent) => void): () => void {

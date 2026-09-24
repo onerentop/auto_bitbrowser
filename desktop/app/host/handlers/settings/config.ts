@@ -1,5 +1,5 @@
 /**
- * 设置页「配置」标签的 handler —— 对标 gui/setting_interface.py 的 ConfigTab
+ * 设置页「配置」标签的 handler（读取 / 保存 / 测试连接 / 数据目录）
  */
 import { statSync } from "node:fs";
 import { SettingsService } from "../../../../src/application/settings-service.ts";
@@ -35,7 +35,7 @@ const STRING_FIELDS = [
   "data_separator",
 ] as const;
 
-/** 校验保存参数：字符串字段类型 / 长度，数值字段整数且在 SpinBox 范围内，枚举字段取值合法 */
+/** 校验保存参数：字符串字段类型 / 长度，数值字段整数且在 SETTINGS_NUMBER_RANGES 范围内，枚举字段取值合法 */
 export function parseSnapshotArg(value: unknown): SettingsSnapshotDto {
   const o = asRecord(value, "snapshot");
   const strings = {} as Record<(typeof STRING_FIELDS)[number], string>;
@@ -77,7 +77,7 @@ export function createConfigHandlers(ctx: HostContext, deps: ConfigHandlerDeps =
     },
 
     /**
-     * 有意偏差：Python 用文件夹对话框选择（setting_interface.py:729-743），选中即写入。
+     * 有意偏差：原实现用文件夹对话框选择、选中即写入。
      * 主进程是薄壳、暂无对话框通道，界面改为「输入框 + 应用」，这里仍然立即写入；
      * 因为不再由对话框保证目录存在，这里补一道「必须是已存在的目录」校验。
      */
@@ -95,7 +95,7 @@ export function createConfigHandlers(ctx: HostContext, deps: ConfigHandlerDeps =
       return dir;
     },
 
-    /** 对标 ConfigTab._testProviderConnection（setting_interface.py:470-511）+ TestAIConnectionWorker */
+    /** 测试 AI 连通性：空 key 时只提示、不发请求 */
     [SETTINGS_INVOKE.settingsTestAi]: async (input: unknown): Promise<TestAiResultDto> => {
       const o = asRecord(input, "input");
       const provider = asOneOf(o["provider"], "provider", AI_PROVIDERS);
@@ -106,7 +106,7 @@ export function createConfigHandlers(ctx: HostContext, deps: ConfigHandlerDeps =
         field(o, "model"),
       );
       if (!apiKey) {
-        // setting_interface.py:489-499：没有 key 时只提示，不发请求
+        // 没有 key 时只提示，不发请求
         return {
           success: false,
           missingKey: true,

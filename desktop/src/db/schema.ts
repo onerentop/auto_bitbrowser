@@ -1,10 +1,10 @@
 /**
- * 建表与列迁移 —— 对标 services/database.py:33 `DBManager.init_db`
+ * 建表与列迁移
  *
- * SQL 逐字对齐 Python：
+ * SQL 语句：
  *   - 5 张表（accounts / proxies / proxy_window_bindings / account_refresh_tasks / account_refresh_task_items）
- *   - accounts 的 22 个 `ALTER TABLE ADD COLUMN`，列已存在时吞掉错误（Python 捕获 sqlite3.OperationalError）
- * 历史表与辅助邮箱池表不在 init_db 里，由各自仓储的 initTables 负责（与 Python 相同）。
+ *   - accounts 的 22 个 `ALTER TABLE ADD COLUMN`，列已存在时吞掉错误
+ * 历史表与辅助邮箱池表不在这里建，由各自仓储的 initTables 负责。
  */
 import type { Db } from "./connection.ts";
 
@@ -21,7 +21,7 @@ const CREATE_ACCOUNTS = `
                 )
             `;
 
-/** accounts 表的迁移列，顺序与 Python 一致 */
+/** accounts 表的迁移列，顺序不可调整 */
 export const ACCOUNT_MIGRATIONS: readonly string[] = [
   "ALTER TABLE accounts ADD COLUMN sheerid_steps INTEGER DEFAULT 0",
   "ALTER TABLE accounts ADD COLUMN last_failed_step TEXT",
@@ -116,7 +116,7 @@ const CREATE_REFRESH_TASK_ITEMS = `
                 )
             `;
 
-/** 批量任务运行结果（任务级）—— 本地新增能力，Python 侧没有对应表 */
+/** 批量任务运行结果（任务级）—— 本地新增能力 */
 const CREATE_TASK_RUN_HISTORY = `
                 CREATE TABLE IF NOT EXISTS task_run_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,7 +152,7 @@ function isDuplicateColumn(error: unknown): boolean {
 /**
  * 建表 + 迁移，可重复调用（幂等）。
  *
- * 与 Python 的一处差异：Python 吞掉**任何** OperationalError，这里只吞「列已存在」，
+ * 有意差异：只吞「列已存在」的错误，
  * 其它错误（库只读、磁盘满）照常抛出——否则会以缺列状态继续跑，后面的 SQL 才报错，难以定位。
  */
 export function initDb(db: Db): void {

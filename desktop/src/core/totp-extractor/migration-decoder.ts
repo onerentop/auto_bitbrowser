@@ -1,19 +1,18 @@
 /**
  * Google Authenticator Migration Payload 解码器
  *
- * 逐字移植 core/totp_extractor/migration_decoder.py:21-275：
  * 手写 varint / length-delimited 解析、字段编号、枚举映射、Base32 编码 secret、
- * 错误处理与返回结构（字段名保留 Python 的 snake_case：otp_type）。
+ * 错误处理与返回结构（字段名沿用 snake_case：otp_type）。
  *
- * 注意保留的 Python 行为（均有对拍夹具覆盖）：
+ * 注意保留的既有行为（均有对拍夹具覆盖）：
  *   - varint 被截断时不报错，按已读到的部分返回（:76 的 while 以 offset < len 结束）
  *   - length-delimited 长度越界时按切片截断（:94）
  *   - wire type 3/4（group）及 6/7 不前进 offset，下一轮把后续字节当作 tag 继续读
  *   - data 参数先经 parse_qs（'+' 变空格）再 unquote 一次，未编码的 '+' 会被 b64decode 丢弃
  */
-import { b32EncodeNoPad, decodeUtf8Replace, pyB64Decode, pyParseQs, pyUnquote, pyUrlSplit } from "./py-compat.ts";
+import { b32EncodeNoPad, b64Decode, decodeUtf8Replace, parseQs, unquote, urlSplit } from "./compat.ts";
 
-/** OTP 账号信息（migration_decoder.py:21-30） */
+/** OTP 账号信息 */
 export interface OTPAccount {
   /** Base32 编码的密钥 */
   secret: string;
@@ -60,7 +59,7 @@ export const WIRE_TYPE_32BIT = 5;
 
 /**
  * 读取 Protobuf varint（:67-83），返回 [value, newOffset]。
- * Python 是任意精度整数；这里用乘法累加，2^53 以内精确（计数器 / 枚举 / 长度都远小于此）。
+ * 用乘法累加，2^53 以内精确（计数器 / 枚举 / 长度都远小于此）。
  */
 export function readVarint(data: Uint8Array, offset: number): [number, number] {
   let result = 0;
@@ -159,15 +158,15 @@ export function parseOtpParameters(data: Uint8Array): OTPAccount {
  */
 export function decodeMigrationPayload(dataBase64: string): OTPAccount[] {
   // 处理 URL 编码
-  let s = pyUnquote(dataBase64);
+  let s = unquote(dataBase64);
 
-  // 添加 Base64 padding（按含非法字符在内的原始长度计算，与 Python 一致）
+  // 添加 Base64 padding（按含非法字符在内的原始长度计算）
   const padding = 4 - (s.length % 4);
   if (padding !== 4) s += "=".repeat(padding);
 
   let data: Uint8Array;
   try {
-    data = pyB64Decode(s);
+    data = b64Decode(s);
   } catch (e) {
     throw new Error(`无效的 Base64 数据: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -187,7 +186,6 @@ export function decodeMigrationPayload(dataBase64: string): OTPAccount[] {
         try {
           accounts.push(parseOtpParameters(content));
         } catch (e) {
-          // Python: print(f"[Warning] 解析 OTP 参数失败: {e}")
           console.warn(`[Warning] 解析 OTP 参数失败: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
@@ -204,11 +202,11 @@ export function decodeMigrationPayload(dataBase64: string): OTPAccount[] {
 
 /** 解析 otpauth-migration:// URI（parse_otpauth_migration_uri，:247-275）；格式无效抛错 */
 export function parseOtpauthMigrationUri(uri: string): OTPAccount[] {
-  const parsed = pyUrlSplit(uri);
+  const parsed = urlSplit(uri);
   if (parsed.scheme !== "otpauth-migration") {
     throw new Error(`无效的 URI scheme: ${parsed.scheme}，期望 otpauth-migration`);
   }
-  const params = pyParseQs(parsed.query);
+  const params = parseQs(parsed.query);
   const data = params.get("data");
   if (!data) throw new Error("URI 中缺少 data 参数");
   return decodeMigrationPayload(data[0] as string);

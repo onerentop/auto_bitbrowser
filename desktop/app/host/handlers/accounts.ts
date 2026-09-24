@@ -1,5 +1,5 @@
 /**
- * 账号管理页 的后端 handler —— 对标 gui/account_manager_interface.py（AccountManagerInterface）
+ * 账号管理页 的后端 handler（账号列表 / 绑定解绑 / 批量任务）
  *
  * 通道一览（定义见 app/shared/channels/accounts.ts）：
  *   list / getDefaults / bindCandidates / bind / unbind / deleteOne  —— 同步查询或单条写库
@@ -44,10 +44,10 @@ import type { ConfigManager } from "../../../src/core/config-manager.ts";
 import { autoHealthCheck, type HealthCheckResult } from "../../../src/automation/auto-health-check.ts";
 import { executeHealthCheck, healthCheckSummaryLine } from "../../../src/application/health-check.ts";
 
-/** Python 的 get_profile_list(page=1, limit=500)（:377 / :899 / :1548） */
+/** 窗口列表查询参数（ixBrowser 每次取前 500 个窗口） */
 export const WINDOW_LIST_QUERY = { page: 1, limit: 500 } as const;
 
-/** 并发数范围（:297 SpinBox.setRange(1, 10)） */
+/** 并发数范围（1-10） */
 export const CONCURRENCY_MIN = 1;
 export const CONCURRENCY_MAX = 10;
 
@@ -55,13 +55,13 @@ export const CONCURRENCY_MAX = 10;
 export const MAX_ROWS = 100_000;
 
 export interface AccountsHandlerDeps {
-  /** 对标 AutomationEngineAdapter.create_batch_processor */
+  /** 批处理器工厂 */
   createProcessor?: (options: { concurrency: number; callback: (msg: string) => void }) => WorkerProcessor;
-  /** 对标 services.ix_api.closeBrowser */
+  /** 关闭窗口 */
   closeBrowser?: (browserId: string) => Promise<unknown>;
-  /** 对标 services.ix_api.deleteBrowser */
+  /** 删除窗口 */
   deleteBrowser?: (browserId: string) => Promise<{ success: boolean }>;
-  /** 对标 get_profile_list(page=1, limit=500)，失败抛错 */
+  /** 取窗口列表（每次取前 500 个），失败抛错 */
   listWindows?: () => Promise<WindowLike[]>;
   /**
    * 账号健康巡检的单账号判定（本地新增）。默认走 autoHealthCheck（真机连窗口只读判定），
@@ -127,8 +127,8 @@ function requireBrowserId(value: unknown): string {
 // ==================== 配置读取 ====================
 
 /**
- * LLM 参数 —— 照搬 core/stagehand_engine/config.py:80-117 的 get_config_from_manager：
- *   provider = get_ai_default_provider()；无 provider 或无 api_key → 全部 None
+ * LLM 参数 —— 取自配置中的默认 provider：
+ *   provider = getAiDefaultProvider()；无 provider 或 apiKey → 全部 null
  */
 export function readLlmParams(config: Pick<ConfigManager, "getAiDefaultProvider" | "getAiProviderApiKey" | "getAiProviderModel">): LlmParams {
   const none: LlmParams = { apiKey: null, model: null, provider: null };
@@ -153,7 +153,7 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 对标 create_batch_processor(concurrency)；必须注入 db，否则批处理器会跳过写库（导出供单测校验） */
+/** 默认批处理器工厂；必须注入 db，否则批处理器会跳过写库（导出供单测校验） */
 export function createDefaultProcessor(
   ctx: HostContext,
   options: { concurrency: number; callback: (msg: string) => void },
@@ -220,7 +220,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           const results = executeBatchBind({
             matchedPairs: spec.matched,
             shouldStop: api.shouldStop,
-            // 有意偏差：检查写库返回值，false 计为失败（Python 不检查 bind_account_to_browser 的返回值）
+            // 设计取舍：检查写库返回值，false 计为失败（否则写库失败会被静默当作成功）
             bindAccount: (email, browserId) => repo().bindAccountToBrowser(email, browserId),
             // 执行时再查一次窗口归属，已被其他账号占用的记失败并跳过
             ownerOf: (browserId) => {
@@ -231,7 +231,6 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
             progress: (i) => api.progress(i, total),
             item: api.item,
           });
-          // 对标 _onBatchBindFinished（:997-1014）
           api.log(`批量绑定完成: ${results.success_count}/${results.total}`);
           if (results.failed_count) api.log(`绑定失败: ${results.failed_count} 个`);
           if (spec.notMatchedCount) api.log(`未匹配: ${spec.notMatchedCount} 个`);
@@ -266,7 +265,6 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           results.total += spec.staleEmails.length;
           results.failed_count += spec.staleEmails.length;
           for (const email of spec.staleEmails) results.failed_list.push({ email, error: "数据已变化，请刷新后重试" });
-          // 对标 _onBatchDeleteFinished（:1786）
           api.log(`批量删除完成: 删除账号 ${results.deleted_accounts}/${results.total}, 失败 ${results.failed_count}`);
           if (spec.withWindows) api.log(`已删除 ${results.deleted_windows} 个窗口`);
           return results;
@@ -299,7 +297,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
   };
 
   const rejectIfBusy = (): void => {
-    // 单条写操作与批量任务互斥（有意偏差：Python 的右键绑定 / 解绑 / 删除不检查运行中的任务）
+    // 单条写操作与批量任务互斥，任务运行中拒绝
     if (ctx.tasks.busy) throw new CodedError(ERROR_CODES.TASK_BUSY, "已有任务在执行中，请等待完成");
   };
 
@@ -307,7 +305,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
     [ACCOUNTS_INVOKE.accountsList]: async (): Promise<AccountsListResult> => {
       const accounts = repo().getAllAccounts();
 
-      // 窗口名称映射（:374-385）：ixBrowser 不可达时名称留空，不报错
+      // 窗口名称映射：ixBrowser 不可达时名称留空，不报错
       const nameMap = new Map<string, string>();
       let windowError: string | null = null;
       try {
@@ -340,7 +338,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       try {
         n = ctx.config().getLoginConcurrency();
       } catch {
-        // 配置读取失败时用 Python 的默认值 3
+        // 配置读取失败时用默认值 3
       }
       return { loginConcurrency: clampConcurrency(n) };
     },
@@ -369,7 +367,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       const account = repo().getAccountByEmail(e);
       if (!account) throw invalid(`未找到账号: ${e}`);
       const windows = await listWindows();
-      // 对标 :1556-1566：排除已被**其它**账号绑定的窗口
+      // 排除已被**其它**账号绑定的窗口
       const boundByOthers = new Set(
         repo()
           .getAllAccounts()
@@ -391,8 +389,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
 
     /**
      * 绑定到用户在下拉框中选中的窗口。
-     * 与 Python 的差异（用户已批准）：Python 的 _bindBrowser（:1585-1589）确认后总是绑定
-     * 「第一个可用窗口」；这里由界面提供真正的下拉选择，后端再校验该窗口未被其它账号绑定。
+     * 窗口由界面下拉框显式选择，后端再校验该窗口未被其它账号绑定。
      */
     [ACCOUNTS_INVOKE.accountsBind]: (email: unknown, browserId: unknown): AccountsBindResult => {
       const e = requireEmail(email);
@@ -407,7 +404,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       return { email: e, browserId: id, previousBrowserId: previous };
     },
 
-    /** 对标 _unbindBrowser（:1600-1627）：bind_account_to_browser(email, "") */
+    /** 解绑窗口：把账号的 browser_profile_id 置空 */
     [ACCOUNTS_INVOKE.accountsUnbind]: (email: unknown): AccountsUnbindResult => {
       const e = requireEmail(email);
       rejectIfBusy();
@@ -419,7 +416,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       return { email: e, browserId };
     },
 
-    /** 对标 _deleteSingleAccount（:1631-1647） */
+    /** 删除单个账号（不动窗口） */
     [ACCOUNTS_INVOKE.accountsDeleteOne]: (email: unknown): boolean => {
       const e = requireEmail(email);
       rejectIfBusy();

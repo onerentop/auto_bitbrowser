@@ -1,7 +1,7 @@
 /**
  * Stagehand Node SDK 垂直切片验证（只读）
  *
- * 目的：验证 Node 版 Stagehand 能否复现 Python 版 3.5.0 的能力：
+ * 目的：验证 Node 版 Stagehand 能否复现切片所需的能力：
  *   CDP 接管 ixBrowser 窗口 → navigate → observe → extract
  *
  * 安全约束：绝不调用 act()，不点击任何按钮，不登出任何设备。

@@ -1,5 +1,5 @@
 /**
- * TOTP 密钥导入页 的后端 handler —— 对标 gui/import_totp_interface.py
+ * TOTP 密钥导入页的后端 handler
  *
  * 纯逻辑在 src/application/totp-import.ts；这里只做参数校验、依赖装配与后台任务启动。
  * 导入可能耗时（逐个更新窗口备注），走 ctx.tasks 后台任务，避免触发主进程 30s 超时。
@@ -90,7 +90,7 @@ function requireImportItems(value: unknown): TotpImportItem[] {
       throw invalid(`items[${i}].password 必须是字符串`);
     }
     const item: TotpImportItem = { email, secret, kind };
-    // 密码只对文本导入生效（:130），二维码条目带的密码直接丢弃
+    // 密码只对文本导入生效，二维码条目带的密码直接丢弃
     if (kind === "text" && typeof password === "string" && password) item.password = password;
     return item;
   });
@@ -106,12 +106,12 @@ export interface TotpHandlerDeps {
 
 export function createTotpHandlers(ctx: HostContext, deps: TotpHandlerDeps = {}): HostHandlerTable {
   const repo = () => ctx.accountRepo();
-  // 对标 :86-102 的分页 get_profile_list(page, limit=100)；getBrowserList 失败时返回已取到的部分
+  // 分页取窗口列表（每次 100 个）；getBrowserList 失败时返回已取到的部分
   const listWindows =
     deps.listWindows ?? (() => getBrowserList({ client: ctx.ix(), log: ctx.log }, { fetchAll: true, limit: 100 }));
   // 只写窗口的 tfa_secret —— **不写 note**（备注是用户自己的笔记区，自动化写入会覆盖他手写的内容）。
   // 真机验证（2026-09-24）：只传 note 会让窗口的 tfa_secret 一直为空 → 这里必须写密钥。
-  // 有意偏差：Python 的 update_profile 对网络类错误有重试，客户端 updateProfile 没有，失败即计为警告。
+  // 有意偏差：客户端 updateProfile 对网络类错误不重试，失败即计为警告。
   const updateProfile =
     deps.updateProfile ??
     ((id: number, fields: { tfa_secret: string }) => ctx.ix().updateProfile(id, fields));

@@ -8,9 +8,8 @@
  * ipc.ts 会把这里的通道并入总表；类型检查保证三处一致。
  * 本文件是纯 TS，不依赖 electron。
  *
- * 对标 gui/account_manager_interface.py（AccountManagerInterface）。
  * 批量操作一律走「预检 → 确认 → 启动后台任务」两段式：
- *   - precheck：后端按 Python 的前置校验 / 候选筛选 / 确认文案生成提示，不启动任何东西
+ *   - precheck：后端按同样的前置校验 / 候选筛选 / 确认文案生成提示，不启动任何东西
  *   - start：   后端重新做一遍同样的筛选（防止两次调用之间数据变化），然后启动后台任务
  */
 import type { TaskInfo } from "../ipc.ts";
@@ -19,21 +18,21 @@ import type { TaskInfo } from "../ipc.ts";
 export const DELETE_ACCOUNTS_ONLY_LABEL = "删除选中";
 
 export const ACCOUNTS_INVOKE = {
-  /** 账号列表 + 窗口名称映射（对标 _loadData，:367） */
+ /** 账号列表 + 窗口名称映射（。:367） */
   accountsList: "abb/accounts/list",
-  /** 页面默认选项（并发数，对标 :298 的 get_login_concurrency） */
+ /** 页面默认选项（并发数，:298 的 get_login_concurrency） */
   accountsGetDefaults: "abb/accounts/getDefaults",
   /** 批量操作预检：返回拒绝原因或需要依次确认的文案 */
   accountsPrecheck: "abb/accounts/precheck",
   /** 启动批量操作（后台任务） */
   accountsStart: "abb/accounts/start",
-  /** 为「绑定 / 重新绑定窗口」列出可选窗口（对标 _bindBrowser，:1543） */
+ /** 为「绑定 / 重新绑定窗口」列出可选窗口（。:1543） */
   accountsBindCandidates: "abb/accounts/bindCandidates",
   /** 绑定账号到指定窗口（有任务在跑时抛 TASK_BUSY） */
   accountsBind: "abb/accounts/bind",
-  /** 解绑窗口（对标 _unbindBrowser，:1600；有任务在跑时抛 TASK_BUSY） */
+ /** 解绑窗口（。:1600；有任务在跑时抛 TASK_BUSY） */
   accountsUnbind: "abb/accounts/unbind",
-  /** 删除单个账号，不删窗口（对标 _deleteSingleAccount，:1631；有任务在跑时抛 TASK_BUSY） */
+ /** 删除单个账号，不删窗口（。:1631；有任务在跑时抛 TASK_BUSY） */
   accountsDeleteOne: "abb/accounts/deleteOne",
 } as const;
 
@@ -53,7 +52,7 @@ export interface AccountListRow {
 
 export interface AccountsListResult {
   rows: AccountListRow[];
-  /** 取窗口列表失败的原因（对标 :385 的「获取窗口列表失败」日志）；成功为 null */
+ /** 取窗口列表失败的原因（:385 的「获取窗口列表失败」日志）；成功为 null */
   windowError: string | null;
 }
 
@@ -67,7 +66,7 @@ export interface AccountsDefaults {
  * 已按用户要求删除：OAuth（批量 / 单个 / 一键登录+OAuth）、检测 Pro、刷新家庭组、开启共享、检测 403、批量解锁 403
  */
 export type AccountsAction =
-  /** 行内 / 右键「登录」（对标 _singleLogin，:801） */
+ /** 行内 / 右键「登录」（。:801） */
   | "single_login"
   | "login"
   | "batch_bind"
@@ -75,10 +74,10 @@ export type AccountsAction =
   | "delete"
   /** 删除选中 + 窗口 */
   | "delete_with_windows"
-  /** 右键「删除账号和窗口」（对标 _deleteAccountWithWindow，:1649） */
+ /** 右键「删除账号和窗口」（。:1649） */
   | "delete_one_with_window"
   /**
-   * 账号健康巡检（本地新增，Python 侧没有）：只读访问 myaccount.google.com 判断
+   * 账号健康巡检（本地新增）：只读访问 myaccount.google.com 判断
    * 每个账号在窗口里的会话状态，不提交密码或验证码，因此不产生新登录会话。
    */
   | "health_check";
@@ -97,7 +96,7 @@ export const ACCOUNTS_ACTIONS: readonly AccountsAction[] = [
 export const HEALTH_CHECK_TASK_TYPE = "health_check";
 
 
-/** 勾选的一行：邮箱 + 表格里显示的窗口 ID（对标 _getSelectedRows 的 (email, browser_id)） */
+/** 勾选的一行：邮箱 + 表格里显示的窗口 ID（ 的 (email, browser_id)） */
 export interface SelectedRow {
   email: string;
   /** 未绑定为空串（"-" 也视为未绑定） */
@@ -115,14 +114,14 @@ export interface ConfirmStep {
   message: string;
 }
 
-/** 预检结果：拒绝（对标 InfoBar 提示）或一串待确认的对话框（对标 MessageBox） */
+/** 预检结果：拒绝（ 提示）或一串待确认的对话框 */
 export type AccountsPrecheckResult =
   | { ok: false; level: "info" | "warning" | "error"; title: string; message: string }
   | {
       ok: true;
       /** 依次弹出的确认框；为空表示无需确认直接启动 */
       confirms: ConfirmStep[];
-      /** 预检阶段应写入日志的行（Python 在界面日志区打印的内容） */
+      /** 预检阶段应写入日志的行 */
       logs: string[];
       /** 将要处理的账号数 */
       total: number;

@@ -1,8 +1,8 @@
 /**
- * TOTP 密钥导入页 —— 对标 gui/import_totp_interface.py ImportTOTPInterface
+ * TOTP 密钥导入页
  *
  * 布局：导入方式切换 → 说明卡片 → 导入区（QR / 文本）→ 全选栏 → 结果表格 → 底部状态与导入按钮。
- * Python 的日志区（:270-286）由底部全局任务坞替代，界面侧日志用 logLocal。
+ * 日志区由底部全局任务坞替代，界面侧日志用 logLocal。
  * 页面切走不卸载，解析结果与勾选状态会保留。
  *
  * 流程：图片 → 渲染层 jsQR 识别 → abb/totp/parseUris → abb/totp/match → 勾选 → abb/totp/import（后台任务）
@@ -40,7 +40,7 @@ import { ResultTable, type ResultRow } from "./totp/ResultTable.tsx";
 
 type Mode = "qr" | "text";
 
-/** 说明卡片文案（:343-373） */
+/** 说明卡片文案 */
 const QR_HELP = [
   "1. 打开手机 Google Authenticator → 右上角菜单 → 导出账号",
   "2. 对生成的 QR 码截图并保存到电脑",
@@ -51,7 +51,7 @@ const TEXT_HELP = [
   "示例：example@gmail.com----password123----ABCDEFGHIJKLMNOP",
   "注意：使用四个短横线 ---- 作为分隔符",
 ];
-/** 文本输入框占位（:430-436） */
+/** 文本输入框占位 */
 const TEXT_PLACEHOLDER =
   "在此粘贴账号信息，每行一条，格式：\n" +
   "邮箱----密码----密钥\n\n" +
@@ -72,7 +72,7 @@ function HelpCard({ title, lines }: { title: string; lines: string[] }): ReactEl
   );
 }
 
-/** 表格重建后的默认勾选：只勾「可导入」（:773） */
+/** 表格重建后的默认勾选：只勾「可导入」 */
 function defaultSelection(matches: readonly TotpMatchRow[]): Set<number> {
   const out = new Set<number>();
   matches.forEach((m, i) => {
@@ -106,7 +106,7 @@ export function TotpImportPage(): ReactElement {
     [notification],
   );
 
-  // 依赖检查（:527-548）：jsQR 随应用打包，始终就绪
+  // 依赖检查：jsQR 随应用打包，始终就绪
   const depChecked = useRef(false);
   useEffect(() => {
     if (depChecked.current) return;
@@ -114,7 +114,7 @@ export function TotpImportPage(): ReactElement {
     logLocal("QR 扫描依赖已就绪");
   }, []);
 
-  // ---------- 匹配（对标 _matchWithDatabase :708-751） ----------
+  // ---------- 匹配 ----------
 
   /** 最新的提取结果（任务结束回调里刷新匹配要用） */
   const entriesRef = useRef<TotpEntry[]>([]);
@@ -135,7 +135,7 @@ export function TotpImportPage(): ReactElement {
         entriesRef.current = list;
         setEntries(list);
         setMatches(r.rows);
-        // 表格重建，勾选恢复默认（:773）
+        // 表格重建，勾选恢复默认
         setSelected(defaultSelection(r.rows));
       } catch (e) {
         if (seq !== matchSeq.current) return;
@@ -146,12 +146,12 @@ export function TotpImportPage(): ReactElement {
     [notify],
   );
 
-  /** 对标 _refreshMatch（:832-835） */
+  /** 刷新匹配结果 */
   const refreshMatch = useCallback((): void => {
     if (entriesRef.current.length > 0) void matchWithDatabase(entriesRef.current);
   }, [matchWithDatabase]);
 
-  // 任务结束：弹完成汇总并刷新匹配（:928-977）
+  // 任务结束：弹完成汇总并刷新匹配
   useEffect(
     () =>
       onTaskFinished((e) => {
@@ -167,21 +167,21 @@ export function TotpImportPage(): ReactElement {
     [notify, refreshMatch],
   );
 
-  // ---------- 模式切换（:471-484） ----------
+  // ---------- 模式切换 ----------
 
   const changeMode = (next: Mode): void => {
     setMode(next);
     setStatusText(next === "qr" ? "就绪 - 请选择 QR 码截图" : "就绪 - 请粘贴账号文本");
   };
 
-  // ---------- QR 码导入（:628-704） ----------
+  // ---------- QR 码导入 ----------
 
   const scanning = scan !== null;
   /** 识别进行中（用 ref 防重入，避免依赖 state 的闭包过期） */
   const scanningRef = useRef(false);
 
   /**
-   * 逐张识别并解析。有意偏差：Python 在 UI 线程同步识别（界面会卡住），
+   * 逐张识别并解析。
    * 这里在渲染层异步逐张识别，识别期间界面可操作。
    */
   const processImages = useCallback(
@@ -234,7 +234,7 @@ export function TotpImportPage(): ReactElement {
     void processImages(files);
   };
 
-  // 拖放：仅在 QR 模式下接受（:1026-1055）
+  // 拖放：仅在 QR 模式下接受
   const hasFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer.types).includes("Files");
   const onDragOver = (e: DragEvent<HTMLDivElement>): void => {
     if (mode !== "qr" || !hasFiles(e)) return;
@@ -254,7 +254,7 @@ export function TotpImportPage(): ReactElement {
     if (files.length > 0) void processImages(files);
   };
 
-  // ---------- 文本导入（:552-624） ----------
+  // ---------- 文本导入 ----------
 
   const [parsing, setParsing] = useState(false);
   const parseText = async (): Promise<void> => {
@@ -285,7 +285,7 @@ export function TotpImportPage(): ReactElement {
     logLocal("已清空文本输入");
   };
 
-  // ---------- 表格与勾选（:753-863） ----------
+  // ---------- 表格与勾选 ----------
 
   const visibleRows = useMemo<ResultRow[]>(
     () =>
@@ -300,7 +300,7 @@ export function TotpImportPage(): ReactElement {
 
   const changeOnlyMatched = (checked: boolean): void => {
     setOnlyMatched(checked);
-    // Python 切换过滤会重建表格，勾选恢复默认（:828-830 → _updateTable）
+    // 切换过滤会重建表格，勾选恢复默认
     setSelected(defaultSelection(matches));
   };
 
@@ -309,7 +309,7 @@ export function TotpImportPage(): ReactElement {
   const allChecked = selectableRows.length > 0 && selectableRows.every((r) => selected.has(r.index));
   const someChecked = !allChecked && selectableRows.some((r) => selected.has(r.index));
 
-  /** 全选只作用于可勾选的行（:846-855 checkbox.isEnabled()） */
+  /** 全选只作用于可勾选的行 */
   const toggleAll = (checked: boolean): void => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -321,12 +321,12 @@ export function TotpImportPage(): ReactElement {
     });
   };
 
-  // ---------- 导入（:867-922） ----------
+  // ---------- 导入 ----------
 
   const importPending = useRef(false);
   const startImport = async (): Promise<void> => {
     if (importPending.current) return;
-    // 只取可见且匹配到数据库账号的勾选行（:873-883）
+    // 只取可见且匹配到数据库账号的勾选行
     const chosen = checkedRows.filter((r) => r.match.matchedEmail !== null && r.entry.email);
     if (chosen.length === 0) {
       notify("info", "提示", "请选择要导入的账号");
@@ -384,7 +384,7 @@ export function TotpImportPage(): ReactElement {
         导入 TOTP 密钥
       </Typography.Title>
 
-      {/* 导入方式切换（:312-334） */}
+      {/* 导入方式切换 */}
       <Card size="small">
         <Space style={{ width: "100%", justifyContent: "space-between" }}>
           <Space>
@@ -470,7 +470,7 @@ export function TotpImportPage(): ReactElement {
         </Card>
       )}
 
-      {/* 全选栏（:241-261） */}
+      {/* 全选栏 */}
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space size={12}>
           <Checkbox
@@ -491,7 +491,7 @@ export function TotpImportPage(): ReactElement {
 
       <ResultTable rows={visibleRows} selected={selected} onSelectedChange={setSelected} />
 
-      {/* 底部状态和导入按钮（:288-310） */}
+      {/* 底部状态和导入按钮 */}
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space size={12}>
           <Typography.Text type="secondary">{statusText}</Typography.Text>

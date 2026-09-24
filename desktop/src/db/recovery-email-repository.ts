@@ -1,13 +1,12 @@
 /**
- * 辅助邮箱池仓储（Node 重写）
- * 对标 services/repositories/recovery_email_repository.py
+ * 辅助邮箱池仓储
  *
  * 管理 3 张表：
  *   recovery_email_pool        邮箱池（email 唯一）
  *   recovery_email_daily_usage 每日用量（recovery_email + usage_date 联合唯一）
  *   account_recovery_binding   账号与辅助邮箱的绑定关系（email 主键）
  *
- * 异常处理与 Python 一致：读失败返回空集合，写失败返回 false。
+ * 异常处理：读失败返回空集合，写失败返回 false。
  */
 import type { Db } from "./connection.ts";
 
@@ -35,7 +34,7 @@ export class RecoveryEmailRepository {
     this.db = db;
   }
 
-  /** 一次性建 3 张表。对标 init_recovery_email_pool_tables()，不吞异常。 */
+ /** 一次性建 3 张表。，不吞异常。 */
   initTables(): void {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS recovery_email_pool (
@@ -68,7 +67,7 @@ export class RecoveryEmailRepository {
 
   // ---------- recovery_email_pool ----------
 
-  /** 对标 get_recovery_email_pool()，按 created_at 倒序 */
+  /** 按 created_at 倒序 */
   getPool(): RecoveryEmailPoolRow[] {
     try {
       return this.db
@@ -80,7 +79,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 add_recovery_email_to_pool()。冲突时只更新 imap_password 与 note */
+ /** 。冲突时只更新 imap_password 与 note */
   addToPool(email: string, imapPassword: string, note: string): boolean {
     try {
       this.db
@@ -99,7 +98,6 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 remove_recovery_email_from_pool() */
   removeFromPool(email: string): boolean {
     try {
       this.db.prepare("DELETE FROM recovery_email_pool WHERE email = ?").run(email);
@@ -110,7 +108,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 update_recovery_email_enabled()。注意库里存的是 INTEGER */
+ /** 。注意库里存的是 INTEGER */
   updateEnabled(email: string, isEnabled: boolean | number): boolean {
     try {
       const flag = typeof isEnabled === "boolean" ? (isEnabled ? 1 : 0) : isEnabled;
@@ -126,7 +124,7 @@ export class RecoveryEmailRepository {
 
   // ---------- recovery_email_daily_usage ----------
 
-  /** 对标 get_recovery_email_daily_usage()，返回 { recovery_email: bind_count } */
+  /** 返回 { recovery_email: bind_count } */
   getDailyUsage(usageDate: string): Record<string, number> {
     try {
       const rows = this.db
@@ -143,7 +141,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 increment_recovery_email_usage()：首次插入 1，冲突则 bind_count + 1 */
+ /** 首次插入 1，冲突则 bind_count + 1 */
   incrementUsage(recoveryEmail: string, usageDate: string): boolean {
     try {
       this.db
@@ -161,7 +159,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 reset_recovery_email_daily_usage()，返回删除行数 */
+  /** 返回删除行数 */
   resetDailyUsage(usageDate: string): number {
     try {
       const info = this.db
@@ -174,7 +172,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 set_recovery_email_usage_full()：把用量直接顶到上限，标记今日不可用 */
+ /** 把用量直接顶到上限，标记今日不可用 */
   setUsageFull(recoveryEmail: string, usageDate: string, limit: number): boolean {
     try {
       this.db
@@ -194,7 +192,6 @@ export class RecoveryEmailRepository {
 
   // ---------- account_recovery_binding ----------
 
-  /** 对标 get_account_recovery_binding() */
   getBinding(email: string): AccountRecoveryBindingRow | null {
     try {
       const row = this.db
@@ -207,7 +204,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 set_account_recovery_binding()，bound_at 强制 CURRENT_TIMESTAMP */
+  /** bound_at 强制 CURRENT_TIMESTAMP */
   setBinding(email: string, boundRecoveryEmail: string | null, status: string): boolean {
     try {
       this.db
@@ -227,7 +224,7 @@ export class RecoveryEmailRepository {
     }
   }
 
-  /** 对标 get_all_account_recovery_bindings()，返回 { email: row } */
+  /** 返回 { email: row } */
   getAllBindings(): Record<string, AccountRecoveryBindingRow> {
     try {
       const rows = this.db

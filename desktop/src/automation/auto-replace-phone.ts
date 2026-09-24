@@ -1,12 +1,11 @@
 /**
  * 替换恢复手机号（Playwright 选择器直连版）
- * 对标 automation/auto_replace_phone.py
  *
- * 结构与 auto_replace_email 几乎一致，两处关键差异：
+ * 结构与 auto-replace-email.ts 几乎一致，两处关键差异：
  *   1. 输入的是手机号（tel 类选择器）而非邮箱
  *   2. **不自动取码**——检测到短信验证码输入框后等 15 秒，
- *      让用户手动输入，然后点确认。这是 Python 的既有行为，
- *      因为短信平台与页面校验的时序不稳定，自动填码容易失败。
+ *      让用户手动输入，然后点确认。因为短信平台与页面校验的时序不稳定，
+ *      自动填码容易失败。
  */
 import type { CompatLocator, CompatPage } from "../engine/playwright-compat.ts";
 import { generateTotp } from "../engine/totp.ts";
@@ -391,7 +390,7 @@ export const MANUAL_CODE_WAIT_MS = 15000;
 /**
  * 添加新恢复手机号。
  * 与 email 版的关键差异：检测到验证码框后**等 15 秒让用户手动输入**，
- * 不自动取码（Python 的既有行为）。
+ * 不自动取码。
  */
 export async function addNewPhone(
   page: CompatPage,
@@ -493,7 +492,7 @@ export async function addNewPhone(
   }
 }
 
-/** 主流程。对标 auto_replace_phone() */
+/** 主流程。 */
 export async function autoReplacePhone(
   page: CompatPage,
   phoneNumber: string,

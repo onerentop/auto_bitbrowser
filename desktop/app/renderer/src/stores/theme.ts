@@ -1,7 +1,7 @@
 /**
- * 主题 store —— 对标 Python 设置页的 theme（auto / light / dark）
+ * 主题 store（auto / light / dark）
  *
- * 切换立即生效（对标 _onThemeChanged → setTheme），是否持久化由设置页的「保存」决定。
+ * 切换立即生效，是否持久化由设置页的「保存」决定。
  * auto 跟随系统：监听 prefers-color-scheme。
  */
 import { useSyncExternalStore } from "react";

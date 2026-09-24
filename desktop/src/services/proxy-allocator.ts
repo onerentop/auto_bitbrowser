@@ -1,9 +1,8 @@
 /**
  * 代理分配器（Node 重写）
- * 对标 services/proxy_allocator.py
  *
  * 只是 ProxyRepository 之上的一层薄封装 + ixBrowser 配置格式转换。
- * Python 侧通过 DBManager 门面调用，这里直接依赖仓储。
+ * 直接依赖仓储。
  */
 import type { ProxyBindingRow, ProxyRepository, ProxyRow, ProxyUsageStat } from "../db/proxy-repository.ts";
 
@@ -38,7 +37,7 @@ export class ProxyAllocator {
 
   /**
    * 为窗口分配代理并写入绑定。
-   * 无可用代理、或绑定失败，都返回 null（与 Python 一致）。
+   * 无可用代理、或绑定失败，都返回 null。
    */
   allocateProxy(browserId: string, email: string | null = null): ProxyRow | null {
     const proxy = this.getNextAvailableProxy();
@@ -61,7 +60,7 @@ export class ProxyAllocator {
   }
 
   /**
-   * 对标 Python ProxyAllocator.get_proxy_bindings（services/proxy_allocator.py:82-92）的完整返回：
+   * 代理绑定情况的完整返回：
    * [{id, proxy_id, browser_id, email, bound_at}]。已有的 getProxyBindings 只返回两列，保持不变。
    */
   getProxyBindingDetails(proxyId: number): ProxyBindingRow[] {

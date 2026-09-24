@@ -1,14 +1,14 @@
 /**
- * Python 标准库行为的最小移植 —— 仅供 totp-extractor 使用
+ * TOTP URI 解析所需的字符串 / URL 工具（最小实现，仅供 totp-extractor 使用）
  *
- * migration_decoder.py 依赖 urllib.parse / base64 的若干细节（'+' 变空格、
+ * 这些实现对齐 URI 编码与 Base64 的若干细节（"+" 变空格、
  * 非 Base64 字符被丢弃、padding 报错文案……），这些细节直接决定解析结果与错误信息，
- * 用 WHATWG URL / atob 替代会与 Python 对不上（对拍夹具覆盖了这些分支）。
+ * 用 WHATWG URL / atob 替代会得到不同结果（对拍夹具覆盖了这些分支）。
  */
 
 const UTF8 = new TextDecoder("utf-8", { ignoreBOM: true });
 
-/** bytes.decode("utf-8", errors="replace")；ignoreBOM 保证不吞掉开头的 BOM（Python 不吞） */
+/** 按 UTF-8 解码，非法字节替换为 U+FFFD；ignoreBOM 保证不吞掉开头的 BOM */
 export function decodeUtf8Replace(bytes: Uint8Array): string {
   return UTF8.decode(bytes);
 }
@@ -21,10 +21,10 @@ function hexVal(c: number): number {
 }
 
 /**
- * urllib.parse.unquote(string)（encoding=utf-8, errors=replace）。
+ * 百分号解码（解码出的字节按 UTF-8 解释，非法字节替换）：
  * ASCII 片段里的 %XX 转成字节后按 UTF-8 解码；非法的 % 原样保留；非 ASCII 字符原样保留。
  */
-export function pyUnquote(s: string): string {
+export function unquote(s: string): string {
   if (!s.includes("%")) return s;
   let out = "";
   let buf: number[] = [];
@@ -55,10 +55,10 @@ export function pyUnquote(s: string): string {
 }
 
 /**
- * urllib.parse.parse_qs(query)（keep_blank_values=False, strict_parsing=False, separator="&"）：
- * 无 "=" 的片段与空值被丢弃；键和值都先把 "+" 换成空格再 unquote。
+ * 解析 query string（丢弃无 "=" 的片段与空值，分隔符 "&"）：
+ * 键和值都先把 "+" 换成空格再百分号解码。
  */
-export function pyParseQs(query: string): Map<string, string[]> {
+export function parseQs(query: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const pair of query.split("&")) {
     if (!pair) continue;
@@ -66,8 +66,8 @@ export function pyParseQs(query: string): Map<string, string[]> {
     if (eq < 0) continue;
     const rawValue = pair.slice(eq + 1);
     if (rawValue.length === 0) continue;
-    const name = pyUnquote(pair.slice(0, eq).replace(/\+/g, " "));
-    const value = pyUnquote(rawValue.replace(/\+/g, " "));
+    const name = unquote(pair.slice(0, eq).replace(/\+/g, " "));
+    const value = unquote(rawValue.replace(/\+/g, " "));
     const list = out.get(name);
     if (list) list.push(value);
     else out.set(name, [value]);
@@ -75,7 +75,7 @@ export function pyParseQs(query: string): Map<string, string[]> {
   return out;
 }
 
-export interface PySplitResult {
+export interface SplitResult {
   scheme: string;
   netloc: string;
   path: string;
@@ -86,10 +86,10 @@ export interface PySplitResult {
 const SCHEME_CHARS = /^[A-Za-z0-9+\-.]+$/;
 
 /**
- * urllib.parse.urlparse(uri) 的 scheme/netloc/path/query/fragment 部分（Python 3.13 urlsplit）。
- * otpauth / otpauth-migration 不在 uses_params 里，所以不拆 ;params。
+ * 按 RFC 3986 拆出 scheme / netloc / path / query / fragment 五个部分。
+ * 不拆 `;params`（otpauth 系列用不到）。
  */
-export function pyUrlSplit(input: string): PySplitResult {
+export function urlSplit(input: string): SplitResult {
   // lstrip(_WHATWG_C0_CONTROL_OR_SPACE) + 去掉 \t \r \n
   let url = input.replace(/^[\x00-\x20]+/, "").replace(/[\t\r\n]/g, "");
   let scheme = "";
@@ -126,8 +126,8 @@ export function pyUrlSplit(input: string): PySplitResult {
   return { scheme, netloc, path: url, query, fragment };
 }
 
-/** Python int(str)：允许首尾空白、正负号、数字间单个下划线；否则抛与 Python 同文案的错误 */
-export function pyInt(s: string): number {
+/** 严格整数解析：允许首尾空白、正负号、数字间单个下划线；否则抛 `invalid literal for int() with base 10` */
+export function toInt(s: string): number {
   const m = /^\s*([+-]?)(\d+(?:_\d+)*)\s*$/.exec(s);
   if (!m) throw new Error(`invalid literal for int() with base 10: '${s}'`);
   const n = Number((m[2] ?? "").replace(/_/g, ""));
@@ -142,13 +142,13 @@ const B64_TABLE: Int8Array = (() => {
 })();
 
 /**
- * base64.b64decode(s)（validate=False）= binascii.a2b_base64 非严格模式：
+ * 宽松 Base64 解码：
  *   - 非 ASCII 字符串直接报错
  *   - 不在字母表里的字符被丢弃
  *   - 遇到足够的 "=" 立即结束（后面的内容忽略）
  *   - 结束时剩 1 个字符 / 2~3 个字符分别报两种错
  */
-export function pyB64Decode(s: string): Uint8Array {
+export function b64Decode(s: string): Uint8Array {
   if (!/^[\x00-\x7f]*$/.test(s)) throw new Error("string argument should contain only ASCII characters");
   const out: number[] = [];
   let quadPos = 0;
@@ -197,7 +197,7 @@ export function pyB64Decode(s: string): Uint8Array {
 
 const B32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-/** base64.b32encode(raw).decode("ascii").rstrip("=") */
+/** Base32 编码，去掉尾部 "=" 填充 */
 export function b32EncodeNoPad(bytes: Uint8Array): string {
   let out = "";
   let buffer = 0;

@@ -1,6 +1,5 @@
 /**
- * 设置页「账号数据」标签的 handler —— 对标 gui/data_management/accounts_tab.py 的 AccountsTab
- * 与 batch_import_dialog.py 的 AccountBatchImportDialog
+ * 设置页「账号数据」标签的 handler（列表 / 增删改 / 批量导入 / 导出 / 删除）
  */
 import {
   buildAccountImportUpsert,
@@ -30,7 +29,7 @@ export interface AccountsHandlerDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** 照搬 AccountEditDialog.get_data（accounts_tab.py:70-76）：邮箱 / 辅助邮箱 / 2FA strip，密码原样 */
+/** 校验账号输入：邮箱 / 辅助邮箱 / 2FA 密钥 strip，密码原样 */
 export function parseAccountInputArg(value: unknown): SettingsAccountInputDto {
   const o = asRecord(value, "account");
   return {
@@ -51,7 +50,7 @@ export function parseEmailListArg(value: unknown): string[] {
 
 export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandlerDeps = {}): HostHandlerTable {
   return {
-    /** 对标 AccountsTab.loadData（accounts_tab.py:230-273） */
+    /** 加载列表数据 */
     [SETTINGS_INVOKE.settingsAccountsList]: (): SettingsAccountDto[] =>
       ctx
         .accountRepo()
@@ -64,14 +63,14 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
           status: a.status ?? "",
         })),
 
-    /** 对标 AccountsTab.addAccount（accounts_tab.py:286-318）：只在添加时校验邮箱，新增 status=pending */
+    /** 新增账号：只在添加时校验邮箱，新增 status=pending */
     [SETTINGS_INVOKE.settingsAccountsAdd]: (account: unknown): boolean => {
       const data = parseAccountInputArg(account);
       if (!isValidNewAccountEmail(data.email)) invalid("请输入有效的邮箱地址");
       return ctx.accountRepo().upsertAccount({ ...data, status: "pending" });
     },
 
-    /** 对标 AccountsTab.editAccount（accounts_tab.py:320-341）：不改状态 */
+    /** 编辑账号：不改状态 */
     [SETTINGS_INVOKE.settingsAccountsUpdate]: (account: unknown): boolean => {
       const data = parseAccountInputArg(account);
       if (!data.email) invalid("邮箱不能为空");
@@ -79,14 +78,14 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
     },
 
     /**
-     * 对标 AccountBatchImportDialog._validateInputs + save_record（batch_import_dialog.py:128-166, 211-230）。
+     * 批量导入账号（整批包在一个事务里）。
      * 后端按同一纯函数重新解析文本；逐条保存。整个导入包在一个事务里，只为减少磁盘同步次数。
      *
-     * 与 Python 的计数差异（有意保留）：
-     *   - 失败计数：Python 的 save_record 忽略 upsert_account 的返回值、恒返回 True，
+     * 计数规则（有意如此）：
+     *   - 失败计数：若写库的返回值被忽略、恒按成功计，
      *     只有抛异常才计 fail 并继续下一条，所以单条写库失败（upsert 内部吞掉异常返回 False）
-     *     在 Python 里仍计为成功；这里把 upsertAccount 返回 false 计为 fail，计数更真实。
-     *   - 事务回滚：Python 无事务，逐条立即提交，中途异常只影响那一条；这里若循环中抛出
+     *     单条写库失败也会算成功；这里把 upsertAccount 返回 false 计为 fail，计数更真实。
+     *   - 事务回滚：不包事务、逐条立即提交时，中途异常只影响那一条；这里若循环中抛出
      *     未被 upsertAccount 吞掉的异常，会 ROLLBACK 整批并把错误抛给界面，已写入的条目也不保留。
      */
     [SETTINGS_INVOKE.settingsAccountsImport]: (text: unknown): ImportResultDto => {
@@ -117,10 +116,10 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
     },
 
     /**
-     * 对标 AccountsTab.deleteSelected（accounts_tab.py:343-398）。
+     * 批量删除账号（同时删除对应窗口）。
      * 每个账号都要按邮箱查 ixBrowser 窗口（带重试，ixBrowser 未启动时单个账号就要等数秒），
      * 可能超过主进程 30s 转发超时，因此作为后台任务运行，立即返回 TaskInfo。
-     * 语义照搬：找到窗口先关闭（忽略错误）再删除，删除成功才计数；无论窗口是否删成，账号都删除。
+     * 语义：找到窗口先关闭（忽略错误）再删除，删除成功才计数；无论窗口是否删成，账号都删除。
      */
     [SETTINGS_INVOKE.settingsAccountsDelete]: (emailsArg: unknown): TaskInfo => {
       const emails = parseEmailListArg(emailsArg);
@@ -151,7 +150,7 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
               try {
                 await ctx.ix().closeProfile(profileId);
               } catch {
-                // 照搬 accounts_tab.py:373-376：关闭失败忽略
+                // 关闭窗口失败忽略
               }
               try {
                 if (await deleteBrowserById(ixDeps, profileId)) {
@@ -163,24 +162,24 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
                   note = `窗口 ${profileId} 删除失败`;
                 }
               } catch {
-                // 照搬 accounts_tab.py:381-382
+                // 删除窗口失败忽略
               }
             } else {
               api.log("  未找到对应窗口");
               note = "未找到对应窗口";
             }
           } catch {
-            // 照搬 accounts_tab.py:383-384
+            // 查找 / 删除窗口失败忽略
           }
 
           ctx.accountRepo().deleteAccount(email);
           deletedAccounts += 1;
-          // 逐条目结果（任务历史用）：窗口那一侧的成败放进消息里，账号删除语义照搬 Python（必然删账号）
+          // 逐条目结果（任务历史用）：窗口那一侧的成败放进消息里；账号一律删除，不计窗口成败
           api.item(email, "成功", note);
           api.progress(i + 1, total);
         }
 
-        // 对标完成提示（accounts_tab.py:392）
+        // 任务结束时的完成提示
         api.log(`删除完成: 已删除 ${deletedAccounts} 个账号` + (deletedWindows > 0 ? `，${deletedWindows} 个窗口` : ""));
         const result: DeleteAccountsResultDto = { deleted_accounts: deletedAccounts, deleted_windows: deletedWindows };
         return result;

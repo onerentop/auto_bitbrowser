@@ -1,5 +1,5 @@
 /**
- * 批量导入对话框 —— 对标 gui/data_management/batch_import_dialog.py 的 BatchImportDialog
+ * 批量导入对话框（多行文本 → 实时解析预览 → 导入）
  *
  * 多行文本 → 实时解析预览（#、各列、状态）→ 有效 / 无效计数 → 「导入」。
  * 预览用 src/application/settings-data.ts 的纯函数；后端导入时用同一函数重新解析，不信任预览结果。
@@ -52,7 +52,7 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
         if (r.result.ok) {
           return { key: r.no, cells: [...formatPreviewRow(r.result.data)], ok: true, status: "✓" };
         }
-        // batch_import_dialog.py:118-124：无效行只在第一列显示截断后的原文
+        // 无效行只在第一列显示截断后的原文
         return { key: r.no, cells: [truncateInvalidLine(r.line)], ok: false, status: `✗ ${r.result.error}` };
       }),
     [rows, formatPreviewRow],
@@ -63,7 +63,7 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
     props.onClose();
   };
 
-  /** 对标 BatchImportDialog._validateInputs（batch_import_dialog.py:128-166） */
+  /** 提交导入；后端会用同一纯函数重新解析，不信任预览结果 */
   const submit = async (): Promise<void> => {
     const current = parseImportText(text, parseLine);
     if (countImportRows(current).valid === 0) {

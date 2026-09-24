@@ -1,10 +1,10 @@
 /**
- * AI 任务页的账号树 —— 对标 gui/ai_task_interface.py:206-222（TreeWidget）+ :272-334（_populateTree）
+ * AI 任务页的账号树（分组 / 窗口两级，带状态着色）
  *
  * 两级结构用「可展开的 Table + 行勾选」实现（与首页 BrowserListCard 相同的做法）：
- *   一级：分组 `📁 {分组名} ({数量})`，三态勾选（checkStrictly=false，由子项推导），默认展开（:300）
+ *   一级：分组 `📁 {分组名} ({数量})`，三态勾选（checkStrictly=false，由子项推导），默认展开
  *   二级：名称/邮箱 / 窗口ID / 状态 / 消息
- * 行底色按任务逐行状态着色（:415-423）。
+ * 行底色按任务逐行状态着色。
  */
 import { useEffect, useMemo, useState, type Key, type ReactElement } from "react";
 import { Card, Table, Typography } from "antd";
@@ -36,7 +36,7 @@ export function AccountTreeCard(props: AccountTreeCardProps): ReactElement {
   const { groups, runtime } = props;
   const [expanded, setExpanded] = useState<readonly Key[]>([]);
 
-  // 重新加载 / 切换筛选后分组默认展开（:300 setExpanded(True)）
+  // 重新加载 / 切换筛选后分组默认展开
   useEffect(() => {
     setExpanded(groups.map((g) => g.key));
   }, [groups]);
@@ -86,7 +86,7 @@ export function AccountTreeCard(props: AccountTreeCardProps): ReactElement {
         key: "status",
         width: 110,
         onCell: cellStyle,
-        // 任务开始前显示账号状态（:323）；任务推送后显示处理状态（:412）
+        // 任务开始前显示账号状态；任务推送后显示处理状态
         render: (_, row) => (row.kind === "browser" ? (runtime[row.browser.name]?.status ?? row.browser.status) : ""),
       },
       {

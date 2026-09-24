@@ -5,7 +5,7 @@
  *   运行时版本     渲染层 → 预加载 → 主进程本地 handler
  *   后端进程状态   主进程 → 渲染层 的事件推送（实时）
  *   后端 ping      主进程 → utilityProcess 后端进程 的请求/响应
- *   ixBrowser      后端进程 → 已移植的 desktop/src 业务模块 → 本地 53200 服务
+ * ixBrowser 后端进程 → 已的 desktop/src 业务模块 → 本地 53200 服务
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { Alert, Badge, Button, Card, Descriptions, Space, Typography } from "antd";

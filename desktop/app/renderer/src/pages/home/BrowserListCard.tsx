@@ -1,5 +1,5 @@
 /**
- * 窗口列表卡片 —— 对标 gui/home_interface.py:163-219（工具栏 + 树形控件 + 加载进度）
+ * 窗口列表卡片（工具栏 + 树形控件 + 加载进度）
  *
  * 两级结构用「可展开的 Table + 行勾选」实现：
  *   一级：分组 `📁 {分组名} ({数量})`，三态勾选（checkStrictly=false，由子项推导），默认展开
@@ -70,7 +70,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
   const [selectAll, setSelectAll] = useState(false);
   const [expanded, setExpanded] = useState<readonly Key[]>([]);
 
-  // 对标 refreshBrowserList（:249-250）：刷新后清空勾选、取消「全选」；分组默认展开（:340）
+  // 刷新后清空勾选、取消「全选」；分组默认展开
   useEffect(() => {
     setChecked([]);
     setSelectAll(false);
@@ -93,14 +93,14 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
     [visible],
   );
 
-  /** 对标 _filterBrowserTree（:369-399）：被隐藏的项取消勾选，「全选」复位 */
+  /** 过滤树：被隐藏的项取消勾选，「全选」复位 */
   const onSearch = (text: string): void => {
     setSearch(text);
     setChecked((prev) => filterBrowserTree(groups, text, prev).checkedKeys);
     setSelectAll(false);
   };
 
-  /** 对标 _toggleSelectAll（:401-411）：只作用于可见项 */
+  /** 全选 / 取消全选：只作用于可见项 */
   const onSelectAll = (value: boolean): void => {
     setSelectAll(value);
     setChecked((prev) => selectAllVisible(visible, prev, value));

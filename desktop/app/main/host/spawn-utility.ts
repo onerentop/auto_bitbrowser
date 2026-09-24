@@ -1,7 +1,7 @@
 /**
  * 用 Electron `utilityProcess.fork()` 拉起后端进程，并适配成 HostProcessHandle
  *
- * 对标 PI-Desktop 的 spawnUtilityProcess：serviceName 便于在任务管理器里辨认，
+ * -Desktop 的 spawnUtilityProcess：serviceName 便于在任务管理器里辨认 
  * stdio 设为 pipe 以便把后端日志转打到主进程控制台。
  */
 import { utilityProcess } from "electron";

@@ -1,12 +1,11 @@
 /**
- * 设置页「代理」标签的 handler —— 对标 gui/data_management/proxies_tab.py 的 ProxiesTab
- * 与 batch_import_dialog.py 的 ProxyBatchImportDialog
+ * 设置页「代理」标签的 handler（列表 / 增删改 / 批量导入 / 绑定详情 / 解绑）
  *
- * 数据来源与 Python 一致：列表来自 DataStore.get_proxies()，使用情况来自
- * ProxyAllocator.get_all_usage_stats()，按 host:port 关联（proxies_tab.py:241-310）。
+ * 数据来源：列表来自 DataStore.getProxies()，使用情况来自
+ * ProxyAllocator.getAllUsageStats()，按 host:port 关联。
  *
  * DataStore 是「内存列表 + 每次写入全量回写库」：内存若比库旧，回写会把别处新增的代理删掉。
- * 因此每次读写前都先 reload()；编辑 / 删除按下标定位（对标 Python 的 row），
+ * 因此每次读写前都先 reload()；编辑 / 删除按下标定位，
  * 并用 host:port 核对下标没有漂移，漂移时拒绝操作并提示刷新。
  */
 import {
@@ -41,7 +40,7 @@ import {
   invalid,
 } from "./validate.ts";
 
-/** 校验代理输入；照搬 ProxyEditDialog.get_data（proxies_tab.py:74-81）：除类型外全部 strip */
+/** 校验代理输入：除类型外全部 strip */
 export function parseProxyInputArg(value: unknown): ProxyInputDto {
   const o = asRecord(value, "proxy");
   return {
@@ -66,13 +65,13 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
   let store: DataStore | null = null;
 
   const getRepo = (): ProxyRepository => (repo ??= new ProxyRepository(ctx.db()));
-  /** 取 DataStore 并从库重新加载（对标 loadData 里的 dataStore.reload()） */
+  /** 取 DataStore 并从库重新加载 */
   const freshStore = (): DataStore => {
     if (!store) store = new DataStore(getRepo(), { silent: true });
     else store.reload();
     return store;
   };
-  /** 对标 ProxyAllocator.get_max_windows_per_ip()：每次现读配置 */
+  /** 每个 IP 可绑定的窗口数：每次现读配置 */
   const allocator = (): ProxyAllocator => {
     const raw = ctx.config().get("proxy.max_windows_per_ip", DEFAULT_MAX_WINDOWS_PER_IP);
     const n = typeof raw === "number" ? raw : Number(raw);
@@ -88,7 +87,7 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
   };
 
   return {
-    /** 对标 ProxiesTab.loadData（proxies_tab.py:241-310） */
+    /** 加载列表数据（含使用情况） */
     [SETTINGS_INVOKE.settingsProxiesList]: (): ProxyListItemDto[] => {
       const proxies = freshStore().getProxies();
       const alloc = allocator();
@@ -107,7 +106,7 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
           port: p.port,
           username: p.username,
           password: p.password,
-          // proxies_tab.py:270-272 的默认值
+          // 使用情况的默认值
           used_count: stat?.used_count ?? 0,
           max_count: stat?.max_count ?? 3,
           is_full: stat?.is_full ?? false,
@@ -116,7 +115,7 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
       });
     },
 
-    /** 对标 ProxiesTab.addProxy（proxies_tab.py:329-355） */
+    /** 新增代理 */
     [SETTINGS_INVOKE.settingsProxiesAdd]: (proxy: unknown): boolean => {
       const data = parseProxyInputArg(proxy);
       if (!data.host || !data.port) invalid("主机和端口不能为空");
@@ -125,8 +124,8 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 对标 ProxiesTab.editProxy（proxies_tab.py:357-368）。
-     * 照搬 Python：编辑时**不**校验主机 / 端口非空（Python 只在添加时校验）。
+     * 修改代理。
+     * 编辑时**不**校验主机 / 端口非空（只在添加时校验）。
      */
     [SETTINGS_INVOKE.settingsProxiesUpdate]: (ref: unknown, proxy: unknown): boolean => {
       const r = parseProxyRefArg(ref);
@@ -138,8 +137,8 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 对标 ProxiesTab.deleteSelected（proxies_tab.py:370-402），返回删除条数。
-     * Python 按下标倒序逐条 remove_proxy（每次全量回写）；这里一次过滤后只回写一次。
+     * 删除选中的代理，返回删除条数。
+     * 一次过滤后只回写一次，而不是按下标倒序逐条删除（每次全量回写）。
      * 最终列表相同，saveAllProxies 按「新列表里不再出现的 host:port」删行并级联删绑定，
      * 所以删除结果与绑定级联和逐条删除一致。
      */
@@ -155,12 +154,12 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 对标 ProxyBatchImportDialog + BatchImportDialog._validateInputs（batch_import_dialog.py:128-166, 233-279）。
+     * 批量导入代理：一次性追加后只回写一次。
      * 后端按同一纯函数重新解析文本，不信任渲染层的预览结果。
-     * 差异：Python 每条记录各 add_proxy 一次（每次全量回写）；这里一次性追加后只回写一次。
+     * 去重与回写次数的取舍：
      * 一次回写时 saveAllProxies 只按导入前的库判断 INSERT / UPDATE，同批重复的 host:port 会插两行，
-     * 所以先按 host:port 去重（后出现的覆盖先出现的），库里结果与 Python 逐条添加一致。
-     * success_count 仍按有效行数计，与 Python 对话框的计数一致。
+     * 所以先按 host:port 去重（后出现的覆盖先出现的），让库里结果与逐条添加一致。
+     * success_count 仍按有效行数计。
      */
     [SETTINGS_INVOKE.settingsProxiesImport]: (text: unknown): ImportResultDto => {
       const raw = asString(text, "text", MAX_IMPORT_TEXT_LENGTH);
@@ -175,8 +174,8 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 对标 ProxyDetailDialog._loadBindings（proxies_tab.py:101-136）。
-     * Python 读取的 window_name / profile_id 两个键在绑定表里并不存在（界面恒显示「未知窗口」），
+     * 读取某个代理的绑定详情。
+     * 绑定表里没有 window_name / profile_id 这两个键（按它们显示会恒为「未知窗口」），
      * 这里返回绑定表的真实字段 browser_id / email / bound_at。
      */
     [SETTINGS_INVOKE.settingsProxiesBindings]: (proxyId: unknown): ProxyBindingDto[] => {
@@ -193,9 +192,9 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 对标 ProxyDetailDialog._unbindWindow（proxies_tab.py:138-162）。
-     * Python 调用的 ProxyAllocator.release_proxy 并不存在（点击必然报「解绑失败」），
-     * 这里改用实际存在的 unbind_window（proxy_allocator.py:57-68）。
+     * 解绑窗口。
+     * 必须调 ProxyAllocator 真正提供的方法名，否则点击必然报「解绑失败」。
+     * 这里调的是实际存在的解绑接口。
      */
     [SETTINGS_INVOKE.settingsProxiesUnbind]: (browserId: unknown): boolean => {
       const id = asString(browserId, "browserId").trim();

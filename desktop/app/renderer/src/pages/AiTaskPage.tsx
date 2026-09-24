@@ -1,12 +1,12 @@
 /**
- * 通用 AI 批量任务页 —— 对标 gui/ai_task_interface.py AITaskInterface（:88-440）
+ * 通用 AI 批量任务页
  * 驱动 5 个导航项：替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备。
  *
  * 布局：「{任务名} 配置」卡片 → 按钮行（加载数据 / 开始{任务名} / 停止 … 共 N 个账号）→ 账号树。
- * Python 的进度条与日志区（:224-228）由底部全局任务坞替代，界面侧日志用 logLocal。
+ * 进度条与日志区由底部全局任务坞替代，界面侧日志用 logLocal。
  *
  * 5 个实例同时挂载、切走不卸载：所有状态都在组件内部，互不影响。
- * 与原版一致，页面不自动加载，需点「加载数据」（AITaskInterface.__init__ 没有调用 _loadData）。
+ * 页面不自动加载，需点「加载数据」。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { App, Button, Card, Input, InputNumber, Select, Space, Typography } from "antd";
@@ -60,7 +60,7 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   const [loading, setLoading] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [runtime, setRuntime] = useState<Record<string, RowRuntime>>({});
-  // 只采纳最近一次加载的结果（对标 :239-241 停掉旧的加载线程）
+  // 只采纳最近一次加载的结果（比它更早的结果直接丢弃）
   const loadSeq = useRef(0);
 
   // 本页启动的任务 id；启动请求在途时 pending 非空
@@ -70,10 +70,10 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   const visible = useMemo(() => filterByStatus(groups, statusFilter), [groups, statusFilter]);
   const total = countVisible(visible);
 
-  /** 对标 _loadData（:234-247）+ _onLoadFinished（:255-270） */
+  /** 加载分组与窗口数据 */
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
-    setGroups([]); // :236 tree.clear()
+    setGroups([]);
     setChecked([]);
     setRuntime({});
     setLoaded(false);
@@ -97,7 +97,7 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
     }
   }, [statusFilter]);
 
-  /** 对标 _onStatusFilterChanged（:370-373）：已加载时按新条件重新过滤；被隐藏的行取消勾选 */
+  /** 状态筛选变化：已加载时按新条件重新过滤；被隐藏的行取消勾选 */
   const onFilterChange = (value: string): void => {
     setStatusFilter(value);
     const next = filterByStatus(groups, value);
@@ -111,7 +111,7 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
     setRuntime((prev) => ({ ...prev, [e.key]: { status: e.status, message: e.message } }));
   }, []);
 
-  /** 对标 _onTaskFinished（:428-433）；进度由全局任务坞显示 */
+  /** 任务结束处理；进度由全局任务坞显示 */
   const applyFinished = useCallback(
     (e: TaskFinishedEvent) => {
       taskIdRef.current = null;
@@ -171,13 +171,13 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   };
 
   /**
-   * 对标 _onStartClicked（:375-395）。
-   * 有意偏差：原版不确认直接开始；这些操作都会修改账号（破坏性），这里加一个确认框。
+   * 开始任务。
+   * 有意偏差：这些操作都会修改账号（破坏性），开始前加一个确认框。
    */
   const onStart = (): void => {
     const items = selectedItems(visible, checked);
     if (items.length === 0) {
-      void message.warning("请先选择要处理的账号"); // :378-380
+      void message.warning("请先选择要处理的账号");
       return;
     }
     modal.confirm({
@@ -192,8 +192,8 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   };
 
   /**
-   * 对标 _onStopClicked（:397-402）。
-   * 修复原版缺陷：原版点停止后立即 setRunning(False) 重新启用「开始」，而 Worker 还在跑当前账号；
+   * 停止任务。
+   * 点停止后不立即重新启用「开始」——任务仍在跑当前账号；
    * 这里按钮状态完全跟随全局任务状态，任务真正结束后才重新可用。
    */
   const onStop = (): void => {
@@ -206,7 +206,7 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      {/* 配置卡片（:135-177） */}
+      {/* 配置卡片 */}
       <Card size="small" title={`${taskName} 配置`}>
         <Space direction="vertical" size="middle">
           <Space wrap size="large">
@@ -246,7 +246,7 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
         </Space>
       </Card>
 
-      {/* 操作按钮（:179-204） */}
+      {/* 操作按钮 */}
       <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
         <Space wrap>
           <Button icon={<DownloadOutlined />} onClick={() => void load()} loading={loading} disabled={busy}>

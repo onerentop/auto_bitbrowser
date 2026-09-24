@@ -1,30 +1,27 @@
 /**
- * 测试 AI 提供商连接（Node 重写）
- * 对标 gui/setting_interface.py:24-124 的 TestAIConnectionWorker
+ * 测试 AI 提供商连接
  *
- * Python 用 openai / anthropic 官方 SDK；这里直接发 HTTP（fetch 可注入，便于离线测试），
- * 请求内容与 SDK 实际发出的一致：
+ * 直接发 HTTP（fetch 可注入，便于离线测试），请求内容与官方 SDK 实际发出的一致：
  *   - gemini（OpenAI 兼容）：POST {base}/chat/completions，Authorization: Bearer
  *   - anthropic：POST {base 去掉末尾 /v1}/v1/messages，x-api-key + anthropic-version
  *
- * 有意偏差：Python 的 SDK 超时是 30s；桌面端主进程转发请求也有 30s 超时，
- * 若 HTTP 恰好也等满 30s，界面会先收到 TIMEOUT 而看不到真正的失败原因，
- * 因此这里把 HTTP 超时设为 25s。
+ * 超时设为 25s：桌面端主进程转发请求也有 30s 超时，
+ * 若 HTTP 恰好也等满 30s，界面会先收到 TIMEOUT 而看不到真正的失败原因。
  */
 
-/** 对标 _DEFAULT_BASE_URLS（setting_interface.py:28-31） */
+/** 各 provider 的默认 base_url */
 export const TEST_AI_DEFAULT_BASE_URLS: Readonly<Record<string, string>> = {
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
   anthropic: "https://api.anthropic.com",
 };
 
-/** 对标 _DEFAULT_MODELS（setting_interface.py:32-35） */
+/** 各 provider 的默认模型 */
 export const TEST_AI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   gemini: "gemini-2.0-flash",
   anthropic: "claude-sonnet-4-20250514",
 };
 
-/** 见文件头：25s 而非 Python 的 30s（有意偏差） */
+/** 见文件头：比主进程 30s 的转发超时略短 */
 export const TEST_AI_TIMEOUT_MS = 25_000;
 
 export const TEST_AI_PROMPT = "Hi, reply with OK";
@@ -88,7 +85,7 @@ export function buildOpenAiCompatRequest(apiKey: string, baseUrl: string, model:
   };
 }
 
-/** 照搬 setting_interface.py:100-103：base_url 末尾不需要 /v1（SDK 会自动拼接） */
+/** base_url 末尾不需要 /v1（SDK 会自动拼接），这里会去掉它 */
 export function buildAnthropicRequest(apiKey: string, baseUrl: string, model: string): BuiltRequest {
   let base = stripTrailingSlashes(baseUrl);
   if (base.endsWith("/v1")) base = base.slice(0, -3);
@@ -139,7 +136,7 @@ function extractPreview(provider: string, data: unknown): string {
   return "";
 }
 
-/** 对标 TestAIConnectionWorker.run（setting_interface.py:44-63）；永不抛错 */
+/** 测试连接；永不抛错 */
 export async function testAiConnection(
   input: TestAiConnectionInput,
   deps: TestAiConnectionDeps = {},
@@ -177,7 +174,7 @@ export async function testAiConnection(
     const elapsedMs = Math.trunc(now() - start);
 
     if (!res.ok) {
-      // 对标 SDK 抛出的 APIStatusError：「Error code: 401 - {...}」
+      // 对应 SDK 抛出的 APIStatusError：「Error code: 401 - {...}」
       const body = text.length > 300 ? `${text.slice(0, 300)}...` : text;
       const msg = `Error code: ${res.status} - ${body}`;
       return { success: false, message: `测试失败: ${msg}`, details: { error: msg } };

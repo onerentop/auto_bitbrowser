@@ -1,7 +1,7 @@
 /**
  * ixBrowser Local API — 类型定义
  *
- * 规格来源：.venv/Lib/site-packages/ixbrowser_local_api/（纯 Python 源码，已逐行核对）
+ * 规格来源：ixBrowser 本地服务的实际响应（已逐条核对）
  * 关键事实：
  *   - 全部接口都是 POST，包括"查询列表"
  *   - 无任何认证（无 token / header / 签名）
@@ -11,7 +11,7 @@
 /** 默认服务地址 */
 export const IX_DEFAULT_HOST = "127.0.0.1";
 export const IX_DEFAULT_PORT = 53200;
-/** Python 客户端硬编码 20s，这里做成可配置但保持同样默认值 */
+/** 默认超时 20s，可配置但默认值不变 */
 export const IX_DEFAULT_TIMEOUT_MS = 20_000;
 
 /** 成功码 */

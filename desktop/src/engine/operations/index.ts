@@ -1,8 +1,7 @@
 /**
  * Stagehand operations 索引
- * 对标 core/stagehand_engine/operations/__init__.py
  *
- * 注意：Python 侧的 bind_card / sheerlink / subscribe 三个 operation
+ * 注意：bind_card / sheerlink / subscribe 三个 operation
  * 已在「移除 SheerID、绑卡订阅」那次改动中删除；pro_status / family / join_family /
  * enable_sharing / oauth / unlock_403 随账号管理页对应功能一并删除，这里同样不提供。
  */

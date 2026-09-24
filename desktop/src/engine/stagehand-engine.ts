@@ -1,6 +1,5 @@
 /**
- * StagehandGoogleEngine（Node 重写）
- * 对标 core/stagehand_engine/engine.py
+ * StagehandGoogleEngine
  *
  * 管道层：CDP 接管 ixBrowser 窗口 + navigate / act / extract / observe 四原语。
  * 已由 ENGINE_SLICE_REPORT.md 的真机切片验证通过。
@@ -8,7 +7,7 @@
  * 两个必须遵守的约束（切片实测得出）：
  *   1. Stagehand 必须锁 3.7.3 —— 4.x 依赖 Extensions.* CDP 域，ixBrowser 不支持
  *   2. API key 必须经环境变量传入，model.clientOptions.apiKey 不生效
- *      （对标 Python 的 _setup_provider_env_vars）
+ *      （provider 环境变量由引擎内部统一设置）
  */
 import { Stagehand } from "@browserbasehq/stagehand";
 import { IxBrowserClient } from "../ixbrowser/client.ts";
@@ -38,14 +37,14 @@ export function setupProviderEnvVars(modelName: string, apiKey: string): void {
 export interface EngineOptions {
   modelName: string;
   apiKey: string;
-  /** 日志详细程度 0-2，对齐 Python 的 verbose */
+  /** 日志详细程度 0-2 */
   verbose?: 0 | 1 | 2;
   ixClient?: IxBrowserClient;
-  /** 引擎关闭时是否一并关掉 ixBrowser 窗口，对齐 Python 的 close_browser_on_exit */
+  /** 引擎关闭时是否一并关掉 ixBrowser 窗口 */
   closeBrowserOnExit?: boolean;
 }
 
-/** 统一的原语返回结构，对标 Python 的 ActionResult / ExtractResult 等 */
+/** 统一的原语返回结构（navigate / act / extract / observe 共用） */
 export interface PrimitiveResult<T = unknown> {
   success: boolean;
   data?: T;
@@ -197,7 +196,7 @@ export class StagehandGoogleEngine {
 
   /**
    * 连接到 ixBrowser 窗口。
-   * 对标 Python 的 connect_to_ixbrowser()：先开窗拿 CDP 端点，再让 Stagehand 接管。
+   * 先开窗拿 CDP 端点，再让 Stagehand 接管。
    */
   static async connectToIxBrowser(
     profileId: number | string,
@@ -210,7 +209,7 @@ export class StagehandGoogleEngine {
 
   /**
    * 直接从 CDP WebSocket 端点接入。
-   * 对标 Python 的 engine.connect_cdp(ws_endpoint)——不经过 ixBrowser API，
+   * 直接从 CDP WebSocket 端点接入，不经过 ixBrowser API，
    * 用于「窗口已经开着，只要接管」的场景。
    */
   static async connectCdp(
@@ -264,7 +263,7 @@ export class StagehandGoogleEngine {
   }
 
   /**
-   * 关闭引擎，对齐 Python 的 engine.stop(close_browser=...)。
+   * 关闭引擎。
    * 不传参数时沿用构造时的 closeBrowserOnExit 设定。
    */
   async stop(closeBrowser?: boolean): Promise<void> {
@@ -276,7 +275,7 @@ export class StagehandGoogleEngine {
     try {
       if (this.sh) await this.sh.close();
     } catch {
-      /* 忽略关闭异常，与 Python 一致 */
+      /* 忽略关闭异常 */
     }
     this.sh = null;
     this.page = null;
@@ -295,7 +294,7 @@ export class StagehandGoogleEngine {
     return { sh: this.sh, page: this.page };
   }
 
-  /** 固定等待，对标 Python 的 wait() */
+  /** 固定等待 */
   async wait(milliseconds: number): Promise<void> {
     await new Promise((r) => setTimeout(r, milliseconds));
   }
@@ -313,7 +312,7 @@ export class StagehandGoogleEngine {
    * （例如 class="upgrade-banner" 会让页面被判为非订阅），且跨标签文本
    * （<span>Manage</span> <span>membership</span>）匹配不到。
    *
-   * 与 Python 的做法语义一致（Python 分别用 page.inner_text("body") 与 AI extract "all visible text"）。
+   * 语义等价：既可以用原生 innerText，也可以退回 AI extract "all visible text"。
    * 这里走浏览器原生 innerText：更快、不消耗额度、结果确定。
    */
   async getPageContent(): Promise<string> {
@@ -349,7 +348,7 @@ export class StagehandGoogleEngine {
 
   /**
    * 按选择器填充输入框。
-   * 对标 Python 的 engine.page.fill()——用于 act() 输入失败时的降级路径。
+   * 按选择器直接填充，用于 act() 输入失败时的降级路径。
    * 拿不到 locator 能力时返回 false，由调用方决定后续。
    */
   async fill(selector: string, value: string): Promise<boolean> {
@@ -479,7 +478,7 @@ export class StagehandGoogleEngine {
 
   /**
    * 直接敲键盘输入文本（输入到当前焦点元素）。
-   * 对标 Python 的 engine.page.keyboard.type()——act() 与 fill() 都失败时的最后手段。
+   * 用键盘输入文本，act() 与 fill() 都失败时的最后手段。
    * Stagehand V3 的 Page 没有 keyboard 对象，改用 page.type()。
    */
   async typeText(text: string): Promise<boolean> {
@@ -504,7 +503,7 @@ export class StagehandGoogleEngine {
     return false;
   }
 
-  /** 导航。失败不抛出，返回 success=false（与 Python 一致） */
+  /** 导航。失败不抛出，返回 success=false */
   async navigate(
     url: string,
     options: { waitUntil?: string; timeoutMs?: number } = {},
@@ -600,7 +599,7 @@ export class StagehandGoogleEngine {
   }
 
   // ==================== operation 门面 ====================
-  // 对标 Python engine.py 上同名方法。用动态 import 避免
+  // 这些门面方法用动态 import 避免
   // engine ↔ operations 的循环依赖（operations 需要 engine 类型）。
   // 每个方法只做一件事：构造对应 Operation 并委托执行。
 

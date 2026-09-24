@@ -1,5 +1,5 @@
 /**
- * 首页（ixBrowser 窗口管理） 的后端 handler —— 对标 gui/home_interface.py
+ * 首页（ixBrowser 窗口管理）的后端 handler（分组 / 窗口列表、创建 / 打开 / 删除、配置读写）
  *
  * 取列表（listGroups / listBrowsers）是只读操作，做成普通请求：
  * ixBrowser 是本机服务，正常情况下每页 <1s；单次请求最坏 20s 超时（abort 不属于可重试错误，
@@ -31,7 +31,7 @@ import {
 } from "../../../src/application/create-windows.ts";
 import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../../src/application/home-tree.ts";
 
-/** 配置键（对标 home_interface.py:471 / :475） */
+/** 配置键 */
 export const HOME_CONFIG_KEYS = {
   templateId: "last_used_template_id",
   namePrefix: "window_name_prefix",
@@ -119,7 +119,7 @@ export function parseCreateSpec(args: unknown[]): HomeCreateSpec {
 }
 
 function configString(value: unknown): string {
-  // Python: str(template_id) if template_id else ""
+  // 空值统一转成空字符串
   return value === null || value === undefined || value === "" ? "" : String(value);
 }
 
@@ -136,7 +136,7 @@ type BrowserOp = (id: number, log: (message: string) => void) => Promise<boolean
 /**
  * 批量打开 / 删除的任务体：逐个执行，每个窗口一行日志 + 一条逐条目结果（任务历史用），
  * 更新进度，支持中途停止。
- * 原版 _onOpenClicked / _onDeleteClicked（:446-466）只有 TODO，这里是新实现。
+ * 打开 / 删除窗口均为新实现。
  */
 export async function runBrowserBatch(
   api: Pick<TaskApi, "log" | "progress" | "item" | "shouldStop">,
@@ -197,9 +197,9 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * Python 在关窗时 saveConfig（:481-487）一次写回两个输入框；
+     * 改为输入框失焦时写回，而不是等关窗时一次性写回两个输入框；
      * 桌面端改为输入框失焦时写回（窗口关闭时渲染层来不及可靠地发请求）。
-     * 只写这两个键，且与 Python 一样 strip()。
+     * 只写这两个键，值先 strip()。
      */
     "abb/home/saveConfig": (...args: unknown[]): HomeConfig => {
       const patch = parseConfigPatch(args);
@@ -209,7 +209,7 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       return readConfig(ctx);
     },
 
-    /** 对标 refreshGroupList（:227-245）：出错时只保留「默认分组」 */
+    /** 刷新分组列表：出错时只保留「默认分组」 */
     "abb/home/listGroups": async (...args: unknown[]): Promise<HomeGroupListResult> => {
       expectNoArgs(args);
       try {
@@ -220,7 +220,7 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       }
     },
 
-    /** 对标 BrowserLoadWorker.run（:47-74）+ _populateBrowserTree（:295-361） */
+    /** 加载窗口列表并组装树 */
     "abb/home/listBrowsers": async (...args: unknown[]): Promise<HomeBrowserTree> => {
       expectNoArgs(args);
       let groups: unknown[] = [];
@@ -252,7 +252,7 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 按模板窗口批量创建窗口（原版 :427 _onCreateClicked 只有 TODO 桩）。
+     * 按模板窗口批量创建窗口。
      *
      * 模板不存在时**直接拒绝**（不启动任务）——避免任务跑起来才一个个失败。
      * 名字由 getNextWindowName 按当前窗口列表算，前缀为空时用模板窗口名。

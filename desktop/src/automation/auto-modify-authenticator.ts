@@ -1,8 +1,7 @@
 /**
  * 自动修改身份验证器并保存新密钥
- * 对标 automation/auto_modify_authenticator.py
  *
- * 保存分三处（优先级递减，照搬 Python）：
+ * 保存分三处（优先级递减）：
  *   1. 数据库（最重要，失败则后续两步也跳过文件写入）
  *   2. 项目根目录下的密钥文本文件（追加）
  *   3. ixBrowser 窗口备注与 tfa_secret
@@ -29,10 +28,10 @@ export interface SaveSecretOptions {
 
 /**
  * 保存新密钥。返回数据库是否写入成功。
- * 注意：文件与备注更新都依赖数据库成功（Python 的 if save_to_file and db_success）。
+ * 注意：文件与备注更新都依赖数据库成功（save_to_file 与数据库写入成功同时成立才写）。
  */
 export function saveNewSecret(options: SaveSecretOptions): boolean {
-  // 清洗：去空格与连字符后转大写（与 Python 一致）
+  // 清洗：去空格与连字符后转大写
   const cleanSecret = options.newSecret.replace(/ /g, "").replace(/-/g, "").toUpperCase();
   let dbSuccess = false;
 

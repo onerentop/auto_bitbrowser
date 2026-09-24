@@ -1,6 +1,5 @@
 /**
  * 自动替换辅助邮箱
- * 对标 automation/auto_replace_recovery_email.py
  */
 import { printBanner, withEngine, type CommonOptions, type Result3 } from "./shared.ts";
 
@@ -25,7 +24,7 @@ export async function autoReplaceRecoveryEmail(
         totpSecret: String(accountInfo["secret_key"] ?? ""),
       });
       if (result.success) return [true, "辅助邮箱替换成功", null] as Result3;
-      // 失败时把 error 作为 error_type 带回，与 Python 一致
+      // 失败时把 error 作为 error_type 带回
       return [false, result.message, result.error ?? null] as Result3;
     },
     (msg) => [false, `运行失败: ${msg}`, "exception"] as Result3,

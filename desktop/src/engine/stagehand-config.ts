@@ -1,34 +1,34 @@
 /**
- * Stagehand 模型配置解析 —— 对标 core/stagehand_engine/config.py
+ * Stagehand 模型配置解析
  *
- * 为什么需要：Python 的 StagehandGoogleEngine 在 model_name / api_key 未显式传入时，
- * 会经 get_stagehand_config() 依次回落到 ConfigManager → 环境变量 → 默认模型。
- * 早期 Node 移植的 connectEngine 缺了这一层，调用方不传参数时会以空 model/key 连 Stagehand
- * （Python 的 auto_google_login / auto_enable_family_sharing 明确「AI 配置从 ConfigManager 读取」）。
+ * 为什么需要：model_name / api_key 未显式传入时，
+ * 需要依次回落到 ConfigManager → 环境变量 → 默认模型。
+ * 早期的 connectEngine 缺了这一层，调用方不传参数时会以空 model/key 连 Stagehand；
+ * automation 层明确「AI 配置从 ConfigManager 读取」。
  *
  * Node 没有 ConfigManager 全局单例（打开哪份 config.json 由宿主决定），
  * 所以「ConfigManager 来源」改为可注册的 provider：后端进程启动时用 ctx.config() 注册一次。
- * 未注册时等价 Python 的 CONFIG_MANAGER_AVAILABLE=False（只看环境变量）。
+ * 未注册时只看环境变量。
  */
 
-/** 对标 DEFAULT_MODEL_NAME */
+/** 默认模型名 */
 export const DEFAULT_MODEL_NAME = "google/gemini-2.0-flash";
 
-/** 对标 DEFAULT_MODELS */
+/** 各 provider 的默认模型 */
 export const DEFAULT_MODELS: Readonly<Record<string, string>> = {
   google: "gemini-2.0-flash",
   anthropic: "claude-3-5-sonnet",
   openai: "gpt-4o",
 };
 
-/** 对标 PROVIDER_MAP（ConfigManager 格式 → Stagehand 格式） */
+/** provider 映射（ConfigManager 格式 → Stagehand 格式） */
 export const STAGEHAND_PROVIDER_MAP: Readonly<Record<string, string>> = {
   gemini: "google",
   anthropic: "anthropic",
   openai: "openai",
 };
 
-/** 对标 StagehandModelConfig */
+/** Stagehand 模型配置 */
 export interface StagehandModelConfig {
   modelName: string;
   apiKey: string | null;
@@ -55,7 +55,7 @@ export function registerStagehandConfigSource(source: (() => StagehandConfigSour
 
 type Log = (message: string) => void;
 
-/** 对标 get_config_from_manager()：未注册、未设默认提供商、无 key 或读取异常时返回 null */
+/** 从 ConfigManager 读取：未注册、未设默认提供商、无 key 或读取异常时返回 null */
 export function getConfigFromManager(
   source: StagehandConfigSource | null = registeredSource?.() ?? null,
   log: Log = () => {},
@@ -86,7 +86,7 @@ export function getConfigFromManager(
   }
 }
 
-/** 对标 get_config_from_env()：MODEL_API_KEY / MODEL_NAME / MODEL_BASE_URL */
+/** 从环境变量读取：MODEL_API_KEY / MODEL_NAME / MODEL_BASE_URL */
 export function getConfigFromEnv(env: Record<string, string | undefined> = process.env): StagehandModelConfig | null {
   const apiKey = env["MODEL_API_KEY"];
   if (!apiKey) return null;
@@ -110,8 +110,8 @@ export interface GetStagehandConfigOptions {
 }
 
 /**
- * 对标 get_stagehand_config()：优先级 显式参数 > ConfigManager > 环境变量 > 默认模型。
- * 各字段独立回落（Python 用 `if not final_x`，空串也视为缺失）。
+ * 优先级：显式参数 > ConfigManager > 环境变量 > 默认模型。
+ * 各字段独立回落，空串也视为缺失。
  */
 export function getStagehandConfig(options: GetStagehandConfigOptions = {}): StagehandModelConfig {
   const useConfigManager = options.useConfigManager ?? true;

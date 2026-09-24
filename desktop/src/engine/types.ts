@@ -1,10 +1,9 @@
 /**
- * Stagehand Google Engine - 类型定义（Node 重写）
- * 对标 core/stagehand_engine/types.py
+ * Stagehand Google Engine - 类型定义
  *
- * 由脚本从 Python 源自动生成。两处刻意设计：
- *   1. 枚举用字符串字面量联合，取值与 Python Enum.value 一致
- *   2. dataclass 字段一律**必需**（Python 的"有默认值"不等于 TS 的"可选"），
+ * 两处刻意设计：
+ *   1. 枚举用字符串字面量联合，取值与运行时使用的字符串一一对应
+ *   2. 字段一律**必需**（"有默认值"不等于 TS 的"可选"），
  *      构造默认值由 createXxx() 提供——这样读取结果时无需 undefined 判断
  */
 
@@ -62,7 +61,7 @@ export interface ActionResult {
   duration_ms: number;
 }
 
-/** 构造 ActionResult，默认值对齐 Python dataclass */
+/** 构造 ActionResult，给出各字段默认值 */
 export function createActionResult(overrides: Partial<ActionResult> = {}): ActionResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -89,7 +88,7 @@ export interface BaseOperationResult {
   can_retry: boolean;
 }
 
-/** 构造 BaseOperationResult，默认值对齐 Python dataclass */
+/** 构造 BaseOperationResult，给出各字段默认值 */
 export function createBaseOperationResult(overrides: Partial<BaseOperationResult> = {}): BaseOperationResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -114,7 +113,7 @@ export interface ExtractResult {
   duration_ms: number;
 }
 
-/** 构造 ExtractResult，默认值对齐 Python dataclass */
+/** 构造 ExtractResult，给出各字段默认值 */
 export function createExtractResult(overrides: Partial<ExtractResult> = {}): ExtractResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -144,7 +143,7 @@ export interface KickDevicesResult {
   failed_devices: string[];
 }
 
-/** 构造 KickDevicesResult，默认值对齐 Python dataclass */
+/** 构造 KickDevicesResult，给出各字段默认值 */
 export function createKickDevicesResult(overrides: Partial<KickDevicesResult> = {}): KickDevicesResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -186,7 +185,7 @@ export interface LoginResult {
   duration_ms: number;
 }
 
-/** 构造 LoginResult，默认值对齐 Python dataclass */
+/** 构造 LoginResult，给出各字段默认值 */
 export function createLoginResult(overrides: Partial<LoginResult> = {}): LoginResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -226,7 +225,7 @@ export interface ModifyAuthenticatorResult {
   verified: boolean;
 }
 
-/** 构造 ModifyAuthenticatorResult，默认值对齐 Python dataclass */
+/** 构造 ModifyAuthenticatorResult，给出各字段默认值 */
 export function createModifyAuthenticatorResult(overrides: Partial<ModifyAuthenticatorResult> = {}): ModifyAuthenticatorResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -263,7 +262,7 @@ export interface ModifyPhoneResult {
   verification_code_used: string | null;
 }
 
-/** 构造 ModifyPhoneResult，默认值对齐 Python dataclass */
+/** 构造 ModifyPhoneResult，给出各字段默认值 */
 export function createModifyPhoneResult(overrides: Partial<ModifyPhoneResult> = {}): ModifyPhoneResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -294,7 +293,7 @@ export interface NavigationResult {
   duration_ms: number;
 }
 
-/** 构造 NavigationResult，默认值对齐 Python dataclass */
+/** 构造 NavigationResult，给出各字段默认值 */
 export function createNavigationResult(overrides: Partial<NavigationResult> = {}): NavigationResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -318,7 +317,7 @@ export interface ObserveResult {
   duration_ms: number;
 }
 
-/** 构造 ObserveResult，默认值对齐 Python dataclass */
+/** 构造 ObserveResult，给出各字段默认值 */
 export function createObserveResult(overrides: Partial<ObserveResult> = {}): ObserveResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -347,7 +346,7 @@ export interface ReplaceEmailResult {
   verification_code_used: string | null;
 }
 
-/** 构造 ReplaceEmailResult，默认值对齐 Python dataclass */
+/** 构造 ReplaceEmailResult，给出各字段默认值 */
 export function createReplaceEmailResult(overrides: Partial<ReplaceEmailResult> = {}): ReplaceEmailResult {
   const base: Record<string, unknown> = {
     success: false,
@@ -383,7 +382,7 @@ export interface ReplacePhoneResult {
   verification_code_used: string | null;
 }
 
-/** 构造 ReplacePhoneResult，默认值对齐 Python dataclass */
+/** 构造 ReplacePhoneResult，给出各字段默认值 */
 export function createReplacePhoneResult(overrides: Partial<ReplacePhoneResult> = {}): ReplacePhoneResult {
   const base: Record<string, unknown> = {
     success: false,

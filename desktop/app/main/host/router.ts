@@ -1,5 +1,5 @@
 /**
- * 后端路由 —— 决定一个 invoke 通道由谁处理（对标 PI-Desktop 的 backendRouter）
+ * 后端路由 —— 决定一个 invoke 通道由谁处理（-Desktop 的 backendRouter）
  *
  *   - 在 HOST_ROUTED_CHANNELS 中：转给后端进程（HostClient.request）
  *   - 否则：返回 ROUTE_LOCAL，由主进程本地 handler 执行

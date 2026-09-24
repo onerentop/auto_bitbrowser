@@ -1,8 +1,7 @@
 /**
- * 踢出设备操作（Node 重写）
- * 对标 core/stagehand_engine/operations/kick_devices.py
+ * 踢出设备操作
  *
- * 提示词逐字照搬 Python 版——它们是调试出来的资产，改一个字都可能影响 LLM 行为。
+ * 提示词逐字沿用调试出来的版本——改一个字都可能影响 LLM 行为。
  *
  * 真机（2026-09-24，profile 7 / 真实 Google 账号）修正的缺陷：
  *   1) 设备页会要求 Google 的「重新验证身份」（真机形态：中文 TOTP 页 /v3/signin/challenge/totp，
@@ -28,7 +27,7 @@ import { GoogleURLs, Timeouts } from "../constants.ts";
 import { createKickDevicesResult, type KickDevicesResult } from "../types.ts";
 import { generateTotp } from "../totp.ts";
 
-/** 设备页的会话条目选择器（真机实测；选择器缺失时由 verify:selectors 对账 Python 侧） */
+/** 设备页的会话条目选择器（真机实测；选择器缺失时由 verify:selectors 检查） */
 export const DEVICE_ITEM_SELECTOR = "li.K6ZZTd";
 /** 会话详情页 URL 特征 */
 const DEVICE_DETAIL_URL_PATTERN = /\/device-activity\/id\//;
@@ -93,7 +92,7 @@ export interface DeviceSession {
 
 /**
  * 页面内读取会话条目的脚本：**只认结构不认文案**（真机页面是中文，
- * 照搬英文关键词过滤会得到空列表 → 假成功）。导出供单测校验。
+ * 若改用英文关键词过滤会得到空列表 → 假成功）。导出供单测校验。
  */
 export function deviceListScript(selector: string = DEVICE_ITEM_SELECTOR): string {
   return `(() => {

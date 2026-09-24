@@ -1,6 +1,5 @@
 /**
  * 辅助邮箱池管理器（Node 重写）
- * 对标 services/recovery_email_manager.py
  *
  * 在 RecoveryEmailRepository 之上实现「选哪个邮箱」的业务策略：
  * 启用 + 未超每日上限 + 不在排除列表，再按今日用量升序取第一个。
@@ -11,7 +10,7 @@ import type { HistoryRepository } from "../db/history-repository.ts";
 /** 每个辅助邮箱每日可绑定的账号数上限 */
 export const DAILY_BIND_LIMIT = 10;
 
-/** 本地日期 YYYY-MM-DD，与 Python 的 datetime.now().strftime("%Y-%m-%d") 一致 */
+/** 本地日期 YYYY-MM-DD */
 export function todayString(d: Date = new Date()): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -109,7 +108,7 @@ export class RecoveryEmailManager {
 
   /**
    * 判断账号的辅助邮箱绑定状态。
-   * 当前已绑定池中邮箱时顺带写入绑定关系（Python 侧有这个副作用）。
+   * 当前已绑定池中邮箱时顺带写入绑定关系。
    */
   checkAccountBinding(
     accountEmail: string,

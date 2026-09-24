@@ -1,6 +1,5 @@
 /**
- * 账号导入导出与综合查询仓储（Node 重写）
- * 对标 services/repositories/account_io_repository.py
+ * 账号导入导出与综合查询仓储
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -19,7 +18,7 @@ export const STATUS_FILES: Record<string, string> = {
 /** 额外导出的待验证文件（不参与导入） */
 export const PENDING_FILE = "有资格待验证号.txt";
 
-/** upsert 回调签名，与 Python 的 upsert_callback 对齐 */
+/** upsert 回调签名 */
 export type UpsertCallback = (account: {
   email: string;
   password: string | null;
@@ -69,7 +68,7 @@ export class AccountIoRepository {
 
   /**
    * 从状态文本文件导入账号，返回处理条数。
-   * 逐文件 try/catch，单个文件出错不影响其余（与 Python 一致）。
+   * 逐文件 try/catch，单个文件出错不影响其余。
    */
   importFromStatusFiles(baseDir: string, upsert: UpsertCallback): number {
     let count = 0;
@@ -109,7 +108,7 @@ export class AccountIoRepository {
   /**
    * 把数据库账号按状态导出为文本文件。
    *
-   * 两条易错规则（与 Python 严格一致）：
+   * 两条易错规则：
    *   - status 为 running / processing 的记录整条跳过
    *   - link_ready 的记录：有链接时写入 sheerIDlink.txt（链接在行首），
    *     同时**无条件**再写一份到"有资格待验证号.txt"

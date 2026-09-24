@@ -1,10 +1,10 @@
 /**
- * 「创建参数配置」卡片 —— 对标 gui/home_interface.py:95-137
+ * 「创建参数配置」卡片（模板窗口 ID / 数量 / 窗口前缀 / 目标分组）
  *
- * 模板窗口ID / 窗口前缀来自配置（:468 _loadConfigToUI）。
- * Python 在关窗时 saveConfig（:481-487）写回；这里改为输入框失焦时经 abb/home/saveConfig 写回，
+ * 模板窗口 ID / 窗口前缀来自配置。
+ * 改为输入框失焦时经 abb/home/saveConfig 写回，
  * 值没变就不发请求。
- * 目标分组下拉 + 「刷新」（:125-135 / :227 refreshGroupList）。
+ * 目标分组下拉 + 「刷新」。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { App, Button, Card, Form, Input, Select } from "antd";
@@ -67,7 +67,7 @@ export function ConfigCard(props: ConfigCardProps): ReactElement {
         props.onValuesChange?.(next);
         setValues(next);
       },
-      // 对标 :478-479：加载失败只记录，不打断界面
+      // 加载失败只记录，不打断界面
       (e) => {
         if (alive) logLocal(`[Config] 加载配置到UI失败: ${describeError(e)}`);
       },

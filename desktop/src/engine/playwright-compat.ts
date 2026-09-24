@@ -7,7 +7,7 @@
  *
  * 这里把 Stagehand 的 V3 Page 适配成等价接口，好处：
  *   - 复用已经建立的 CDP 连接，不用再拉一个 playwright 依赖
- *   - 两个脚本的移植不需要改动逻辑结构
+ * - 两个脚本的不需要改动逻辑结构
  *
  * 与 Playwright 的差异（已在本层抹平）：
  *   - V3 的 locator.first() 是方法，Playwright 是属性 → 统一成方法

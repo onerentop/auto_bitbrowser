@@ -1,7 +1,7 @@
 /**
  * src/core/totp-extractor —— 与 Python core/totp_extractor 对拍
  *
- * test/fixtures/totp-python-parity.json 由 Python 生成：
+ * test/fixtures/totp-parity-vectors.json 由 Python 生成：
  *   按 protobuf 线格式手工编码 migration payload（单/多账号、有无 issuer、SHA256/512、8 位、HOTP+counter、
  *   issuer:email 与 "email (Issuer)" 两种名称、中文名称、未知字段号 9/10（64bit/32bit wire type）、
  *   base64 去填充与保留填充、URL 编码），再用 parse_otpauth_migration_uri / parse_standard_otpauth_uri 解析。
@@ -19,7 +19,7 @@ import {
   parseStandardOtpauthUri,
 } from "../src/core/totp-extractor/index.ts";
 
-const fixture = JSON.parse(readFileSync(new URL("./fixtures/totp-python-parity.json", import.meta.url), "utf8"));
+const fixture = JSON.parse(readFileSync(new URL("./fixtures/totp-parity-vectors.json", import.meta.url), "utf8"));
 
 const withEmail = (a) => ({ ...a, email: getOtpEmail(a) });
 

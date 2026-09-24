@@ -1,13 +1,12 @@
 /**
- * 历史记录仓储（Node 重写）
- * 对标 services/repositories/history_repository.py
+ * 历史记录仓储
  *
- * Python 侧是 6 组完全同构的方法（init/get/add/clear），每组只差表名与字段名，
- * 共 24 个方法、约 480 行。这里用配置表驱动，行为保持逐条一致：
+ * 6 类历史表高度同构（init/get/add/clear），每组只差表名与字段名，
+ * 因此这里用配置表驱动，行为与既有的逐条实现一致：
  *   - 建表：id AUTOINCREMENT + email NOT NULL + 值列 + 时间列 + UNIQUE(email)
  *   - 读取：返回 { [email]: { ...值列, [时间列]: ... } }
  *   - 写入：ON CONFLICT(email) DO UPDATE，时间列强制刷成 CURRENT_TIMESTAMP
- *   - 异常：全部吞掉，get 返回 {}，clear 返回 0（与 Python 一致）
+ *   - 异常：全部吞掉，get 返回 {}，clear 返回 0
  */
 import type { Db } from "./connection.ts";
 
@@ -20,7 +19,7 @@ interface HistorySpec {
   label: string;
 }
 
-/** 6 类历史表，字段来自 Python 源码逐行核对 */
+/** 6 类历史表的结构定义，值列 / 时间列按实际表核对 */
 export const HISTORY_SPECS = {
   phone: {
     table: "phone_modification_history",
@@ -77,8 +76,8 @@ export class HistoryRepository {
   }
 
   /**
-   * 建表。对标 init_*_table()。
-   * Python 侧 init 不吞异常（无 try/except），这里保持一致。
+ * 建表。*_table。
+   * init 不吞异常，异常交给调用方处理。
    */
   initTable(kind: HistoryKind): void {
     const s = this.spec(kind);
@@ -123,8 +122,8 @@ export class HistoryRepository {
   }
 
   /**
-   * 插入或更新一条记录。对标 add_*()。
-   * 时间列不接受外部传入，强制 CURRENT_TIMESTAMP（与 Python 一致）。
+ * 插入或更新一条记录。*。
+   * 时间列不接受外部传入，强制 CURRENT_TIMESTAMP。
    */
   add(kind: HistoryKind, email: string, values: Record<string, string | null>): void {
     const s = this.spec(kind);
@@ -163,7 +162,7 @@ export class HistoryRepository {
     }
   }
 
-  // ---- 便捷包装，对应 Python 的具名方法 ----
+  // ---- 便捷包装：每类历史表的具名方法 ----
 
   getPhoneModificationHistory(): HistoryMap {
     return this.getHistory("phone");

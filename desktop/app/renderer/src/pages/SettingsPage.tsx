@@ -1,7 +1,7 @@
 /**
- * 设置页（配置 / 代理 / 账号数据）—— 对标 gui/setting_interface.py 的 SettingInterface
+ * 设置页（配置 / 代理 / 账号数据）
  *
- * Python 用 Pivot + StackedWidget 切换三个标签；这里用 antd Tabs。
+ * 三个标签用 antd Tabs 切换。
  * 标签切走时不卸载（antd Tabs 默认保留已渲染的面板），每个标签自带「刷新」按钮。
  */
 import type { ReactElement } from "react";

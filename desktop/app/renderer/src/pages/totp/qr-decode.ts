@@ -1,15 +1,15 @@
 /**
- * 渲染层二维码识别 —— 替代 core/totp_extractor/qr_scanner.py 的 pyzbar 部分
+ * 渲染层二维码识别（jsQR）
  *
  * 读图用 createImageBitmap(file) + OffscreenCanvas，不生成 blob: / file: URL
  * （index.html 的 CSP 是 img-src 'self' data:，blob: 图片会被拦）。
  *
- * 与 Python 的对应：
- *   - scan_qr_from_image（:81-83）只做了「转灰度」这一步预处理；jsQR 内部本身按亮度（灰度）二值化，
+ * 实现要点：
+ *   - 只做「转灰度」这一步预处理；jsQR 内部本身按亮度（灰度）二值化，
  *     等价于这一步，因此不再额外做灰度重试。
- *   - Python 没有反色重试，这里用 inversionAttempts: "dontInvert" 保持一致（Python 有的才做）。
- *   - 有意偏差：jsQR 每张图只返回一个二维码，pyzbar 会返回图中全部二维码。
- *   - 有意偏差：Python 在 UI 线程同步识别，界面会卡住；这里异步逐张识别，不阻塞界面。
+ *   - 不做反色重试：用 inversionAttempts: "dontInvert"。
+ *   - 有意偏差：jsQR 每张图只返回一个二维码。
+ *   - 识别在渲染层异步逐张进行，不阻塞界面。
  */
 import jsQR from "jsqr";
 
@@ -31,7 +31,7 @@ export async function decodeQrFromFile(file: Blob): Promise<string | null> {
   }
 }
 
-/** 支持的图片扩展名（对标文件对话框过滤器与拖放判断 :634 / :1037） */
+/** 支持的图片扩展名（文件选择与拖放共用） */
 export const IMAGE_EXTENSIONS: readonly string[] = [".png", ".jpg", ".jpeg", ".bmp", ".gif"];
 
 /** <input type=file accept> 的值 */

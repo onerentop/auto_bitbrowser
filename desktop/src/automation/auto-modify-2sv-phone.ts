@@ -1,6 +1,5 @@
 /**
  * 自动修改 2SV 手机号
- * 对标 automation/auto_modify_2sv_phone.py
  */
 import { printBanner, withEngine, type CommonOptions, type Result2 } from "./shared.ts";
 
@@ -15,7 +14,7 @@ export async function autoModify2svPhone(
 
   return withEngine(
     browserId,
-    // Python 侧此函数 close_after 默认为 True
+    // 本操作的 closeAfter 默认为 true
     { ...options, closeAfter: options.closeAfter ?? true },
     async (engine) => {
       // 真机：2SV 设置页会要求 Google 的「重新验证身份」，凭据从数据库账号取

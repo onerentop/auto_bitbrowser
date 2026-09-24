@@ -61,7 +61,7 @@ export interface ParsedStartArgs {
  *   - kind 必须在 AI_TASK_KINDS 内
  *   - items 非空数组；每项 {email: 非空字符串, profileId: 正整数}；按 (email, profileId) 去重保序
  *   - params 普通对象，只允许该 kind 的额外输入键，值为字符串且长度 ≤ 200
- *   - concurrency 为 1-10 的整数（对标 SpinBox setRange(1, 10)，ai_task_interface.py:148）
+ *   - concurrency 为 1-10 的整数
  */
 export function parseStartArgs(args: unknown[]): ParsedStartArgs {
   if (args.length !== 4) throw invalid("需要 4 个参数：任务种类、账号列表、参数对象、并发数");
@@ -97,7 +97,7 @@ export function parseStartArgs(args: unknown[]): ParsedStartArgs {
     if (!def.extraField || key !== def.extraField.key) throw invalid(`${def.taskName}不支持参数: ${key}`);
     if (typeof value !== "string") throw invalid(`参数 ${key} 必须是字符串`);
     if (value.length > MAX_PARAM_LENGTH) throw invalid(`参数 ${key} 过长（最多 ${MAX_PARAM_LENGTH} 字符）`);
-    // 对标子类 _getTaskConfig 的 .strip()
+    // 参数值 strip
     params[def.extraField.key] = value.trim();
   }
 
@@ -125,8 +125,8 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
 
   return {
     /**
-     * 对标 AITaskLoadWorker.run（ai_task_interface.py:41-85）+ _populateTree（:272-334）。
-     * 任何一步抛错都返回 error 字段（对应 :78-85），不抛异常。
+     * 加载分组与窗口，组装账号树。
+     * 任何一步抛错都返回 error 字段，不抛异常。
      */
     "abb/aitasks/load": async (...args: unknown[]): Promise<AiTaskLoadResult> => {
       if (args.length > 0) throw invalid("该通道不接受参数");
@@ -146,7 +146,7 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
       const def = AI_TASK_KINDS[parsed.kind];
 
       // modify_auth 的保存依赖：同一任务内只建一次。
-      // HistoryRepository 不会自动建表，对标 database.py:580 add_authenticator_modification 前的 init_*_table()。
+      // HistoryRepository 不会自动建表，写入前必须先 initTable。
       let authDeps: ModifyAuthDeps | null = null;
       const modifyAuthDeps = (): ModifyAuthDeps => {
         if (!authDeps) {

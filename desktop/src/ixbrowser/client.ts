@@ -1,8 +1,8 @@
 /**
- * ixBrowser Local API 客户端（Node 重写）
+ * ixBrowser Local API 客户端
  *
- * 对标 .venv/Lib/site-packages/ixbrowser_local_api/{client,utils}.py
- * 解包逻辑逐条复刻 utils.py:33-52，行为差异会导致上层业务判断失效。
+ * 与 ixBrowser 本地服务 :53200 的 HTTP 客户端。
+ * 解包逻辑必须逐条严格：分支顺序错了会导致上层业务判断失效。
  */
 
 import {
@@ -59,7 +59,7 @@ export class IxBrowserClient {
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
-  /** 最近一次 profile-list 的总数，对齐 Python 客户端的 self.total */
+  /** 最近一次 profile-list 请求的总数 */
   public total = 0;
 
   constructor(options: IxClientOptions = {}) {
@@ -71,7 +71,7 @@ export class IxBrowserClient {
   }
 
   /**
-   * 唯一的请求出口，对标 utils.py 的 send_request。
+   * 唯一的请求出口。
    * 全部接口都是 POST + JSON body。
    */
   async call<T = unknown>(action: string, params: Record<string, unknown> = {}): Promise<T | true> {
@@ -88,7 +88,7 @@ export class IxBrowserClient {
         signal: controller.signal,
       });
     } catch (err) {
-      // 对齐 Python：网络层异常统一包装成 UnexpectedError
+      // 网络层异常统一包装成 UnexpectedError
       throw new IxUnexpectedError(`exception desc:${err instanceof Error ? err.message : String(err)}`);
     } finally {
       clearTimeout(timer);
@@ -103,7 +103,7 @@ export class IxBrowserClient {
       throw new IxUnexpectedError(`exception desc:${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // 以下 4 个分支顺序与 utils.py:33-52 完全一致，不可调整
+    // 以下 4 个分支顺序固定，不可调整
     if (envelope == null || typeof envelope !== "object" || !("error" in envelope)) {
       throw new IxUnexpectedError("The returned data does not contain the 'error' key");
     }
@@ -114,7 +114,7 @@ export class IxBrowserClient {
     if (error.code !== IX_CODE_SUCCESS) {
       throw new IxResponseError(error.code, error.message ?? "");
     }
-    // 成功但无 data 时，Python 返回 True
+    // 成功但无 data 时返回 true
     return "data" in envelope && envelope.data !== undefined && envelope.data !== null
       ? (envelope.data as T)
       : true;
@@ -122,7 +122,7 @@ export class IxBrowserClient {
 
   /**
    * 窗口列表。
-   * 陷阱：传了 profileId 就只发这一个字段（page/limit 全丢弃），对齐 client.py:33-47。
+   * 陷阱：传了 profileId 就只发这一个字段（page/limit 全丢弃）。
    * keyword 发出去的键名是 name。
    */
   async getProfileList(query: IxProfileListQuery = {}): Promise<IxProfile[]> {
@@ -228,7 +228,7 @@ export class IxBrowserClient {
   }
   /**
    * 按 ID 查单个窗口的完整信息。
-   * 对标 services/ix_api.py 的 get_profile_info()——查不到返回 null。
+   * 按 ID 查单个窗口的完整信息——查不到返回 null。
    */
   async getProfileInfo(profileId: number): Promise<IxProfile | null> {
     try {
@@ -240,7 +240,7 @@ export class IxBrowserClient {
 
   /**
    * 更新窗口信息（备注、2FA 密钥等）。
-   * 对标 update_profile()：只发送传入的字段。
+ * 只发送传入的字段。
    */
   async updateProfile(
     profileId: number,

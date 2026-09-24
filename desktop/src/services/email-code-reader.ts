@@ -1,11 +1,10 @@
 /**
  * Gmail IMAP 验证码读取（Node 重写）
- * 对标 services/email_code_reader.py
  *
- * 依赖差异：Python 用 imap_tools，Node 侧用 imapflow。
- * 验证码提取是纯函数（extractCodeFromEmail），已与 Python 逐用例对拍。
+ * 依赖 imapflow。
+ * 验证码提取是纯函数（extractCodeFromEmail），已有逐用例单测覆盖。
  *
- * 筛选规则（与 Python 一致，顺序不可调整）：
+ * 筛选规则（顺序不可调整）：
  *   1. 只取最近 1 天的邮件，倒序，每轮最多 20 封
  *   2. 跳过本轮已检查过的 UID
  *   3. 发件人须命中 GOOGLE_SENDER_PATTERNS 之一（子串、大小写不敏感）
@@ -31,7 +30,7 @@ export const GOOGLE_SENDER_PATTERNS = [
 export function extractCodeFromEmail(emailBody: string): string | null {
   if (!emailBody) return null;
 
-  // 去 HTML 标签（与 Python 的 re.sub(r'<[^>]+>', ' ', ...) 等价）
+  // 去 HTML 标签
   const text = emailBody.replace(/<[^>]+>/g, " ");
 
   const patterns: RegExp[] = [
@@ -88,7 +87,7 @@ export interface MailSource {
   fetchRecent(sinceDays: number, limit: number): Promise<MailMessage[]>;
 }
 
-/** 把连接错误归类成中文提示，对标 Python connect() 的分支 */
+/** 把连接错误归类成中文提示 */
 export function classifyConnectError(message: string): string {
   if (message.includes("Invalid credentials") || message.includes("AUTHENTICATIONFAILED")) {
     return "认证失败: 请检查邮箱和应用专用密码是否正确";
@@ -148,7 +147,7 @@ export async function fetchVerificationCode(
       }
       await sleep(pollIntervalMs);
     } catch (err) {
-      // 出错时尝试重连一次，失败则终止（与 Python 一致）
+      // 出错时尝试重连一次，失败则终止
       const msg = err instanceof Error ? err.message : String(err);
       options.onProgress?.(`读取邮件出错: ${msg}`);
       try {

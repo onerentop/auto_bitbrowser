@@ -1,5 +1,5 @@
 /**
- * 修改账号密码（F1，本地新增 —— Python 侧没有这个操作）
+ * 修改账号密码（F1）
  *
  * 真机（2026-09-24，真实账号）实测的页面形态：
  *   1. 导航到 https://myaccount.google.com/signinoptions/password

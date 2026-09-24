@@ -1,8 +1,8 @@
 /**
  * 后台任务运行器 —— 运行在后端进程，纯逻辑、不依赖 electron
  *
- * 对标 Python GUI 里的 QThread / threading.Thread + stop_flag：
- *   - **全局单任务互斥**：同一时间只允许一个任务（对标 account_manager_service.check_task_conflicts），
+ * 等价于「后台线程 + 停止标志」的模型：
+ *   - **全局单任务互斥**：同一时间只允许一个任务（checkTaskConflicts），
  *     重复启动抛 CodedError(TASK_BUSY)
  *   - start() 立即返回 TaskInfo，任务在后台跑；日志 / 进度 / 结束通过 emit 推给主进程，
  *     再由主进程转给渲染层（IPC 请求有 30s 超时，长任务不能同步等）
@@ -10,7 +10,7 @@
  *
  * 结束状态：
  *   - 任务函数抛错            → failed
- *   - 期间请求过停止          → stopped（Python 返回 {type:"stopped", task_type}）
+ *   - 期间请求过停止          → stopped（返回 {type:"stopped", task_type}）
  *   - 否则                    → succeeded
  */
 import { CodedError, ERROR_CODES } from "../shared/envelope.ts";
@@ -32,11 +32,11 @@ export interface TaskApi {
   log(message: string): void;
   progress(current: number, total: number): void;
   /**
-   * 单个条目的状态变化（对标 Python AI Worker 的 progress(email, status, message)）。
+   * 单个条目的状态变化（逐条目回报状态与消息）。
    * 同一个 key 可以上报多次（例如「处理中 → 成功」），落库时只保留**最终**一条。
    */
   item(key: string, status: string, message: string): void;
-  /** 是否已请求停止（对标 Python 的 should_stop()） */
+  /** 是否已请求停止（协作式停止的标志位） */
   shouldStop(): boolean;
   /** 注册停止钩子；已请求停止时立即执行 */
   onStop(fn: () => void): void;
@@ -224,15 +224,15 @@ export function toCloneable(value: unknown): unknown {
   }
 }
 
-// ==================== 进度解析（照搬 Python） ====================
+// ==================== 进度解析 ====================
 
-/** 对标 account_task_orchestrator.py:417 的关键词列表 */
+/** 进度关键词列表 */
 export const PROGRESS_KEYWORDS: readonly string[] = ["✓", "✗", "成功", "失败", "跳过", "完成:"];
 
 /**
- * 从日志文本推算进度 —— 逐字对标 account_task_orchestrator.py:417-424：
+ * 从日志文本推算进度：
  *   命中任一关键词时：有 `[i/n]` 取 i；否则完成数 +1（不超过 total）
- * 注意 Python 用的是 total（任务账号数），而不是日志里的 n。
+ * 注意要用 total（任务账号数），而不是日志里的 n。
  */
 export function createLogProgressTracker(
   total: number,

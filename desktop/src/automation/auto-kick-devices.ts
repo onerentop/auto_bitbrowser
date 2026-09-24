@@ -1,6 +1,5 @@
 /**
  * 自动踢出非本机登录设备
- * 对标 automation/auto_kick_devices.py
  */
 import { printBanner, withEngine, type CommonOptions, type Result2 } from "./shared.ts";
 

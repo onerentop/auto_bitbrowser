@@ -1,7 +1,7 @@
 /**
  * IPC 信封 —— 三端共用（主进程 / 后端进程 / 渲染进程）
  *
- * 对标 PI-Desktop 的做法：所有跨进程结果统一包成
+ * -Desktop 的做法：所有跨进程结果统一包成
  *   { ok: true,  data }                       成功
  *   { ok: false, error: { code, message } }   失败
  * 这样异常永远不会穿透 IPC 边界（Electron 默认会把 handler 抛出的异常
@@ -22,7 +22,7 @@ export const ERROR_CODES = {
   INTERNAL: "INTERNAL",
   /** 请求来源不可信（非本应用渲染层页面发起的 IPC） */
   FORBIDDEN: "FORBIDDEN",
-  /** 已有任务在运行（全局单任务互斥，对标 check_task_conflicts） */
+ /** 已有任务在运行（全局单任务互斥，） */
   TASK_BUSY: "TASK_BUSY",
   /** 参数不合法（校验失败） */
   INVALID_ARGUMENT: "INVALID_ARGUMENT",

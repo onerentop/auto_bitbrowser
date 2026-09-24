@@ -1,9 +1,9 @@
 /**
  * 账号管理页：状态文案 / 颜色 / 筛选 / 统计（纯函数，无 React 依赖，可直接单测）
  *
- * 文案与颜色逐字照搬 gui/account_manager_interface.py:505-523；
- * 筛选照搬 _applyFilter（:591-636）——Python 按单元格**显示文本**比对，这里同样先算文本再比对，
- * 保证 null / 未知状态等边角情况与 Python 一致。
+ * 状态文案与颜色沿用原有定义；
+ * 筛选按单元格**显示文本**比对：先算文本再比对，
+ * 保证 null / 未知状态等边角情况也有一致的处理。
  * Pro / Sub2API / 解锁状态三列及其筛选项已随对应功能按用户要求删除。
  */
 import type { AccountListRow } from "../../../../shared/channels/accounts.ts";
@@ -32,7 +32,7 @@ function pick(map: Record<string, string>, key: string | null): string | undefin
   return key !== null && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
 }
 
-/** 登录状态（:423-433）：失败且有错误时显示「失败: 前 20 字...」，悬停显示全文 */
+/** 登录状态：失败且有错误时显示「失败: 前 20 字...」，悬停显示全文 */
 export function loginView(row: Pick<AccountListRow, "login_status" | "last_error">): StatusView & { tooltip: string | null } {
   const status = row.login_status;
   const lastError = row.last_error ?? "";
@@ -45,12 +45,12 @@ export function loginView(row: Pick<AccountListRow, "login_status" | "last_error
   return { text: pick(LOGIN_TEXT, status) ?? (status || "未登录"), color, tooltip: null };
 }
 
-/** 筛选下拉（:280-285 中与登录相关的 4 项） */
+/** 筛选下拉（与登录相关的 4 项） */
 export const FILTER_OPTIONS = ["全部", "未登录", "已登录", "登录失败"] as const;
 
 export type FilterOption = (typeof FILTER_OPTIONS)[number];
 
-/** 对标 _applyFilter（:591-636）：按显示文本判断一行是否可见 */
+/** 按显示文本判断一行是否可见 */
 export function matchesFilter(row: AccountListRow, filter: FilterOption): boolean {
   switch (filter) {
     case "全部":
@@ -64,7 +64,7 @@ export function matchesFilter(row: AccountListRow, filter: FilterOption): boolea
   }
 }
 
-/** 底部统计（:391-408 / :486）：统计全部账号（不受筛选影响） */
+/** 底部统计：统计全部账号（不受筛选影响） */
 export function computeStats(rows: readonly AccountListRow[]): { total: number; loggedIn: number } {
   let loggedIn = 0;
   for (const r of rows) {

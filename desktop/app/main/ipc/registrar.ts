@@ -1,5 +1,5 @@
 /**
- * IPC 注册器 —— 对标 PI-Desktop main 进程里的 `handle(channel, fn)`
+ * IPC 注册器 ——-Desktop main 进程里的 `handle(channel, fn)`
  *
  * 每个 invoke 通道的处理流程：
  *   1. 来源校验：请求必须来自本应用渲染层的 frame（防止被导航走的页面调用 IPC）

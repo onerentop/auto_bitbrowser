@@ -1,11 +1,10 @@
 /**
- * 替换辅助邮箱（Node 重写）
- * 对标 core/stagehand_engine/operations/replace_email.py
+ * 替换辅助邮箱
  *
- * 提示词逐字照搬 Python 版。注意 Python 用 f-string 拼的指令（如带 new_email 的）
- * 在这里用模板字符串生成，前缀与分隔符必须一致。
+ * 提示词逐字沿用原有版本。注意带 new_email 的指令
+ * 用模板字符串拼接，前缀与分隔符必须一致。
  *
- * 真机（2026-09-24，ixBrowser profile 7 + 真实 Google 账号）修正的 Python 侧缺陷：
+ * 真机（2026-09-24，ixBrowser profile 7 + 真实 Google 账号）修正的缺陷：
  *   恢复邮箱页会要求 Google 的「重新验证身份」——真机上出现的形态是**直接要身份验证器验证码**
  *   （URL accounts.google.com/v3/signin/challenge/totp），也可能先要密码再要验证码。
  *   原实现把跳转后的 accounts.google.com/.../signin/... 判成「需要先登录账号」直接失败（假失败）。
@@ -20,7 +19,7 @@ import { GoogleURLs, Timeouts } from "../constants.ts";
 import { createReplaceEmailResult, type ReplaceEmailResult } from "../types.ts";
 import { generateTotp } from "../totp.ts";
 
-/** 邮箱验证码服务接口，对应 Python 传入的 email_service */
+/** 邮箱验证码服务接口（取码实现由调用方注入） */
 export interface EmailCodeService {
   getCode(email: string): Promise<string | null>;
 }
@@ -198,7 +197,6 @@ export class ReplaceEmailOperation {
           } else {
             // 真机：此时新邮箱已生效，「请输入验证码」只是对新地址的可选校验，不该判失败。
             // 是否真的替换成功由后面的 verifyReplacement 核对（没生效时会如实报失败）。
-            // （Python 版在此直接返回失败，属同源缺陷。）
           }
         }
       }

@@ -1,6 +1,5 @@
 /**
  * 替换辅助邮箱（Playwright 选择器直连版）
- * 对标 automation/auto_replace_email.py
  *
  * 与其它 auto_* 不同：本文件**不使用 AI**，走确定性选择器操作。
  * 因为要处理的是 Google 固定的表单流程，选择器比自然语言更可靠。
@@ -30,10 +29,10 @@ import {
   findFirstVisibleWithRetry,
 } from "./selector-helpers.ts";
 
-/** Google 恢复邮箱设置页（对标 GoogleURLs.RECOVERY_EMAIL_SETTINGS） */
+/** Google 恢复邮箱设置页 */
 export const RECOVERY_EMAIL_SETTINGS_URL = "https://myaccount.google.com/signinoptions/rescueemail";
 
-/** 验证码读取服务，对应 Python 的 GmailCodeReader */
+/** 验证码读取服务 */
 export interface EmailCodeReader {
   fetchVerificationCode(options: {
     timeoutSeconds?: number;
@@ -45,7 +44,7 @@ export type StepResult = [boolean, string];
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** 清洗 TOTP 密钥：去空格（与 Python 的 secret.replace(' ', '').strip() 一致） */
+/** 清洗 TOTP 密钥：去空格 */
 function cleanSecret(secret: string): string {
   return secret.replace(/ /g, "").trim();
 }
@@ -53,7 +52,7 @@ function cleanSecret(secret: string): string {
 /**
  * 检查登录状态并按需登录。
  * 返回 [是否可继续, 消息]。判定「已登录」的分支刻意保持宽松：
- * 找不到登录页元素就认为已登录（与 Python 一致）。
+ * 找不到登录页元素就认为已登录。
  */
 export async function checkAndLoginForEmail(
   page: CompatPage,
@@ -392,7 +391,7 @@ export const EMAIL_INPUT_SELECTORS = [
   'input[aria-label*="recovery"]',
 ];
 
-/** 调试用：页面上所有可见输入框（Python 侧在找不到验证码框时枚举它们） */
+/** 调试用：页面上所有可见输入框（找不到验证码框时枚举它们定位问题） */
 export const VISIBLE_INPUT_SELECTOR = "input:visible";
 
 export const CODE_INPUT_SELECTORS = [
@@ -425,7 +424,7 @@ export const CODE_INPUT_SELECTORS = [
 /**
  * 验证码提交后的「Verify」按钮候选。
  * 注意 Google 的验证弹窗里该按钮在**右侧**，必须用 last 定位，
- * 用 first 会点到左侧无关元素。Python 源码对此有明确注释。
+ * 用 first 会点到左侧无关元素。
  */
 export const VERIFY_DIALOG_SELECTORS = [
   'text="Verify"',
@@ -626,7 +625,7 @@ export async function addNewEmail(
 }
 
 /**
- * 主流程。对标 auto_replace_email()。
+ * 主流程。
  * 传入的是已连接的 CompatPage（连接由调用方负责，便于复用窗口）。
  */
 export async function autoReplaceEmail(

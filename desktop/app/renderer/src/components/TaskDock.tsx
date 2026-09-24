@@ -1,8 +1,8 @@
 /**
  * 全局任务坞：底部状态条 + 日志抽屉 + 结果汇总弹窗
  *
- * 对标 Python 各页面的日志区（BaseInterface.addLogArea）、进度条与「停止」按钮。
- * Python 每个页面各有一块日志区；这里合成一个全局的，因为后端本来就只允许一个任务同时运行。
+ * 各页面的日志区、进度条与「停止」按钮统一收在这里。
+ * 合成一个全局的即可，因为后端本来就只允许一个任务同时运行。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Button, Drawer, Modal, Progress, Space, Typography } from "antd";

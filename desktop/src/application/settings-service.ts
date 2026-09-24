@@ -1,19 +1,17 @@
 /**
- * 设置页应用服务（Node 重写）
- * 对标 application/settings_service.py
+ * 设置页应用服务
  *
- * 与 Python 的差异：
- *   - Python 是静态方法 + 全局 ConfigManager；这里注入 ConfigManager 实例。
- *   - save：Python 每个 ConfigManager.set() 都会写一次盘（core/config_manager.py:234-256），
- *     共写 20 余次；这里在配置树的深拷贝上一次性改完，再 save() 只落盘一次。
- *     写入的键、值、加密方式与 Python 逐条一致。
- *   - load：Python 调 ConfigManager.load()（有缓存）；这里用 reload() 重读磁盘，
- *     让「刷新」能看到外部（例如同时运行的 Python 版）对 config.json 的修改。
+ * 设计取舍：
+ *   - 注入 ConfigManager 实例，不使用全局单例。
+ *   - save：在配置树的深拷贝上一次性改完再 save()，全程只落盘一次
+ *     （否则每次 set() 都要写盘，一共要写 20 余次）。
+ *     写入的键、值与加密方式保持既有行为不变。
+ *   - load：用 reload() 重读磁盘，让「刷新」能看到外部进程对 config.json 的修改。
  *     ConfigManager 的每次写入都已立即落盘，重读不会丢数据。
  */
 import { encryptSensitive, type ConfigDict, type ConfigManager } from "../core/config-manager.ts";
 
-/** 设置快照 —— 对标 SettingsSnapshot（application/settings_service.py:16） */
+/** 设置快照（设置页读取的全部配置项） */
 export interface SettingsSnapshot {
   ai_default_provider: string;
   gemini_api_key: string;
@@ -45,7 +43,7 @@ function str(value: unknown, fallback = ""): string {
   return String(value);
 }
 
-/** 非有限数字回退到默认值（Python 直接把原值塞进 SpinBox） */
+/** 非有限数字回退到默认值 */
 function num(value: unknown, fallback: number): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
@@ -75,7 +73,7 @@ export class SettingsService {
   }
 
   /**
-   * 对标 resolve_provider_runtime_config（settings_service.py:53-64）：
+   * 解析生效的 provider 运行参数：
    * 界面输入 strip 后非空就用输入，否则回退到已保存配置。
    */
   resolveProviderRuntimeConfig(
@@ -91,7 +89,7 @@ export class SettingsService {
     return [apiKey, baseUrl, model];
   }
 
-  /** 对标 load_settings_snapshot（settings_service.py:67-93） */
+  /** 读取全部设置项（先重读磁盘） */
   loadSettingsSnapshot(): SettingsSnapshot {
     const c = this.config;
     c.reload();
@@ -121,20 +119,20 @@ export class SettingsService {
   }
 
   /**
-   * 对标 save_settings_snapshot（settings_service.py:96-128），只落盘一次。
+   * 写入全部设置项，只落盘一次。
    *
-   * 注意 data_dir 不在这里写（Python 同样不写，它由 set_data_dir 单独立即写入）。
-   * 字段的 strip 由界面层负责（照搬 setting_interface.py:619-641），
+   * 注意 data_dir 不在这里写，它由 setDataDir 单独立即写入。
+   * 字段的 strip 由界面层负责，
    * 但 data_separator 在这里再 strip 一次，保证任何调用方都不会存进首尾空白。
    */
   saveSettingsSnapshot(s: SettingsSnapshot): void {
-    // 先 reload() 重读磁盘再改：否则缓存比磁盘旧时，整树回写会把外部（例如同时运行的
-    // Python 版）写入的表单外键（sub2api.admin_token 等）覆盖成旧值。
+    // 先 reload() 重读磁盘再改：否则缓存比磁盘旧时，整树回写会把外部进程写入的
+    // 表单外键（sub2api.admin_token 等）覆盖成旧值。
     const tree = structuredClone(this.config.reload());
 
     setPath(tree, "ai_agent.default_provider", s.ai_default_provider);
 
-    // 保持兼容行为：输入为空时不覆盖已保存 API Key（settings_service.py:100-102）
+    // 输入为空时不覆盖已保存的 API Key
     if (s.gemini_api_key) {
       setPath(tree, "ai_agent.providers.gemini.api_key", encryptSensitive(s.gemini_api_key));
     }
@@ -150,8 +148,8 @@ export class SettingsService {
     setPath(tree, "ai_agent.max_steps", s.ai_max_steps);
 
     setPath(tree, "gmail_imap_email", s.gmail_imap_email);
-    // 照搬 settings_service.py:114：应用密码**无条件**写入 —— 输入框为空会清空已保存的密码。
-    // 这与上面 API Key「为空不覆盖」不一致，但属于 Python 原有行为，保持一致。
+    // 应用密码**无条件**写入 —— 输入框为空会清空已保存的密码。
+    // 这与上面 API Key「为空不覆盖」不一致，但属既有行为，保持一致。
     setPath(tree, "gmail_imap_password", encryptSensitive(s.gmail_imap_password));
 
     setPath(tree, "timeouts.page_load", s.timeout_page_load);
@@ -176,7 +174,7 @@ export class SettingsService {
     return str(this.config.get("theme", "auto"), "auto");
   }
 
-  /** 对标 set_data_dir（settings_service.py:131-133）：立即写入 */
+  /** 设置数据目录：立即写入 */
   setDataDir(path: string): void {
     this.config.set("data_dir", path);
   }

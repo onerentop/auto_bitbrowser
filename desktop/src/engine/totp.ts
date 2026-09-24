@@ -2,10 +2,10 @@
  * TOTP 生成（RFC 6238）
  *
  * 为什么不用 otplib：13.x 的导出结构与 12.x 完全不同（TOTP 类与 functional API 并存），
- * 该库已有跨版本破坏的先例。TOTP 是标准算法，自己实现约 40 行即可对齐
- * Python 侧 pyotp.TOTP(secret).now()，且不受依赖升级影响。
+ * 该库已有跨版本破坏的先例。TOTP 是标准算法，自己实现约 40 行即可，
+ * 且不受依赖升级影响。
  *
- * 默认参数与 pyotp 一致：30 秒周期、6 位、HMAC-SHA1。
+ * 默认参数采用通行约定：30 秒周期、6 位、HMAC-SHA1。
  */
 import { createHmac } from "node:crypto";
 
@@ -15,7 +15,7 @@ const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /**
  * Base32 解码。
- * 对齐 pyotp 的 base32_decode：转大写、补齐 padding、非法字符抛错。
+ * base32 解码：转大写、补齐 padding、非法字符抛错。
  * 注意不能用 Buffer.from(s, "base64")——base32 与 base64 是不同编码。
  */
 export function base32Decode(input: string): Buffer {
@@ -44,7 +44,7 @@ export function base32Decode(input: string): Buffer {
  * 生成指定时间点的 TOTP 码。
  *
  * 有意偏差（真机测试发现）：Google 设置页显示的密钥是「每 4 位一组、用空格分隔」的小写形式，
- * 用户照抄进账号数据后，pyotp.TOTP(secret) 会抛 `Non-base32 digit found`，Python 版登录直接失败。
+ * 用户照抄进账号数据后，直接解码会因空白字符而抛错，导致登录直接失败。
  * 这里先去掉所有空白字符再解码，其余行为（大小写不敏感、补齐 padding、非法字符抛错）不变。
  */
 export function generateTotp(secret: string, atMs: number = Date.now()): string {

@@ -1,9 +1,9 @@
 /**
  * 批量任务运行结果历史（任务级 + 逐条目）
  *
- * 这是**本地新增能力**，Python 侧没有对应实现：Python 的批量任务结果只打在界面日志里，关掉就没了。
+ * 这是**本地新增能力**：以前的批量任务结果只打在界面日志里，关掉就没了。
  *
- * 为什么单独建表：Python 遗留的 `account_refresh_tasks` / `account_refresh_task_items` 语义是
+ * 为什么单独建表：既有的 `account_refresh_tasks` / `account_refresh_task_items` 语义是
  * 「刷新家庭组信息的任务」，与「任意批量任务的运行结果」混用会让两边含义都变模糊。
  *
  * 记录时机：`TaskRunner` 在任务收尾（成功 / 失败 / 停止）时把记录交给这里落库；

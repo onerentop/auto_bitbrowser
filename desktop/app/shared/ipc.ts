@@ -1,7 +1,7 @@
 /**
  * IPC 通道表 —— 三端共用的单一事实来源
  *
- * 对标 PI-Desktop 的 `IPC = { invoke, event }` 结构：
+ * -Desktop 的 `IPC = { invoke, event }` 结构 
  *   - 命名 `abb/领域/动作`；事件额外带 `/event/` 段
  *   - 预加载层与主进程都用 IPC_WHITELIST 校验，任何未登记的通道一律拒绝
  *   - InvokeMap / EventMap 把「通道 → 参数/返回类型」绑定起来，
@@ -88,7 +88,7 @@ export function isInvokeChannel(channel: unknown): channel is InvokeChannel {
 }
 
 /**
- * 由主进程本地执行的通道。其余 invoke 通道一律转给后端进程（对标 PI 的 backendRouter）。
+ * 由主进程本地执行的通道。其余 invoke 通道一律转给后端进程（ 的 backendRouter）。
  * 用「本地白名单」而不是「后端白名单」：业务通道会越来越多，而本地通道只有这几个。
  */
 export const LOCAL_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>([
@@ -161,7 +161,7 @@ export interface IxBrowserPingResult {
 /** 正在运行的任务 */
 export interface TaskInfo {
   id: number;
-  /** 任务类型，如 login / batch_bind / batch_delete（与 Python task_type 同名） */
+  /** 任务类型，如 login / batch_bind / batch_delete */
   type: string;
   /** 展示用名称 */
   label: string;
@@ -192,7 +192,7 @@ export interface TaskFinishedEvent {
   type: string;
   label: string;
   outcome: TaskOutcome;
-  /** 任务返回值（形状照搬 Python 各任务的 finished dict），失败时为 null */
+  /** 任务返回值（结构由各任务自定义），失败时为 null */
   result: unknown;
   error: string | null;
   startedAt: number;
@@ -201,8 +201,7 @@ export interface TaskFinishedEvent {
 
 /**
  * 任务中单个条目（账号 / 窗口）的状态变化。
- * 对标 Python AI 任务 Worker 的 progress(email, status, message) 信号，
- * 渲染层据此逐行更新表格的「状态 / 消息」列。
+ * 携带条目键、状态与消息，渲染层据此逐行更新表格的「状态 / 消息」列。
  */
 export interface TaskItemEvent {
   taskId: number;

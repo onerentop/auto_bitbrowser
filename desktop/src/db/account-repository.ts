@@ -1,8 +1,7 @@
 /**
- * 账号仓储（Node 重写）
- * 对标 services/repositories/account_repository.py
+ * 账号仓储
  *
- * POC 范围：只实现读取类方法 + 一个写入方法，用于与 Python 对拍。
+ * 范围：读取类方法 + 必要的写入方法。
  */
 import type { Db } from "./connection.ts";
 
@@ -28,32 +27,27 @@ export class AccountRepository {
     this.db = db;
   }
 
-  /** 对标 get_all_accounts() */
   getAllAccounts(): AccountRow[] {
     return this.db.prepare("SELECT * FROM accounts ORDER BY email").all() as AccountRow[];
   }
 
-  /** 对标 get_account_by_email() */
   getAccountByEmail(email: string): AccountRow | null {
     const row = this.db.prepare("SELECT * FROM accounts WHERE email = ?").get(email);
     return (row as AccountRow) ?? null;
   }
 
-  /** 对标 get_accounts_by_status() */
   getAccountsByStatus(status: string): AccountRow[] {
     return this.db
       .prepare("SELECT * FROM accounts WHERE status = ? ORDER BY email")
       .all(status) as AccountRow[];
   }
 
-  /** 对标 get_accounts_by_login_status() */
   getAccountsByLoginStatus(status: string): AccountRow[] {
     return this.db
       .prepare("SELECT * FROM accounts WHERE login_status = ? ORDER BY email")
       .all(status) as AccountRow[];
   }
 
-  /** 对标 get_account_by_browser() */
   getAccountByBrowser(browserProfileId: string): AccountRow | null {
     const row = this.db
       .prepare("SELECT * FROM accounts WHERE browser_profile_id = ?")
@@ -61,7 +55,6 @@ export class AccountRepository {
     return (row as AccountRow) ?? null;
   }
 
-  /** 对标 get_unbound_accounts() */
   getUnboundAccounts(): AccountRow[] {
     return this.db
       .prepare(
@@ -81,7 +74,7 @@ export class AccountRepository {
   }
 
   /**
-   * 插入或更新账号。对标 upsert_account()。
+   * 插入或更新账号。
    *
    * 关键语义：已存在的记录**只更新传入的非 null 字段**，
    * 这样调用方可以只改一个字段（如只换 secret_key）而不覆盖其它数据。
@@ -130,7 +123,7 @@ export class AccountRepository {
           const v = fields[key];
           if (v === undefined || v === null) continue; // 未传即不动
           sets.push(`${column} = ?`);
-          // 空串在 last_* 两列按 Python 的行为落成 NULL
+          // 空串在 last_* 两列落成 NULL
           values.push(
             (column === "last_failed_step" || column === "last_error") && v === "" ? null : v,
           );
@@ -171,7 +164,7 @@ export class AccountRepository {
   }
 
   /**
-   * 更新登录状态。对标 update_login_status()。
+   * 更新登录状态。
    * 三分支语义：logged_in 会顺带刷新 last_login_at 并清空 last_error；
    * 带 last_error 时写入错误；否则只改状态。均刷新 updated_at。
    */
@@ -224,7 +217,7 @@ export class AccountRepository {
     }
   }
 
-  /** 按邮箱删除账号。对标 delete_account()：删到行返回 true，出错返回 false */
+ /** 按邮箱删除账号。删到行返回 true，出错返回 false */
   deleteAccount(email: string): boolean {
     try {
       const info = this.db.prepare("DELETE FROM accounts WHERE email = ?").run(email);
@@ -236,8 +229,8 @@ export class AccountRepository {
   }
 
   /**
-   * 绑定账号到浏览器窗口。对标 bind_account_to_browser()。
-   * 传空字符串即解绑（Python 的 GUI 解绑也是这样调用的）。
+   * 绑定账号到浏览器窗口。
+   * 传空字符串即解绑（GUI 的解绑操作也是这样调用的）。
    */
   bindAccountToBrowser(email: string, browserProfileId: string): boolean {
     try {

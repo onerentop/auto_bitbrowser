@@ -1,12 +1,12 @@
 /**
- * ixBrowser 分组列表 —— 对标 services/ix_api.py:686 get_group_list
+ * ixBrowser 分组列表
  *
- * 容错语义照搬 Python：
- *   - 可重试错误（_is_retryable_error）按 BASE_DELAY * BACKOFF_FACTOR ** attempt 退避重试
+ * 容错语义：
+ *   - 可重试错误（isRetryableError）按 BASE_DELAY * BACKOFF_FACTOR ** attempt 退避重试
  *   - 不可重试或重试耗尽 → 返回 []，**永不抛错**
- * Node 版 IxBrowserClient 出错时直接抛错，这里把 Python 的「返回 None」与「抛异常」两条分支
- * 合并处理（两者在 Python 里的结局相同：重试或返回 []）。
- * 额外容错：服务端 data 不是数组时也返回 []（Python 会原样返回，调用方 `or []` 兜底）。
+ * IxBrowserClient 出错时直接抛错，这里把「返回 null」与「抛异常」两条分支合并处理
+ * （两者结局相同：重试或返回 []）。
+ * 额外容错：服务端 data 不是数组时也返回 []（上游会原样返回，调用方 `or []` 兜底）。
  */
 import type { IxBrowserClient } from "./client.ts";
 import { BACKOFF_FACTOR, BASE_DELAY, MAX_RETRIES, isRetryableError } from "./window.ts";

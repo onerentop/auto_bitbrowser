@@ -1,8 +1,8 @@
 /**
  * 数据根目录（accounts.db / config.json 所在处）—— 纯函数，不依赖 electron
  *
- * 对标 Python 的路径规则（services/database.py:16-18、core/config_manager.py:13-23）：
- *   - 源码运行：项目根目录（与 Python 共用同一份数据）
+ * 路径规则：
+ *   - 源码运行：项目根目录
  *   - 打包运行（frozen）：可执行文件所在目录
  * 另外支持环境变量 ABB_DATA_ROOT 覆盖——开发验证时指向临时目录，避免碰真实数据。
  */

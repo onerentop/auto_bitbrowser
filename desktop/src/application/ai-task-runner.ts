@@ -1,11 +1,11 @@
 /**
  * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备）的执行逻辑
  *
- * 对标：
- *   - buildAiTaskTree ← gui/ai_task_interface.py:49-68（AITaskLoadWorker.run）+ :272-334（_populateTree）
- *   - invokeAiTask    ← application/automation_engine_adapter.py:152-239（分派注册表）
- *   - describeOutcome ← 各子类 Worker._run_task 里的成功 / 失败文案
- *   - runAiTask       ← 各子类 Worker._run_task 的循环 + ai_task_interface.py:404-433 的日志
+ * 包含四部分：
+ *   - buildAiTaskTree：从窗口列表构造 AI 任务树
+ *   - invokeAiTask：按任务类型分派到对应的 automation 函数
+ *   - describeOutcome：把执行结果转成行状态与文案
+ *   - runAiTask：串行执行整批任务并上报进度 / 日志
  *
  * automation 函数与数据库 / ixBrowser 依赖全部可注入，便于离线测试。
  * 本文件不依赖 electron，也不依赖 app/host（任务操作面用本地最小接口描述）。
@@ -62,18 +62,18 @@ export interface BuiltAiTaskTree {
 
 /**
  * 构建「分组 → 窗口」两级树。
- *   - 分组名（:60-68）：去掉不可打印字符，为空时用 `分组 {gid}`；另加 0 号「未分组」
- *   - 分组归属（:280-284）：b.get('group_id', 0) or 0
+ *   - 分组名：去掉不可打印字符，为空时用 `分组 {gid}`；另加 0 号「未分组」
+ *   - 分组归属：group_id 缺失或非数字时按 0（未分组）处理
  *   - 只列出有窗口的分组，按 gid 升序（:287）；group-list 里没有的 gid 显示 `分组 {gid}`（:289）
- *   - 窗口名即 email（:307）；按 email 匹配数据库账号，未匹配时状态为 pending（:310-312）
- * 状态筛选在渲染层做（对应 :315-316），这里返回全部窗口。
+ *   - 窗口名即 email；按 email 匹配数据库账号，未匹配时状态为 pending
+ * 状态筛选在渲染层做，这里返回全部窗口。
  */
 export function buildAiTaskTree(
   accounts: readonly unknown[],
   groups: readonly unknown[],
   browsers: readonly unknown[],
 ): BuiltAiTaskTree {
-  // :53-54 {acc['email']: acc}
+  // 按 email 建索引
   const accountByEmail = new Map<string, Record<string, unknown>>();
   for (const raw of accounts) {
     const acc = asRecord(raw);
@@ -115,7 +115,7 @@ export function buildAiTaskTree(
       key = `b:${gid}:${index}`;
     }
     const acc = accountByEmail.get(email);
-    // Python: acc_info.get('status', 'pending')；数据库里 status 为 NULL 时显示为空
+    // 数据库里 status 为 NULL 时显示为空；账号不在库里时状态为 pending
     const status = acc ? (acc["status"] === null || acc["status"] === undefined ? "" : String(acc["status"])) : "pending";
     list.push({ key, profileId, name: email, status, matched: acc !== undefined });
   }
@@ -204,13 +204,13 @@ function textOf(value: unknown): string {
 }
 
 /**
- * 按 kind 调用 automation 函数，参数照搬 automation_engine_adapter.py：
- *   replace_phone → :225-239，close_after=False（replacephone_interface.py:56）
- *   replace_email → :204-222
- *   modify_2sv    → :168-185，不传 close_after，取函数默认值 True：任务结束会关闭该窗口（与 Python 一致）
- *   modify_auth   → :188-201，另注入 accountRepo / historyRepo / ixClient / projectRoot 以保存新密钥
- *   kick_devices  → :152-165
- * browser_id 一律 str(profile_id)。
+ * 按 kind 调用 automation 函数：
+ *   replace_phone → close_after=false
+ *   replace_email → 用默认参数
+ *   modify_2sv    → 不传 close_after，取函数默认值 true：任务结束会关闭该窗口
+ *   modify_auth   → 另注入 accountRepo / historyRepo / ixClient / projectRoot 以保存新密钥
+ *   kick_devices  → 用默认参数
+ * browser_id 一律取字符串形式的 profile_id。
  */
 export async function invokeAiTask(
   kind: AiTaskKind,
@@ -252,11 +252,10 @@ export async function invokeAiTask(
 }
 
 /**
- * 结果 → 行状态与消息（照搬各 Worker 的 progressSignal）：
- *   各 Worker 写的是 result.get('message', '替换失败') 之类，但 adapter 返回的 dict **总是**带 message 键
- *   （automation_engine_adapter.py:152-222），所以缺省文案在 Python 里永远用不到 —— 空 message 就显示空。
- *   这里照搬：成功 / 失败都直接用 message。
- *   modify_auth 例外：成功固定「验证器已修改」，有新密钥时只显示前 8 位（modifyauth_interface.py:52-59）。
+ * 结果 → 行状态与消息：
+ *   automation 返回的结果**总是**带 message 键，所以缺省文案永远用不到 —— 空 message 就显示空。
+ *   成功 / 失败都直接用 message。
+ *   modify_auth 例外：成功固定「验证器已修改」，有新密钥时只显示前 8 位。
  */
 export function describeOutcome(kind: AiTaskKind, outcome: AiTaskOutcome): { status: string; message: string } {
   if (!outcome.ok) {
@@ -290,14 +289,14 @@ export interface RunAiTaskOptions {
 }
 
 /**
- * 对标各子类 Worker._run_task：
- *   - **串行执行**：Python 5 个 Worker 都是 `for acc in self.accounts` 逐个 await，
- *     从不读取 config['concurrent']。这里照搬，concurrency 只写进日志。
- *   - 每个账号开始前检查停止标志（:42-43 `if self._shouldStop: break`）。
+ * 批处理任务的执行循环：
+ *   - **串行执行**：逐个账号 await，
+ *     从不读取 config['concurrent']，concurrency 只写进日志。
+ *   - 每个账号开始前检查停止标志。
  *     停止只在账号之间生效：正在处理的账号无法中断，要等它结束。
- *   - accountInfo 以数据库为准：按 email 重新读取；无记录时为 {email}
- *     （Python 是 account_info={}，这里补上 email，automation 打印横幅与保存密钥要用）。
- *   - 每行状态：处理中 → 成功 / 失败 / 错误（异常）；并写日志 `[email] status: message`（:426）。
+ *   - accountInfo 以数据库为准：按 email 重新读取；无记录时为 {email}，
+ *     这样 automation 打印横幅与保存密钥时都有 email 可用。
+ *   - 每行状态：处理中 → 成功 / 失败 / 错误（异常）；并写日志 `[email] status: message`。
  */
 export async function runAiTask(
   api: AiTaskApi,
@@ -331,8 +330,7 @@ export async function runAiTask(
     let status: string;
     let message: string;
     try {
-      // 数据安全（有意偏差）：Python 的 email 就是树上窗口的名称，二者天然绑定（:307）。
-      // 这里界面只传 (email, profileId)，数据可能已过期或被伪造；执行前重新读取窗口当前名称，
+      // 数据安全：界面只传 (email, profileId)，数据可能已过期或被伪造；执行前重新读取窗口当前名称，
       // 不等于 email 就跳过，绝不拿 A 账号的密码去操作 B 账号的窗口。
       if (deps.getWindowName) {
         const currentName = await deps.getWindowName(profileId);

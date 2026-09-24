@@ -1,9 +1,6 @@
 /**
  * 设置页「账号数据 / 代理」的纯函数：批量导入解析、预览格式化、导出文本、导入保存规则
  *
- * 对标：
- *   - gui/data_management/batch_import_dialog.py（BatchImportDialog 及两个子类）
- *   - gui/data_management/accounts_tab.py（添加校验、导出）
  *
  * 纯 TS、无 Node / DOM 依赖：渲染层（实时预览、导出下载）与后端 handler（导入时再次校验）共用。
  */
@@ -21,7 +18,6 @@ export interface ParsedImportRow<T> {
 }
 
 /**
- * 对标 BatchImportDialog._onTextChanged（batch_import_dialog.py:86-126）：
  * 按 \n 切行、每行 strip，跳过空行与 # 开头的行，再逐行解析。
  */
 export function parseImportText<T>(text: string, parseLine: (line: string) => LineParseResult<T>): ParsedImportRow<T>[] {
@@ -32,14 +28,14 @@ export function parseImportText<T>(text: string, parseLine: (line: string) => Li
   return lines.map((line, i) => ({ no: i + 1, line, result: parseLine(line) }));
 }
 
-/** 有效 / 无效计数（对标「有效: x | 无效: y」） */
+/** 有效 / 无效计数（沿用「有效: x | 无效: y」的展示口径） */
 export function countImportRows<T>(rows: ParsedImportRow<T>[]): { valid: number; invalid: number } {
   let valid = 0;
   for (const r of rows) if (r.result.ok) valid += 1;
   return { valid, invalid: rows.length - valid };
 }
 
-/** 无效行在预览里的显示：超过 50 字符截断（batch_import_dialog.py:119） */
+/** 无效行在预览里的显示：超过 50 字符截断 */
 export function truncateInvalidLine(line: string): string {
   return line.length > 50 ? `${line.slice(0, 50)}...` : line;
 }
@@ -56,7 +52,7 @@ export interface ImportedAccount {
 export const ACCOUNT_IMPORT_FORMAT_HINT = "邮箱----密码----辅助邮箱----2FA密钥 （后两项可选）";
 export const ACCOUNT_PREVIEW_COLUMNS = ["邮箱", "密码", "辅助邮箱", "2FA密钥"] as const;
 
-/** 对标 AccountBatchImportDialog.parse_line（batch_import_dialog.py:180-201） */
+/** 解析账号导入行：至少需要 邮箱----密码 */
 export function parseAccountImportLine(line: string): LineParseResult<ImportedAccount> {
   const parts = line.split("----");
   if (parts.length < 2) {
@@ -77,7 +73,7 @@ export function parseAccountImportLine(line: string): LineParseResult<ImportedAc
   return { ok: true, data: { email, password, recovery_email: recovery, secret_key: secret } };
 }
 
-/** 对标 AccountBatchImportDialog.format_preview_row（batch_import_dialog.py:203-209） */
+/** 账号预览行：密码固定显示 ******，密钥超过 8 位截断 */
 export function formatAccountPreviewRow(data: ImportedAccount): [string, string, string, string] {
   const secret = data.secret_key;
   return [data.email, "******", data.recovery_email, secret.length > 8 ? `${secret.slice(0, 8)}...` : secret];
@@ -93,7 +89,7 @@ export interface AccountUpsertFields {
 }
 
 /**
- * 对标 AccountBatchImportDialog.save_record（batch_import_dialog.py:211-230）：
+ * 导入保存规则：
  *   已存在：更新密码；辅助邮箱 / 2FA 只在非空时更新（空值传 None = 不动）
  *   不存在：插入，status = pending
  */
@@ -113,7 +109,7 @@ export function buildAccountImportUpsert(data: ImportedAccount, exists: boolean)
   };
 }
 
-/** 对标 AccountsTab.addAccount 的校验（accounts_tab.py:291）：邮箱非空且含 @ */
+/** 新增账号的校验：邮箱非空且含 @ */
 export function isValidNewAccountEmail(email: string): boolean {
   return !!email && email.includes("@");
 }
@@ -126,7 +122,7 @@ export interface ExportableAccount {
 }
 
 /**
- * 对标 AccountsTab.exportSelected 的文件内容（accounts_tab.py:422-430）：
+ * 导出的文件内容：
  * 第一行 `分隔符="----"`，之后每行 email----password----recovery----secret，每行以 \n 结尾。
  */
 export function buildAccountExportText(accounts: ExportableAccount[]): string {
@@ -151,8 +147,8 @@ export const PROXY_IMPORT_FORMAT_HINT = "host:port:user:pass 或 host:port （�
 export const PROXY_PREVIEW_COLUMNS = ["类型", "主机", "端口", "用户名"] as const;
 
 /**
- * 对标 ProxyBatchImportDialog.parse_line（batch_import_dialog.py:245-267）。
- * 差异：Python 的 str.isdigit() 也认全角 / 上标数字，这里只认 ASCII 0-9（端口只能是 ASCII 数字）。
+ * 解析代理导入行（host:port[:username:password]）。
+ * 端口只接受 ASCII 0-9，全角 / 上标数字一律拒绝。
  */
 export function parseProxyImportLine(line: string): LineParseResult<ImportedProxy> {
   const parts = line.split(":");
@@ -174,7 +170,7 @@ export function parseProxyImportLine(line: string): LineParseResult<ImportedProx
   return { ok: true, data: { proxy_type: "socks5", host, port, username, password } };
 }
 
-/** 对标 ProxyBatchImportDialog.format_preview_row（batch_import_dialog.py:269-275） */
+/** 代理预览行：类型为空时显示 socks5，用户名为空时显示 (无) */
 export function formatProxyPreviewRow(data: ImportedProxy): [string, string, string, string] {
   return [data.proxy_type || "socks5", data.host, data.port, data.username || "(无)"];
 }
@@ -186,7 +182,7 @@ export function proxyKey(p: { host: string; port: string }): string {
 
 /**
  * 按 host:port 去重：后出现的覆盖先出现的，位置保留首次出现处。
- * 对标 Python 逐条 add_proxy：同一批里第二次出现的 key 在库里已存在，走 UPDATE 覆盖
+ * 同一批里第二次出现的 key 在库里已存在，走 UPDATE 覆盖
  * type/username/password，库里最终只有一行、值取最后一次。
  */
 export function dedupeProxiesByKey<T extends { host: string; port: string }>(proxies: readonly T[]): T[] {

@@ -1,16 +1,15 @@
 /**
- * 替换恢复手机号（Node 重写）
- * 对标 core/stagehand_engine/operations/replace_phone.py
+ * 替换恢复手机号
  *
  * 与 replace-email 结构几乎一致，差异在 URL、按钮文案、以及验证时比对手机号后四位。
  * operation_type 固定为 "recovery"。
  *
- * 真机（2026-09-24，ixBrowser profile 7 + 真实 Google 账号）暴露、并在此修正的 Python 侧缺陷：
- *   1. Python 用的 GoogleURLs.RECOVERY_PHONE（myaccount.google.com/recovery/phone）已失效：
+ * 真机（2026-09-24，ixBrowser profile 7 + 真实 Google 账号）暴露、并在此修正的缺陷：
+ *   1. GoogleURLs.RECOVERY_PHONE（myaccount.google.com/recovery/phone）已失效：
  *      真机打开是 404 页（"404. That's an error."），完成身份验证后再访问仍是 404。
  *      这里改用同一份代码里指向该页面的 RECOVERY_PHONE_SETTINGS
- *      （myaccount.google.com/signinoptions/rescuephone）——Python 的 auto_replace_phone.py
- *      与 desktop 的 Playwright 版 auto-replace-phone.ts 用的都是这个地址。
+ *      （myaccount.google.com/signinoptions/rescuephone）——desktop 的 Playwright 版
+ *      auto-replace-phone.ts 用的就是这个地址。
  *   2. 真机上该页面会要求「请先验证您的身份」（密码 → 验证器验证码）；原实现把跳转后的
  *      accounts.google.com/v3/signin/challenge/pwd 判成「需要先登录账号」直接失败。
  *      这里新增 passReauthIfRequired 处理该验证后再继续。
@@ -24,7 +23,7 @@ import { GoogleURLs, Timeouts } from "../constants.ts";
 import { createModifyPhoneResult, type ModifyPhoneResult } from "../types.ts";
 import { generateTotp } from "../totp.ts";
 
-/** 短信验证码服务接口，对应 Python 传入的 sms_service */
+/** 短信验证码服务接口（取码实现由调用方注入） */
 export interface SmsCodeService {
   getCode(phone: string): Promise<string | null>;
 }

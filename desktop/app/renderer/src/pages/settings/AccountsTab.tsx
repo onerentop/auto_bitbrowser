@@ -1,6 +1,5 @@
 /**
- * 「账号数据」标签 —— 对标 gui/data_management/accounts_tab.py 的 AccountsTab / AccountEditDialog
- * 与 batch_import_dialog.py 的 AccountBatchImportDialog
+ * 「账号数据」标签（列表 / 增删改 / 批量导入 / 导出 / 删除）
  */
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Space, Table, Tooltip, Typography } from "antd";
@@ -35,7 +34,7 @@ import { BatchImportModal } from "./BatchImportModal.tsx";
 
 const EXPORT_FILE_NAME = "accounts_export.txt";
 
-/** 状态颜色（accounts_tab.py:252-257） */
+/** 状态颜色 */
 const STATUS_COLORS: Record<string, string> = {
   subscribed: "#4caf50",
   verified: "#2196f3",
@@ -44,7 +43,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const EMPTY_ACCOUNT: SettingsAccountInputDto = { email: "", password: "", recovery_email: "", secret_key: "" };
 
-/** 用 Blob + <a download> 触发下载（Python 是保存对话框写 txt） */
+/** 用 Blob + <a download> 触发下载（桌面端不走文件保存对话框） */
 function downloadText(fileName: string, text: string): void {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
   const a = document.createElement("a");
@@ -65,7 +64,7 @@ function isDeleteResult(v: unknown): v is DeleteAccountsResultDto {
   );
 }
 
-/** 对标 AccountEditDialog（accounts_tab.py:23-76） */
+/** 新增 / 编辑账号的表单弹窗 */
 function AccountEditModal(props: {
   editing: SettingsAccountDto | null;
   open: boolean;
@@ -85,7 +84,7 @@ function AccountEditModal(props: {
 
   const ok = async (): Promise<void> => {
     const v = form.getFieldsValue(true) as SettingsAccountInputDto;
-    // 照搬 get_data（accounts_tab.py:70-76）：密码不 strip
+    // 密码不 strip
     const data: SettingsAccountInputDto = {
       email: (v.email ?? "").trim(),
       password: v.password ?? "",
@@ -142,14 +141,14 @@ export function AccountsTab(): ReactElement {
   const [importOpen, setImportOpen] = useState(false);
   const hostReady = useHostStatus()?.state === "ready";
 
-  /** 对标 _filterTable（accounts_tab.py:202-228）：邮箱子串，不区分大小写 */
+  /** 按邮箱子串过滤（不区分大小写） */
   const keyword = search.trim().toLowerCase();
   const visible = useMemo(
     () => (keyword ? accounts.filter((a) => a.email.toLowerCase().includes(keyword)) : accounts),
     [accounts, keyword],
   );
 
-  // 隐藏行取消勾选（accounts_tab.py:215-218）
+  // 隐藏行取消勾选
   useEffect(() => {
     const visibleSet = new Set(visible.map((a) => a.email));
     setSelected((prev) => {
@@ -158,7 +157,7 @@ export function AccountsTab(): ReactElement {
     });
   }, [visible]);
 
-  /** 对标 loadData（accounts_tab.py:230-284） */
+  /** 加载列表数据 */
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -178,7 +177,7 @@ export function AccountsTab(): ReactElement {
     if (hostReady && !loaded) void load();
   }, [hostReady, loaded, load]);
 
-  // 删除任务结束后刷新列表，并给出与 Python 相同的完成提示（accounts_tab.py:389-398）
+  // 删除任务结束后刷新列表，并给出完成提示
   useEffect(
     () =>
       onTaskFinished((e) => {
@@ -199,7 +198,7 @@ export function AccountsTab(): ReactElement {
 
   const allVisibleChecked = visible.length > 0 && selectedRows.length === visible.length;
 
-  /** 对标 _toggleAllCheckboxes（accounts_tab.py:183-190）：只作用于可见行 */
+  /** 全选 / 取消全选：只作用于可见行 */
   const toggleAll = (checked: boolean): void => {
     setSelected(checked ? visible.map((a) => a.email) : []);
   };
@@ -214,7 +213,7 @@ export function AccountsTab(): ReactElement {
     setEditOpen(true);
   };
 
-  /** 对标 addAccount / editAccount（accounts_tab.py:286-341） */
+  /** 提交新增 / 编辑（新增 status=pending，编辑不改状态） */
   const submitEdit = async (data: SettingsAccountInputDto): Promise<void> => {
     try {
       if (editing) {
@@ -235,7 +234,7 @@ export function AccountsTab(): ReactElement {
     }
   };
 
-  /** 对标 deleteSelected（accounts_tab.py:343-398）：后台任务 */
+  /** 批量删除：走后台任务 */
   const deleteSelected = (): void => {
     const rows = selectedRows;
     if (rows.length === 0) {
@@ -263,7 +262,7 @@ export function AccountsTab(): ReactElement {
     });
   };
 
-  /** 对标 exportSelected（accounts_tab.py:400-450） */
+  /** 导出选中账号 */
   const exportSelected = (): void => {
     const rows = selectedRows;
     if (rows.length === 0) {

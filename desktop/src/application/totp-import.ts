@@ -1,11 +1,11 @@
 /**
- * TOTP 密钥导入的纯逻辑 —— 对标 gui/import_totp_interface.py
+ * TOTP 密钥导入的纯逻辑
  *
- *   - entriesFromUris   二维码文本 → 条目（:652-697 的 _processImages，识别部分交给渲染层）
- *   - parseTotpText     文本模式解析（:552-619 _parseTextInput）
- *   - matchTotpEntries  与数据库账号匹配（:708-751 _matchWithDatabase）
- *   - runTotpImport     导入执行（:56-196 ImportWorker.run）
- *   - importFinishedLogLines  完成日志（:928-954 _onImportFinished 的 self.log 部分）
+ *   - entriesFromUris   二维码文本 → 条目（识别部分交给渲染层）
+ *   - parseTotpText     文本模式解析
+ *   - matchTotpEntries  与数据库账号匹配
+ *   - runTotpImport     导入执行
+ *   - importFinishedLogLines  完成日志
  *
  * 不依赖 electron / 数据库连接：仓储、窗口列表、窗口更新全部注入，便于离线单测。
  */
@@ -22,7 +22,7 @@ import type {
   TotpUriItem,
 } from "../../app/shared/channels/totp.ts";
 import { extractTotpSecretsFromContents, getOtpEmail } from "../core/totp-extractor/index.ts";
-import { pyInt } from "../core/totp-extractor/py-compat.ts";
+import { toInt } from "../core/totp-extractor/compat.ts";
 
 /** 文本导入条目的 issuer / source（TextOTPAccount.issuer 默认值，:44） */
 export const TEXT_IMPORT_ISSUER = "文本导入";
@@ -34,9 +34,9 @@ function errorText(e: unknown): string {
 // ==================== 二维码文本 → 条目 ====================
 
 /**
- * 逐张图片调用 extractTotpSecretsFromContents（qr_scanner.py:212-235）。
- * uri 为 null 表示该图片没识别到二维码 → 按 Python 返回「未在图片中找到 QR 码」。
- * 有意偏差：jsQR 每张图只识别一个二维码，pyzbar 能识别多个。
+ * 逐张图片提取二维码里的 TOTP 密钥。
+ * uri 为 null 表示该图片没识别到二维码 → 返回「未在图片中找到 QR 码」。
+ * 有意偏差：jsQR 每张图只识别一个二维码，一张图里有多个码时只会取到其中一个。
  */
 export function entriesFromUris(items: readonly TotpUriItem[]): TotpParseUrisResult {
   const entries: TotpEntry[] = [];
@@ -63,14 +63,14 @@ export function entriesFromUris(items: readonly TotpUriItem[]): TotpParseUrisRes
 // ==================== 文本解析 ====================
 
 /**
- * 文本模式解析 —— 照搬 _parseTextInput（:552-609）：
- *   - 整段先 strip，再按 "\n" 分行；每行 strip，空行跳过（没有注释行的特殊处理，Python 也没有）
+ * 文本模式解析：
+ *   - 整段先 strip，再按 "\n" 分行；每行 strip，空行跳过（# 注释行不做特殊处理）
  *   - 按 "----" 拆分，少于 3 段 → 「格式错误：字段不足」
  *   - 邮箱为空或不含 @ → 「邮箱格式无效: {email}」
  *   - 密钥为空 → 「密钥为空」
  *   - 密钥转大写；邮箱原样保留（不转小写）
  *   - 错误日志最多列 5 行，超出时追加「... 等 N 行错误」
- * 文本为空时返回空结果、不写日志（Python 在界面层先拦下「请先粘贴账号信息」）。
+ * 文本为空时返回空结果、不写日志（界面层会先拦下「请先粘贴账号信息」）。
  */
 export function parseTotpText(rawText: string): TotpParseTextResult {
   const text = rawText.trim();
@@ -117,7 +117,7 @@ export function parseTotpText(rawText: string): TotpParseTextResult {
     logs.push(`  解析成功: ${email}`);
   });
 
-  // 报告错误（:602-609）
+  // 报告解析错误（最多列 5 行，超出时追加汇总行）
   if (errorLines.length > 0) {
     logs.push(`解析错误 ${errorLines.length} 行:`);
     for (const e of errorLines.slice(0, 5)) logs.push(`  第 ${e.line} 行: ${e.reason}`);
@@ -135,14 +135,14 @@ export interface MatchAccount {
   [key: string]: unknown;
 }
 
-/** 当前密钥展示（:807-817）：前 8 位 + "..."；无密钥为 "" */
+/** 当前密钥展示：前 8 位 + "..."；无密钥为 "" */
 export function secretPreview(secret: string | null | undefined): string {
   const s = secret ?? "";
   if (!s) return "";
   return s.length > 8 ? `${s.slice(0, 8)}...` : s;
 }
 
-/** 以 email 小写建索引（:714 db_email_map）；同名时后者覆盖前者，与 Python dict 推导式一致 */
+/** 以 email 小写建索引；同名时后者覆盖前者 */
 export function buildEmailMap<T extends { email: string }>(accounts: readonly T[]): Map<string, T> {
   const map = new Map<string, T>();
   for (const acc of accounts) map.set(String(acc.email).toLowerCase(), acc);
@@ -150,7 +150,7 @@ export function buildEmailMap<T extends { email: string }>(accounts: readonly T[
 }
 
 /**
- * 与数据库账号匹配 —— 照搬 _matchWithDatabase（:708-751）：
+ * 与数据库账号匹配：
  *   email 为空 / 不在库里 → no_match；库里有且 secret_key 非空 → has_secret；否则 can_import
  */
 export function matchTotpEntries(
@@ -191,9 +191,9 @@ export interface ImportAccount extends MatchAccount {
 export interface TotpImportDeps {
   /** 读取数据库当前全部账号（任务内重新匹配，保证以数据库当前状态为准） */
   getAllAccounts: () => readonly ImportAccount[];
-  /** 对标 DBManager.upsert_account；返回 false 表示写库失败 */
+  /** 写入账号字段；返回 false 表示写库失败 */
   upsertAccount: (fields: { email: string; secret_key?: string; password?: string; browser_profile_id?: string }) => boolean;
-  /** 全量窗口列表（对标 :86-102 的分页 get_profile_list(limit=100)） */
+  /** 全量窗口列表（内部分页拉取） */
   listWindows: () => Promise<ReadonlyArray<{ name?: string | null; profile_id?: number | string | null; id?: number | string | null }>>;
   /** 只写 ixBrowser 窗口的 tfa_secret（**备注不碰**），返回是否成功 */
   updateProfile: (profileId: number, fields: { tfa_secret: string }) => Promise<boolean>;
@@ -204,23 +204,23 @@ export interface TotpImportDeps {
 }
 
 /**
- * 导入执行 —— 逐步照搬 ImportWorker.run（:71-196）：
- *   1. 分页取 ixBrowser 窗口，建立 name.lower() → profile_id 映射（:83-106）
- *   2. upsert secret_key；仅文本导入且带密码时同时更新密码（:127-135）
- *   3. 账号没有 browser_profile_id 时按窗口名（= 邮箱）自动绑定（:143-153）
- *   4. 更新窗口的 tfa_secret（:156-175）；**不再写备注** —— 备注是用户自己的笔记区，自动化写入会覆盖它
+ * 导入执行：
+ *   1. 分页取 ixBrowser 窗口，建立 name.lower() → profile_id 映射
+ *   2. 写入 secret_key；仅文本导入且带密码时同时更新密码
+ *   3. 账号没有 browser_profile_id 时按窗口名（= 邮箱）自动绑定
+ *   4. 更新窗口的 tfa_secret；**不再写备注** —— 备注是用户自己的笔记区，自动化写入会覆盖它
  *
- * 与 Python 的差异（均为有意）：
+ * 设计取舍：
  *   - 数据安全：界面只传 {email, secret, kind, password?}，任务内按数据库当前状态重新匹配；
- *     库里已不存在的账号记为失败「数据库中未找到该账号」（Python 用的是界面匹配时的快照）
- *   - upsert_account 返回 false 时计为失败 / 警告（Python 忽略返回值，照样计成功）
- *   - 支持停止：Python 没有停止按钮，这里在条目之间检查全局任务坞的停止请求；
+ *     库里已不存在的账号记为失败「数据库中未找到该账号」
+ *   - upsert 返回 false 时计为失败 / 警告（忽略返回值会让写库失败被静默计成成功）
+ *   - 支持停止：在条目之间检查全局任务坞的停止请求；
  *     停止时剩余条目不处理，计入 skipped_count
  */
 export async function runTotpImport(items: readonly TotpImportItem[], deps: TotpImportDeps): Promise<TotpImportResult> {
   const { log } = deps;
 
-  // 1. 获取所有 ixBrowser 窗口（:82-106）
+  // 1. 获取所有 ixBrowser 窗口
   const profileMap = new Map<string, number | string>();
   try {
     log("正在获取 ixBrowser 窗口列表...");
@@ -248,7 +248,7 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
   let skipped = 0;
 
   for (let i = 0; i < items.length; i++) {
-    // Python 无停止按钮；这里在条目之间响应全局任务坞的停止请求
+    // 在条目之间响应全局任务坞的停止请求
     if (deps.shouldStop?.()) {
       skipped = items.length - i;
       log(`已停止，剩余 ${skipped} 个账号未处理`);
@@ -267,13 +267,13 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
 
       // 准备更新参数（:127）
       const update: { email: string; secret_key: string; password?: string } = { email, secret_key: secret };
-      // 如果是文本导入且有密码，同时更新密码（:130-132）
+      // 如果是文本导入且有密码，同时更新密码
       if (req.kind === "text" && req.password) {
         update.password = req.password;
         passwordCount += 1;
       }
 
-      // 更新数据库（:135-137）
+      // 更新数据库
       if (!deps.upsertAccount(update)) throw new Error("数据库写入失败");
       log(`  [数据库] 密钥已写入: ${email}`);
       successCount += 1;
@@ -281,7 +281,7 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
       // 获取或查找 profile_id（:140）
       let profileId: number | string | null | undefined = dbAccount.browser_profile_id;
 
-      // 如果没有绑定窗口，尝试通过邮箱名称匹配（:143-153）
+      // 如果没有绑定窗口，尝试通过邮箱名称匹配
       if (!profileId) {
         const matchedPid = profileMap.get(email.toLowerCase());
         if (matchedPid) {
@@ -306,7 +306,7 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
       if (profileId) {
         try {
           log("  [窗口] 正在写入 2FA 密钥...");
-          const pid = typeof profileId === "number" ? profileId : pyInt(profileId);
+          const pid = typeof profileId === "number" ? profileId : toInt(profileId);
           if (await deps.updateProfile(pid, { tfa_secret: secret })) {
             log("  [窗口] 2FA 密钥写入成功");
             ixUpdateCount += 1;
@@ -322,7 +322,7 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
         }
       }
 
-      // 记录最终结果（:178-184）
+      // 记录最终结果
       if (hasWarning) {
         log(`⚠ 完成: ${email} (有警告)`);
         deps.item?.(email, "成功", warningMsg);
@@ -354,7 +354,7 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
   };
 }
 
-/** 完成日志 —— 照搬 _onImportFinished 的 self.log 部分（:937-954） */
+/** 完成日志：成功 / 失败 / 跳过计数与明细 */
 export function importFinishedLogLines(r: TotpImportResult): string[] {
   const lines: string[] = [];
   lines.push("=".repeat(40));

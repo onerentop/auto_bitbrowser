@@ -1,12 +1,12 @@
 /**
  * 首页窗口树的纯函数 —— 后端（构树）与渲染层（过滤 / 勾选）共用
  *
- * 照搬 gui/home_interface.py：
- *   - buildGroupOptions   ← refreshGroupList（:227-245）
- *   - buildBrowserTree    ← _populateBrowserTree（:295-367）
- *   - filterBrowserTree   ← _filterBrowserTree（:369-399）
- *   - selectAllVisible    ← _toggleSelectAll（:401-411）
- *   - selectedProfileIds  ← _getSelectedBrowserIds（:413-425）
+ * 包含：
+ *   - buildGroupOptions：构造分组下拉选项
+ *   - buildBrowserTree：构造窗口树
+ *   - filterBrowserTree：按关键词过滤窗口树
+ *   - selectAllVisible：全选当前可见项
+ *   - selectedProfileIds：取得勾选的窗口 ID
  * 纯 TS，不依赖 node / DOM / electron，便于单测与渲染层直接引用。
  */
 import type {
@@ -21,12 +21,12 @@ export const DEFAULT_GROUP_LABEL = "默认分组";
 export const UNGROUPED_NAME = "未分组";
 
 /**
- * Python str.isprintable() 为 False 的字符：
+ * 被视为不可打印的字符：
  * Cc/Cf/Cs/Co/Cn（统称 \p{C}）、Zl、Zp，以及除 ASCII 空格外的 Zs。
  */
 const NON_PRINTABLE = /[\p{C}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu;
 
-/** 对标 clean_text（:297）：去掉不可打印字符；空值返回 "" */
+/** 去掉不可打印字符；空值返回 "" */
 export function cleanText(text: unknown): string {
   if (text === null || text === undefined || text === "" || text === 0 || text === false) return "";
   return String(text).replace(NON_PRINTABLE, "");
@@ -55,7 +55,7 @@ export function defaultGroupOptions(): HomeGroupOption[] {
 }
 
 /**
- * 目标分组下拉（:231-242）：
+ * 目标分组下拉：
  *   - 结果里没有 id=1 时，最前面补一项「默认分组」
  *   - 每项显示 `{title} (ID: {gid})`
  */
@@ -67,7 +67,7 @@ export function buildGroupOptions(groups: readonly unknown[]): HomeGroupOption[]
   }
   for (const g of records) {
     const gid = asGroupId(g["id"]);
-    if (gid === null) continue; // Python 会把 userData=None 塞进下拉，这里直接跳过（选了也无法用）
+    if (gid === null) continue; // 分组 ID 缺失时直接跳过（选了也无法用）
     options.push({ id: gid, label: `${groupTitle(g["title"] ?? "", gid)} (ID: ${gid})` });
   }
   return options;
@@ -85,7 +85,7 @@ export interface BuiltBrowserTree {
 }
 
 /**
- * 构建分组树（:302-361）：
+ * 构建分组树：
  *   - 分组名优先取 group-list；没有的分组用窗口自带的 group_name；都不行用 `分组 {gid}`
  *   - group_id 缺失 / 0 归到「未分组」（gid=0，且 0 的名字固定为「未分组」）
  *   - group-list 里的分组即使没有窗口也保留（数量 0），与原版一致
@@ -113,7 +113,7 @@ export function buildBrowserTree(groups: readonly unknown[], browsers: readonly 
   for (const raw of browsers) {
     const b = asRecord(raw);
     if (!b) continue;
-    // Python: b.get('group_id', 0) or 0
+    // group_id 缺失或非数字时按 0（未分组）处理
     const gid = asGroupId(b["group_id"]) ?? 0;
     let list = grouped.get(gid);
     if (!list) {
@@ -173,7 +173,7 @@ export interface FilteredTree {
 }
 
 /**
- * 搜索过滤（:369-395）：
+ * 搜索过滤：
  *   - 搜索词 lower + strip；只匹配名称与备注，不区分大小写
  *   - 被隐藏的窗口取消勾选
  *   - 搜索词非空且分组内无可见窗口 → 整组隐藏；搜索词为空时全部可见（包括空分组）
@@ -199,7 +199,7 @@ export function filterBrowserTree(
   return { groups: visible, checkedKeys: keep };
 }
 
-/** 全选 / 取消全选（:401-411）：只作用于可见窗口 */
+/** 全选 / 取消全选：只作用于可见窗口 */
 export function selectAllVisible(
   visibleGroups: readonly HomeGroupNode[],
   checkedKeys: readonly string[],
@@ -211,7 +211,7 @@ export function selectAllVisible(
   return checkedKeys.filter((k) => !drop.has(k));
 }
 
-/** 选中的窗口 ID（:413-425）：只取可见且勾选的窗口；ID 无效的跳过，去重保序 */
+/** 选中的窗口 ID：只取可见且勾选的窗口；ID 无效的跳过，去重保序 */
 export function selectedProfileIds(
   visibleGroups: readonly HomeGroupNode[],
   checkedKeys: readonly string[],

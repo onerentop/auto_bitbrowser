@@ -1,5 +1,5 @@
 /**
- * Electron 主进程入口 —— 薄壳（对标 PI-Desktop）
+ * Electron 主进程入口 —— 薄壳（-Desktop）
  *
  * 只做四件事：
  *   1. 生命周期与单实例锁

@@ -1,5 +1,5 @@
 /**
- * 任务历史 handler —— 本地新增能力（Python 侧没有）
+ * 任务历史 handler（本地新增能力）
  *
  * 只读：列表、逐条目、导出 CSV。写入由 TaskRunner 收尾时统一落库（见 host/context.ts 的装配）。
  */

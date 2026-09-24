@@ -1,7 +1,7 @@
 /**
  * 后端进程入口 —— 由主进程用 Electron `utilityProcess.fork()` 拉起
  *
- * 对标 PI-Desktop 的 out/main/plugin-host-process.js：本文件只负责收发消息，
+ * -Desktop 的 out/main/plugin-host-process.js：本文件只负责收发消息 
  * 业务全部在分发表（dispatch.ts）与各 handler 里。
  *
  * 协议（见 app/shared/ipc.ts）：
@@ -59,7 +59,7 @@ const ctx = createHostContext({
 
 const dispatch = createDispatcher(createHostHandlers(ctx));
 
-// Stagehand 引擎在调用方未传 model/key 时回落到这份配置（对标 Python get_stagehand_config 的 ConfigManager 来源）
+// Stagehand 引擎在调用方未传 model/key 时回落到这份配置（取自 ConfigManager）
 registerStagehandConfigSource(() => ctx.config());
 
 port.on("message", (event) => {

@@ -1,5 +1,5 @@
 /**
- * 真机探针：直连本地 ixBrowser :53200，验证 Node 客户端与 Python 行为一致。
+ * 真机探针：直连本地 ixBrowser :53200，校验客户端解析结果与本地服务返回一致。
  * 只做只读调用（profile-list / group-list），不打开也不创建窗口。
  *
  * 跑法：cd desktop && node --experimental-strip-types src/ixbrowser/probe.ts
@@ -103,5 +103,5 @@ line(`  遍历 ${page} 页，累计 ${all} 个窗口（服务端 total=${client.
 result["paged_total"] = all;
 
 line("\n" + "=".repeat(58));
-line("JSON 结果（供与 Python 对拍）：");
+line("JSON 结果：");
 line(JSON.stringify(result));

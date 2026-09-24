@@ -1,7 +1,7 @@
 /**
- * TOTP 密钥提取模块统一入口 —— 对标 core/totp_extractor/__init__.py
+ * TOTP 密钥提取模块统一入口
  *
- * 二维码识别本身（pyzbar）由渲染层 jsQR 完成；这里只负责「拿到二维码文本之后」的部分。
+ * 二维码识别本身（图片 → 二维码文本）由渲染层 jsQR 完成；这里只负责「拿到二维码文本之后」的部分。
  */
 import { parseOtpauthMigrationUri, type OTPAccount } from "./migration-decoder.ts";
 import { parseStandardOtpauthUri } from "./otpauth-uri.ts";
@@ -17,7 +17,7 @@ export {
 } from "./migration-decoder.ts";
 export { parseStandardOtpauthUri } from "./otpauth-uri.ts";
 
-/** 图片里没识别到二维码时的错误文案（qr_scanner.py:212-213） */
+/** 图片里没识别到二维码时的错误文案 */
 export const NO_QR_FOUND = "未在图片中找到 QR 码";
 
 export interface ExtractResult {
@@ -30,8 +30,8 @@ function errorText(e: unknown): string {
 }
 
 /**
- * 从二维码文本列表提取 TOTP 账号 —— 照搬 extract_totp_secrets_from_image 取到 qr_contents 之后的逻辑
- * （core/totp_extractor/qr_scanner.py:212-235）。
+ * 从二维码文本列表提取 TOTP 账号：
+ * 逐个解析二维码文本（otpauth-migration:// 或 otpauth://），单条失败不影响其余。
  */
 export function extractTotpSecretsFromContents(contents: readonly string[]): ExtractResult {
   if (contents.length === 0) return { accounts: [], errors: [NO_QR_FOUND] };
@@ -48,7 +48,7 @@ export function extractTotpSecretsFromContents(contents: readonly string[]): Ext
         const account = parseStandardOtpauthUri(content);
         if (account) accounts.push(account);
       } else {
-        // Python 切片按码点计：content[:50]
+        // 按码点截断到 50 个字符
         errors.push(`未知的 QR 码格式: ${Array.from(content).slice(0, 50).join("")}...`);
       }
     } catch (e) {

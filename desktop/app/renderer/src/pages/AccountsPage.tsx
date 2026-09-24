@@ -1,14 +1,14 @@
 /**
- * 账号管理页 —— 对标 gui/account_manager_interface.py（AccountManagerInterface）
+ * 账号管理页（账号列表 / 绑定解绑 / 批量任务）
  *
- * 布局用 antd 重新组织，功能与文案照搬 Python：
- *   - 两行工具栏（:170-310）、全选 + 已选计数（:121-134）、表格（:312-365）、底部统计（:486）
- *   - 筛选在前端过滤（:591-636），勾选只对当前筛选可见的行生效（:715-735）
- *   - 右键菜单（:638-711）
+ * 布局用 antd 重新组织，功能与文案沿用原有定义：
+ *   - 两行工具栏、全选 + 已选计数、表格、底部统计
+ *   - 筛选在前端过滤，勾选只对当前筛选可见的行生效
+ *   - 右键菜单
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
- *   - 任务运行中，除「停止」外所有操作禁用（:1445-1460）；任务结束后刷新列表
- *   - 「一键加入家庭组」与右键「加入家庭组」：用户确认不需要，桌面版不提供（Python 侧保留）
- *   - 按用户要求删除（Python 侧保留）：OAuth（批量 / 单个 / 一键登录+OAuth）与「自动绑定代理」、检测 Pro、
+ *   - 任务运行中，除「停止」外所有操作禁用；任务结束后刷新列表
+ *   - 「一键加入家庭组」与右键「加入家庭组」：用户确认不需要，桌面版不提供
+ *   - 按用户要求删除：OAuth（批量 / 单个 / 一键登录+OAuth）与「自动绑定代理」、检测 Pro、
  *     刷新家庭组、开启共享、检测 403、批量解锁 403，以及 Pro / Sub2API / 解锁状态三列和对应筛选项
  * 日志区与进度条由全局 TaskDock 承担。
  */
@@ -43,7 +43,7 @@ import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
 import { FILTER_OPTIONS, loginView, matchesFilter, statsText, type FilterOption } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
 
-/** 本页启动的任务类型：结束后刷新列表（对标各 finished 回调里的 _loadData） */
+/** 本页启动的任务类型：结束后刷新列表 */
 // 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error）
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete", "health_check"]);
 
@@ -77,7 +77,7 @@ export function AccountsPage(): ReactElement {
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const closeBind = useCallback(() => setBindEmail(null), []);
 
-  // ---------- 数据加载（对标 _loadData，:367） ----------
+  // ---------- 数据加载 ----------
 
   // 自增序号：只采纳最后一次请求的结果（连续刷新时旧请求晚到不会覆盖新数据）
   const loadSeq = useRef(0);
@@ -89,7 +89,7 @@ export function AccountsPage(): ReactElement {
       if (seq !== loadSeq.current) return;
       if (r.windowError) logLocal(`获取窗口列表失败: ${r.windowError}`);
       setRows(r.rows);
-      // 表格重建后勾选全部清空（:494-501）
+      // 表格重建后勾选全部清空
       setSelected(new Set());
       logLocal(`加载完成，共 ${r.rows.length} 个账号`);
     } catch (e) {
@@ -119,7 +119,7 @@ export function AccountsPage(): ReactElement {
       onTaskFinished((e) => {
         if (!ACCOUNT_TASK_TYPES.has(e.type)) return;
         void load();
-        // 对标各 finished 回调里的 _showInfo；failed / stopped 由全局任务坞提示
+        // 任务成功后弹提示；failed / stopped 由全局任务坞提示
         const notice = finishedNotice(e);
         if (notice) notification.info({ message: notice.title, description: <Multiline text={notice.message} /> });
       }),
@@ -129,7 +129,7 @@ export function AccountsPage(): ReactElement {
   // ---------- 筛选与勾选 ----------
 
   const visibleRows = useMemo(() => rows.filter((r) => matchesFilter(r, filter)), [rows, filter]);
-  /** 只算当前可见行里的勾选（对标 _getSelectedRows 跳过隐藏行） */
+  /** 只算当前可见行里的勾选（跳过隐藏行） */
   const checkedRows = useMemo(() => visibleRows.filter((r) => selected.has(r.email)), [visibleRows, selected]);
   const allVisibleChecked = visibleRows.length > 0 && checkedRows.length === visibleRows.length;
 
@@ -202,7 +202,7 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 单条操作（右键菜单） ----------
 
-  /** 对标 _unbindBrowser（:1600） */
+  /** 解绑窗口 */
   const unbind = async (row: AccountListRow): Promise<void> => {
     if (!row.browser_profile_id) {
       logLocal(`账号 ${row.email} 未绑定窗口`);
@@ -223,7 +223,7 @@ export function AccountsPage(): ReactElement {
     }
   };
 
-  /** 对标 _deleteSingleAccount（:1631） */
+  /** 删除单个账号 */
   const deleteOne = async (row: AccountListRow): Promise<void> => {
     const ok = await confirm({
       title: "确认删除",
@@ -249,7 +249,7 @@ export function AccountsPage(): ReactElement {
         ]
       : [{ key: "bind", label: "绑定窗口", disabled: busy }];
     items.push({ type: "divider" }, { key: "login", label: "登录", disabled: busy });
-    // Python :685 在此处还有「加入家庭组」—— 用户确认不需要该功能，桌面版不提供
+    // 这里原本还有「加入家庭组」—— 用户确认不需要该功能，桌面版不提供
     items.push(
       { type: "divider" },
       { key: "refresh", label: "刷新" },
@@ -285,7 +285,7 @@ export function AccountsPage(): ReactElement {
     }
   };
 
-  // ---------- 表格列（:316-356） ----------
+  // ---------- 表格列 ----------
 
   const tag = (text: string, color: string, tooltip?: string | null): ReactNode => {
     const t = <Tag color={color}>{text}</Tag>;
@@ -311,7 +311,7 @@ export function AccountsPage(): ReactElement {
       key: "action",
       width: 100,
       fixed: "right",
-      // 对标 :475-480：未登录显示「登录」；已登录原本显示「OAuth」，OAuth 已删除，这里留空
+      // 未登录显示「登录」；已登录原本显示「OAuth」，OAuth 已删除，这里留空
       render: (_, r) =>
         r.login_status !== "logged_in" ? (
           <Button

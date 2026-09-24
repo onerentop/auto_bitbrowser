@@ -1,43 +1,33 @@
 /**
- * 智能重试框架（Node 重写）
- * 对标 core/retry_helper.py（292 行主体 + 测试段）
+ * 智能重试框架
  *
- * 移植差异（逐条说明，改动仅限语言层面，参数/文案/算法一律照搬）：
- *   1. `RetryHelper.execute_sync` **不移植**：Node 没有同步阻塞 sleep 的等价物
+ * 设计取舍（改动仅限语言层面，参数/文案/算法一律保留）：
+ *   1. 只提供异步重试 `executeAsync`：Node 没有同步阻塞 sleep 的等价物
  *      （`Atomics.wait` 只能在 worker 里用），同步重试语义无法复刻。
  *      需要重试的地方一律走 `executeAsync`。
- *   2. `_is_retryable` 的语义差（重点）：
- *      Python 先按异常**类型**判定 `isinstance(e, RETRYABLE_EXCEPTIONS)`，
- *      类型清单为：TimeoutError / ConnectionError / ConnectionResetError / OSError
- *      （注意 ConnectionError、ConnectionResetError 都是 OSError 的子类，
- *        所以实际等价于「TimeoutError 或任意 OSError」）。
- *      JS 没有对应的异常类层次（网络错误统统是 `Error`，靠 `code` 字段区分），
- *      因此改成「可配置判定函数 + 默认实现」：
+ *   2. `isRetryable` 判定（重点）：JS 没有异常类层次（网络错误统统是 `Error`，
+ *      靠 `code` 字段区分），因此改成「可配置判定函数 + 默认实现」：
  *        默认实现 `defaultIsRetryable` 依次检查
- *          a. `error.code` ∈ RETRYABLE_ERROR_CODES（对应 Python 的 OSError 家族）
- *          b. `error.name` ∈ RETRYABLE_ERROR_NAMES（对应 TimeoutError/ConnectionError…）
- *          c. 错误消息关键词命中 NETWORK_KEYWORDS —— 这一条与 Python 第二段判定**逐字相同**
- *      构造参数 `isRetryable` 对应 Python 的 `retryable_exceptions`，传入即完全覆盖默认实现。
- *   3. `with_retry` / `with_retry_async` 两个装饰器 → 高阶函数 `withRetry(fn, options)`：
+ *          a. `error.code` ∈ RETRYABLE_ERROR_CODES（连接类错误码）
+ *          b. `error.name` ∈ RETRYABLE_ERROR_NAMES（TimeoutError / ConnectionError…）
+ *          c. 错误消息关键词命中 NETWORK_KEYWORDS
+ *      构造参数 `isRetryable` 即判定函数，传入即完全覆盖默认实现。
+ *   3. `withRetry(fn, options)` 是高阶函数，不是装饰器：
  *      TS 的 decorator 只能修饰 class 成员，修饰不了自由函数。
- *      两个 Python 装饰器在这里合并为一个（因为 execute_sync 没移植），
- *      `withRetryAsync` 作为同义导出保留，方便逐行对照 Python 调用点。
- *   4. `FailedTaskQueue` 由「类方法 + 类级状态」改为可实例化的类 + 默认单例
- *      `failedTaskQueue`，并导出与 Python 同名（camelCase 化）的模块级便捷函数委托给单例。
- *      Python 的 `threading.Lock` 无对应物（Node 单线程 + 这里全是同步操作），已省略。
- *      Python 在模块末尾 `FailedTaskQueue.load()` 自动加载；TS **不做 import 期副作用**，
- *      需要时显式调用 `failedTaskQueue.load()`。
- *   5. `print(...)` / 日志 → 注入的 `LogFn`（默认 `noopLog`），文案逐字保留。
- *      注意 Python 里 `RetryHelper.log_callback` 默认是 `print`（会打印到控制台），
- *      TS 默认静默；FailedTaskQueue 的 save/load 失败提示同理。
- *   6. `asyncio.sleep(delay)` → 可注入的 `sleepImpl(ms)`（默认 setTimeout），
- *      单测可传假 sleep 避免真等。**Python 的延迟单位是秒，sleepImpl 参数是毫秒**
+ *      `withRetryAsync` 作为同义导出保留。
+ *   4. `FailedTaskQueue` 是可实例化的类 + 默认单例 `failedTaskQueue`，
+ *      并导出模块级便捷函数委托给单例。
+ *      无锁：Node 单线程，且这里全是同步操作。
+ *      不在 import 期自动加载队列，需要时显式调用 `failedTaskQueue.load()`。
+ *   5. 日志 → 注入的 `LogFn`，默认 `noopLog`（静默），文案逐字保留。
+ *   6. `sleep(delay)` → 可注入的 `sleepImpl(ms)`（默认 setTimeout），
+ *      单测可传假 sleep 避免真等。**延迟单位是秒，sleepImpl 参数是毫秒**
  *      （与 engine/playwright-compat.ts 的约定一致），转换在调用点 `delay * 1000`。
  *   7. `LogFn` / `noopLog` 在本文件内声明，避免 core 层依赖上层模块。
  *
- * 保留的 Python 行为（看着可疑但没改）：
- *   - `_calculate_delay` **没有抖动（jitter）**，就是纯指数退避 + 上限截断。
- *   - `execute_async` 失败时返回的是**错误消息字符串**而不是错误对象。
+ * 已知行为（看着可疑但没改）：
+ *   - `calculateDelay` **没有抖动（jitter）**，就是纯指数退避 + 上限截断。
+ *   - `executeAsync` 失败时返回的是**错误消息字符串**而不是错误对象。
  *   - `FailedTaskQueue.add` 命中已有任务时只 +1 重试次数并刷新时间，不追加新任务。
  *   - `FailedTaskQueue.load` 在文件不存在时**保持现有内存状态不变**（不清空）。
  */
@@ -48,7 +38,7 @@ import { fileURLToPath } from "node:url";
 
 // ==================== 日志与 sleep 注入 ====================
 
-/** 日志回调（对应 Python 的 log_callback / print） */
+/** 日志回调 */
 export type LogFn = (message: string) => void;
 
 /** 默认静默日志 */
@@ -62,24 +52,23 @@ const defaultSleep: SleepFn = (ms) => new Promise<void>((r) => setTimeout(r, ms)
 // ==================== 基础路径 ====================
 
 /**
- * 对应 Python 的 get_base_path()：
- *   打包态取 exe 目录，否则取 core/ 的上一级 —— 即仓库根。
+ * 基础路径：打包态取 exe 目录，否则取仓库根。
  * Node 侧固定按源码位置推导：desktop/src/core → 上三级 = 仓库根。
  */
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const BASE_PATH = path.resolve(HERE, "..", "..", "..");
 
-/** 与 Python 的 FailedTaskQueue.FAILED_TASKS_FILE 同名同位置 */
+/** 失败任务队列的持久化文件（仓库根 / failed_tasks.json） */
 export const FAILED_TASKS_FILE = path.join(BASE_PATH, "failed_tasks.json");
 
 // ==================== 重试判定 ====================
 
-/** 可重试判定函数（对应 Python 的 retryable_exceptions 元组） */
+/** 可重试判定函数 */
 export type RetryPredicate = (error: unknown) => boolean;
 
 /**
- * 对应 Python `_is_retryable` 第二段：错误消息里的网络关键词。
- * 关键词清单与 Python 逐字一致，顺序不动。
+ * 错误消息里的网络关键词：命中即视为可重试。
+ * 清单顺序不动。
  */
 export const NETWORK_KEYWORDS = [
   "timeout",
@@ -90,8 +79,7 @@ export const NETWORK_KEYWORDS = [
 ] as const;
 
 /**
- * 对应 Python 的 OSError 家族（含 ConnectionError / ConnectionResetError）。
- * Node 的系统调用错误带 `code` 字段，用它替代 isinstance 判定。
+ * 可重试的错误码：Node 的系统调用错误带 `code` 字段（连接重置、超时、DNS 失败等）。
  */
 export const RETRYABLE_ERROR_CODES = [
   "ETIMEDOUT",
@@ -113,7 +101,7 @@ export const RETRYABLE_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
-/** 对应 Python 的 TimeoutError / ConnectionError / ConnectionResetError 类名 */
+/** 可重试的错误类名（含 AbortError 等） */
 export const RETRYABLE_ERROR_NAMES = [
   "TimeoutError",
   "ConnectionError",
@@ -121,7 +109,7 @@ export const RETRYABLE_ERROR_NAMES = [
   "AbortError",
 ] as const;
 
-/** 取错误文本：对应 Python 的 str(exception)（只有消息，不含类名） */
+/** 取错误文本（只有消息，不含类名） */
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -151,8 +139,7 @@ function errorName(error: unknown): string {
 }
 
 /**
- * 默认可重试判定（对应 Python `_is_retryable` 的完整逻辑）。
- * a/b 两段替代 isinstance 检查，c 段与 Python 逐字一致。
+ * 默认可重试判定：先看错误码，再看错误类名，最后看消息关键词。
  */
 export function defaultIsRetryable(error: unknown): boolean {
   const code = errorCode(error);
@@ -167,7 +154,7 @@ export function defaultIsRetryable(error: unknown): boolean {
 
 // ==================== RetryHelper ====================
 
-/** Python `RetryHelper.__init__` 的默认值，单独导出便于对拍 */
+/** 默认最大重试次数，单独导出便于测试覆盖 */
 export const DEFAULT_MAX_RETRIES = 3;
 /** 单位：秒 */
 export const DEFAULT_BASE_DELAY = 2.0;
@@ -184,16 +171,16 @@ export interface RetryHelperOptions {
   backoffFactor?: number;
   /** 最大延迟，单位秒 */
   maxDelay?: number;
-  /** 可重试判定，对应 Python 的 retryable_exceptions；传入即完全覆盖默认实现 */
+  /** 可重试判定函数；传入即完全覆盖默认实现 */
   isRetryable?: RetryPredicate;
-  /** 日志回调，对应 Python 的 log_callback（Python 默认 print，这里默认静默） */
+  /** 日志回调（默认静默） */
   logCallback?: LogFn;
   /** sleep 实现（毫秒），测试可注入 */
   sleepImpl?: SleepFn;
 }
 
 /**
- * 执行结果，对应 Python 的 Tuple[bool, Any]：
+ * 执行结果：
  *   成功 → [true, result]；失败 → [false, errorMessage]
  */
 export type RetryOutcome<T> =
@@ -201,8 +188,7 @@ export type RetryOutcome<T> =
   | readonly [success: false, error: string];
 
 /**
- * 重试助手
- * 对应 Python 的 RetryHelper（同步重试未移植，见文件头说明）
+ * 重试助手（只支持异步重试，见文件头说明）
  */
 export class RetryHelper {
   readonly maxRetries: number;
@@ -226,7 +212,7 @@ export class RetryHelper {
 
   /**
    * 计算延迟（指数退避），单位秒。
-   * 对应 Python `_calculate_delay`（Python 是下划线私有，这里公开以便单测对拍）。
+   * 公开以便单测直接验证。
    * 公式：min(baseDelay * backoffFactor ** attempt, maxDelay)，**无抖动**。
    */
   calculateDelay(attempt: number): number {
@@ -234,15 +220,14 @@ export class RetryHelper {
     return Math.min(delay, this.maxDelay);
   }
 
-  /** 判断错误是否可重试。对应 Python `_is_retryable` */
+  /** 判断错误是否可重试 */
   isRetryable(error: unknown): boolean {
     return this.retryPredicate(error);
   }
 
   /**
-   * 执行函数并自动重试。对应 Python `execute_async`。
-   * Python 用 `asyncio.iscoroutinefunction` 区分同步/异步函数；
-   * TS 里 `await` 对两者都成立，因此不需要分支。
+   * 执行函数并自动重试。
+   * `await` 对同步函数与异步函数都成立，因此不需要区分两者。
    */
   async executeAsync<A extends unknown[], R>(
     func: (...args: A) => R | Promise<R>,
@@ -272,8 +257,7 @@ export class RetryHelper {
       }
     }
 
-    // 对应 Python: str(last_exception) if last_exception else "未知错误"
-    // （Python 里异常对象恒为真值，只有一次都没执行时才会走 "未知错误"）
+    // 一次都没执行过时（lastError 为 undefined）走 "未知错误"
     const errMsg = hasError ? errorMessage(lastError) : "未知错误";
     return [false, errMsg] as const;
   }
@@ -281,7 +265,7 @@ export class RetryHelper {
 
 // ==================== FailedTaskQueue ====================
 
-/** 失败任务记录。字段名保持 snake_case，与 Python 写出的 JSON 完全一致 */
+/** 失败任务记录。字段名保持 snake_case（与写出的 JSON 完全一致） */
 export interface FailedTask {
   id: string;
   type: string;
@@ -290,7 +274,7 @@ export interface FailedTask {
   retry_count: number;
 }
 
-/** 与 Python `time.strftime("%Y-%m-%d %H:%M:%S")` 等价（本地时区） */
+/** 格式化本地时间戳：YYYY-MM-DD HH:MM:SS */
 function formatTimestamp(d: Date = new Date()): string {
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   return (
@@ -313,17 +297,16 @@ export function createFailedTask(
 }
 
 export interface FailedTaskQueueOptions {
-  /** 持久化文件路径，默认与 Python 一致（仓库根 / failed_tasks.json） */
+  /** 持久化文件路径，默认仓库根 / failed_tasks.json */
   filePath?: string;
-  /** 日志回调（Python 用 print） */
+  /** 日志回调 */
   logCallback?: LogFn;
   /** 时间戳生成，测试可注入 */
   now?: () => Date;
 }
 
 /**
- * 失败任务队列
- * 对应 Python 的 FailedTaskQueue（类方法 + 类级状态 → 实例 + 默认单例）
+ * 失败任务队列（实例 + 默认单例）
  */
 export class FailedTaskQueue {
   readonly filePath: string;
@@ -369,7 +352,7 @@ export class FailedTaskQueue {
     );
   }
 
-  /** 获取所有失败任务（返回浅拷贝数组，与 Python 的 .copy() / 列表推导一致） */
+  /** 获取所有失败任务（返回浅拷贝数组，改动不影响内部状态） */
   getAll(taskType: string | null = null): FailedTask[] {
     if (taskType) return this.tasks.filter((t) => t.type === taskType);
     return [...this.tasks];
@@ -394,7 +377,7 @@ export class FailedTaskQueue {
     }
   }
 
-  /** 保存到文件（对应 json.dump(..., ensure_ascii=False, indent=2)，无结尾换行） */
+  /** 保存到文件（JSON，2 空格缩进，无结尾换行） */
   save(): void {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.tasks, null, 2), "utf-8");
@@ -405,9 +388,8 @@ export class FailedTaskQueue {
 
   /**
    * 从文件加载。
-   * 文件不存在 → 保持现状不变（与 Python 一致）；读/解析失败 → 清空为 []。
-   * 差异：Python 不校验 JSON 顶层类型（读到 dict 也会直接赋值），
-   * TS 类型上不允许，非数组按「加载失败」处理并清空。
+   * 文件不存在 → 保持现状不变；读/解析失败 → 清空为 []。
+   * 非数组的顶层值按「加载失败」处理并清空（TS 类型上不允许非数组）。
    */
   load(): void {
     if (!fs.existsSync(this.filePath)) return;
@@ -424,13 +406,13 @@ export class FailedTaskQueue {
 }
 
 /**
- * 默认单例，对应 Python 的类级状态。
- * 注意：Python 在模块末尾会自动 `FailedTaskQueue.load()`，TS 不做 import 期副作用，
- * 需要恢复历史失败任务时请显式调用 `failedTaskQueue.load()`。
+ * 默认单例。
+ * 注意：这里不在 import 期自动加载队列，需要恢复历史失败任务时请显式调用
+ * `failedTaskQueue.load()`。
  */
 export const failedTaskQueue = new FailedTaskQueue();
 
-// —— 与 Python 类方法同名（camelCase 化）的模块级便捷函数，全部委托给单例 ——
+// —— 模块级便捷函数（camelCase 化），全部委托给单例 ——
 
 /** 对应 FailedTaskQueue.add */
 export function add(
@@ -476,13 +458,13 @@ export function load(): void {
   failedTaskQueue.load();
 }
 
-// ==================== withRetry（对应两个装饰器） ====================
+// ==================== withRetry（重试高阶函数） ====================
 
 export interface WithRetryOptions {
   maxRetries?: number;
   baseDelay?: number;
   backoffFactor?: number;
-  /** 以下三项是 Python 装饰器没有暴露的，TS 侧为可测性补上 */
+  /** 以下三项为可测性补上 */
   maxDelay?: number;
   isRetryable?: RetryPredicate;
   logCallback?: LogFn;
@@ -490,15 +472,13 @@ export interface WithRetryOptions {
 }
 
 /**
- * 重试高阶函数，对应 Python 的 @with_retry / @with_retry_async。
- * 差异：TS 的 decorator 修饰不了自由函数，因此改为「包一层返回新函数」：
+ * 重试高阶函数（包一层返回新函数 —— TS 的 decorator 修饰不了自由函数）：
  *
  *   const safeFetch = withRetry(fetchSomething, { maxRetries: 3 });
  *   const value = await safeFetch(arg);
  *
- * 行为对齐 Python：成功返回结果，重试用尽后 `throw new Error(错误消息)`
- * （Python 是 `raise Exception(result)`，result 即错误消息字符串）。
- * 包装后的函数**恒为 async**（Python 的同步版依赖 execute_sync，未移植）。
+ * 行为：成功返回结果，重试用尽后 `throw new Error(错误消息)`。
+ * 包装后的函数**恒为 async**。
  */
 export function withRetry<A extends unknown[], R>(
   fn: (...args: A) => R | Promise<R>,
@@ -523,7 +503,6 @@ export function withRetry<A extends unknown[], R>(
 }
 
 /**
- * `withRetry` 的同义导出，对应 Python 的 `with_retry_async`。
- * 两个 Python 装饰器在 Node 侧合并为同一个实现。
+ * `withRetry` 的同义导出。
  */
 export const withRetryAsync = withRetry;

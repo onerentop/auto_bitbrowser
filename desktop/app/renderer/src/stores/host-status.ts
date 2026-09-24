@@ -1,7 +1,7 @@
 /**
  * 后端进程状态 store —— 基于 useSyncExternalStore 的最小实现
  *
- * 对标 PI-Desktop：不引入 zustand / redux，用 React 18+ 内置的
+ * -Desktop：不引入 zustand / redux，用 React 18+ 内置的
  * useSyncExternalStore 订阅外部数据源。
  *
  * 数据来源两路，按到达顺序合并：

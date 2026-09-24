@@ -1,13 +1,12 @@
 /**
- * 修改两步验证手机号（Node 重写）
- * 对标 core/stagehand_engine/operations/modify_2sv.py
+ * 修改两步验证手机号
  *
  * 流程：进 2SV 设置 → 查状态 → 点修改 → (必要时先删旧号) → 加新号 →
  *       输号码 → 发验证码 → 填码 → 验证结果。
  *
  * operation_type 固定为 "2sv"，与 replace-phone 的 "recovery" 区分。
  *
- * 真机（2026-09-24）修正的 Python 侧缺陷：
+ * 真机（2026-09-24）修正的缺陷：
  *   2SV 设置页会要求 Google 的「重新验证身份」（真机形态：密码页 /v3/signin/challenge/pwd）。
  *   原实现把跳转后的 accounts.google.com/.../signin/... 判成「需要先登录账号」直接失败（假失败，账号其实已登录）。
  *   这里新增 passReauthIfRequired：处理完验证（密码 → 如有验证码则验证码）再继续主流程。
@@ -45,7 +44,7 @@ const REAUTH_STEP_TIMEOUT_MS = 8000;
 /** 一次「重新验证身份」最多提交几轮 */
 const REAUTH_MAX_ROUNDS = 2;
 
-/** 短信验证码服务，对应 Python 传入的 sms_service */
+/** 短信验证码服务（取码实现由调用方注入） */
 export interface SmsCodeService {
   getCode(phone: string): Promise<string | null>;
 }

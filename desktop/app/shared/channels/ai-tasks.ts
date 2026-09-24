@@ -5,18 +5,16 @@
  * 参数与返回类型写在 AiTasksInvokeMap，后端实现在 app/host/handlers/ai-tasks.ts。
  * 本文件是纯 TS，不依赖 electron。
  *
- * 对标：
- *   - 基类   gui/ai_task_interface.py
- *   - 子类   gui/{replacephone,replaceemail,modify2sv,modifyauth,kickdevices}_interface.py
- *   - 适配层 application/automation_engine_adapter.py:152-239
+ * 批量任务的参数、进度与结果都按 aitaskKind 区分，
+ * 每类任务的文案与额外输入框见下表的 AI_TASK_KINDS。
  */
 // 仅类型导入：ipc.ts 反向 import 本文件，type-only 不会形成运行时循环
 import type { TaskInfo } from "../ipc.ts";
 
 export const AI_TASKS_INVOKE = {
-  /** 读取账号 + 分组 + 窗口，组成两级树（对标 ai_task_interface.py:27-85 AITaskLoadWorker） */
+  /** 读取账号 + 分组 + 窗口，组成两级树 */
   aiTasksLoad: "abb/aitasks/load",
-  /** 对选中账号串行执行某一种 AI 任务（后台任务；对标各子类 Worker.run） */
+  /** 对选中账号串行执行某一种 AI 任务（后台任务） */
   aiTasksStart: "abb/aitasks/start",
 } as const;
 
@@ -54,12 +52,7 @@ export interface AiTaskKindDef {
 }
 
 /**
- * 逐字照搬各子类：
- *   replace_phone ← replacephone_interface.py:48 / :73 / :84-86
- *   replace_email ← replaceemail_interface.py:48 / :71 / :82-84
- *   modify_2sv    ← modify2sv_interface.py:48 / :71 / :82-84
- *   modify_auth   ← modifyauth_interface.py:45 / :71（无额外输入）
- *   kick_devices  ← kickdevices_interface.py:45 / :67（无额外输入）
+ * 每类任务固定的两条提示文案与额外输入框：
  */
 export const AI_TASK_KINDS: Readonly<Record<AiTaskKind, AiTaskKindDef>> = {
   replace_phone: {
@@ -115,8 +108,8 @@ export function isAiTaskKind(value: unknown): value is AiTaskKind {
 export const AI_TASK_TYPES: readonly string[] = Object.values(AI_TASK_KINDS).map((d) => d.taskType);
 
 /**
- * 状态筛选下拉（ai_task_interface.py:158-166），含遗留状态值，照搬不清理。
- * value 为空串表示「全部」（不筛选，:360-361）。
+ * 状态筛选下拉，含遗留状态值，保留不清理。
+ * value 为空串表示「全部」（不筛选）。
  */
 export const AI_TASK_STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "", label: "全部" },
@@ -163,7 +156,7 @@ export interface AiTaskGroupNode {
 export interface AiTaskLoadResult {
   groups: AiTaskGroupNode[];
   totalBrowsers: number;
-  /** 加载失败原因（对标 AITaskLoadWorker 的 result['error']）；此时 groups 为空 */
+ /** 加载失败原因（ 的 result['error']）；此时 groups 为空 */
   error: string | null;
 }
 

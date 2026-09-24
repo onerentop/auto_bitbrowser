@@ -1,9 +1,9 @@
 /**
  * 应用外壳：左侧导航 + 内容区 + 底部任务坞
  *
- * 对标 Python 的 FluentWindow 左导航（gui/main_window_fluent.py）。
+ * 左导航常驻，内容区随导航切换。
  * 不引路由库：页面只有几个，用 state 切换即可；切走的页面保持挂载（display:none），
- * 避免表格筛选、滚动位置等状态在切换时丢失（对标 Qt 的 StackedWidget）。
+ * 避免表格筛选、滚动位置等状态在切换时丢失。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Layout, Menu, Typography } from "antd";
@@ -53,7 +53,7 @@ interface PageDef {
   render: () => ReactElement;
 }
 
-/** 导航顺序与文案照搬 gui/main_window_fluent.py:89-149（首页 → Google 专区 5 项 → 账号管理 → 导入 TOTP → 设置） */
+/** 导航顺序与文案（首页 → Google 专区 5 项 → 账号管理 → 导入 TOTP → 设置） */
 const PAGES: PageDef[] = [
   { key: "home", label: "首页", icon: <HomeOutlined />, render: () => <HomePage /> },
   {
@@ -104,7 +104,7 @@ export function App(): ReactElement {
   const dark = useIsDark();
   const hostReady = useHostStatus()?.state === "ready";
 
-  // 对标 Python 启动时读取 theme（main_window_fluent.py:151-160）。
+  // 启动时读取已保存的主题配置。
   // 只在后端首次就绪时读一次：之后的重启不再覆盖用户在设置页里尚未保存的主题选择。
   const themeLoaded = useRef(false);
   useEffect(() => {

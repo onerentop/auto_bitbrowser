@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAppUrl, type AppOrigin } from "./navigation.ts";
 
-/** 与 Python 版 GUI（gui/main_window_fluent.py）的窗口标题保持一致 */
+/** 窗口标题 */
 export const WINDOW_TITLE = "ixBrowser 窗口管理工具";
 
 export interface CreateWindowOptions {
@@ -57,7 +57,7 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   // 等首帧就绪再显示，避免白屏闪烁
   window.once("ready-to-show", () => window.show());
 
-  // HTML 里的 <title> 会覆盖窗口标题；这里固定住，保持与 Python 版一致
+  // HTML 里的 <title> 会覆盖窗口标题；这里统一固定为 WINDOW_TITLE
   window.on("page-title-updated", (event) => event.preventDefault());
 
   // 渲染层里的外链一律交给系统浏览器，不在应用内打开新窗口。

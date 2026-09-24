@@ -1,6 +1,5 @@
 /**
- * 代理仓储（Node 重写）
- * 对标 services/repositories/proxy_repository.py
+ * 代理仓储
  */
 import type { Db } from "./connection.ts";
 
@@ -42,12 +41,10 @@ export class ProxyRepository {
     this.db = db;
   }
 
-  /** 对标 get_all_proxies() */
   getAllProxies(): ProxyRow[] {
     return this.db.prepare("SELECT * FROM proxies ORDER BY id").all() as ProxyRow[];
   }
 
-  /** 对标 get_proxy_binding_count() */
   getProxyBindingCount(proxyId: number): number {
     const row = this.db
       .prepare("SELECT COUNT(*) AS n FROM proxy_window_bindings WHERE proxy_id = ?")
@@ -55,7 +52,6 @@ export class ProxyRepository {
     return row.n;
   }
 
-  /** 对标 get_proxy_bindings() */
   getProxyBindings(proxyId: number): { browser_id: string; email: string | null }[] {
     return this.db
       .prepare("SELECT browser_id, email FROM proxy_window_bindings WHERE proxy_id = ?")
@@ -63,8 +59,8 @@ export class ProxyRepository {
   }
 
   /**
-   * 对标 get_all_proxy_usage_stats(max_per_ip)
-   * Python 侧用 LEFT JOIN + GROUP BY 统计每个代理已绑定多少窗口。
+ * max_per_ip
+   * 用 LEFT JOIN + GROUP BY 统计每个代理已绑定多少窗口。
    */
   getAllProxyUsageStats(maxPerIp: number): ProxyUsageStat[] {
     const rows = this.db
@@ -86,8 +82,8 @@ export class ProxyRepository {
   }
 
   /**
-   * 对标 get_next_available_proxy(max_per_ip)
-   * Python: HAVING used_count < ? ORDER BY p.id LIMIT 1
+ * max_per_ip
+   * SQL: HAVING used_count < ? ORDER BY p.id LIMIT 1
    */
   getNextAvailableProxy(maxPerIp: number): ProxyRow | null {
     const row = this.db
@@ -106,7 +102,7 @@ export class ProxyRepository {
 
   /**
    * 绑定代理到窗口。browser_id 唯一，冲突时改绑并刷新 bound_at。
-   * 对标 bind_proxy_to_window()，异常吞掉返回 false。
+   * 异常吞掉返回 false。
    */
   bindProxyToWindow(proxyId: number, browserId: string, email: string | null): boolean {
     try {
@@ -127,7 +123,7 @@ export class ProxyRepository {
     }
   }
 
-  /** 解绑窗口。对标 unbind_proxy_from_window() */
+ /** 解绑窗口。 */
   unbindProxyFromWindow(browserId: string): boolean {
     try {
       this.db.prepare("DELETE FROM proxy_window_bindings WHERE browser_id = ?").run(browserId);
@@ -140,7 +136,7 @@ export class ProxyRepository {
 
   /**
    * 增量保存代理列表，并清理不再出现的代理及其绑定。
-   * 对标 save_all_proxies()：以 host:port 为身份键，
+ * 以 host:port 为身份键 
    * 命中则 UPDATE（只更新 type/username/password），否则 INSERT；
    * 库里多出来的按 key 删除，连带删除 proxy_window_bindings。
    */
@@ -231,7 +227,6 @@ export class ProxyRepository {
   }
 
   /**
-   * 对标 Python 版 get_proxy_bindings（services/repositories/proxy_repository.py:151-166）：
    * 返回绑定表整行（id / proxy_id / browser_id / email / bound_at），按 bound_at 倒序，出错返回 []。
    * 已有的 getProxyBindings 只取 browser_id / email 两列，行为保持不变；设置页「详情」用本方法。
    */

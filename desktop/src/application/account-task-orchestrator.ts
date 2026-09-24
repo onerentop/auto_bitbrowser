@@ -1,19 +1,16 @@
 /**
  * 账号任务编排执行器（Node 重写）
  *
- * 对标：
- *   application/account_task_orchestrator.py —— 批量登录 / 批量绑定 / 批量删除
- *   application/automation_engine_adapter.py:16-102 —— create_batch_processor / run_account_worker_task
- *     （仅登录分支）
+ * 负责批量登录 / 批量绑定 / 批量删除。
  *
- * 与 Python 的差异：
+ * 设计取舍：
  *   1. 依赖（批处理器、仓储、ixBrowser 回调）一律由调用方注入，本文件不触碰
  *      全局单例，也不 import app/ 层；后台任务外壳（TaskRunner）在 app/host/handlers/accounts.ts。
- *   2. Python 用 new_event_loop + run_until_complete 把协程跑在线程里；这里直接 async。
- *   3. Python 在 processor_progress 里「收到日志时才发现 should_stop 并调 processor.stop()」；
- *      这里保留该逻辑，同时通过 onStop 钩子在用户点停止的那一刻立即调 processor.stop()。
- *   4. 日志解析进度（:417-424）由调用方传入 progressFromLog（app/host/task-runner.ts 的
- *      createLogProgressTracker 逐字照搬了该规则），避免 src → app 的反向依赖。
+ *   2. 批量处理直接跑在 async 函数里，不额外开线程。
+ *   3. 日志回调里保留 should_stop 兜底检查，同时通过 onStop 钩子
+ *      在用户点停止的那一刻立即调 processor.stop()。
+ *   4. 日志解析进度由调用方传入 progressFromLog（app/host/task-runner.ts 的
+ *      createLogProgressTracker 实现了同一规则），避免 src → app 的反向依赖。
  *   5. 结果里的超长字符串（例如页面文本）截断到 MAX_RESULT_STRING，字段名不变。
  */
 import { batchResultToDict, type BatchResult } from "../automation/batch/types.ts";
@@ -24,7 +21,7 @@ export type LogFn = (message: string) => void;
 /** 结果中单个字符串的最大长度（超出截断并加省略号） */
 export const MAX_RESULT_STRING = 500;
 
-// ==================== 结果骨架（照搬 :20-80） ====================
+// ==================== 结果骨架 ====================
 
 export interface BatchBindResults {
   total: number;
@@ -47,18 +44,18 @@ export interface StoppedResult {
   message: string;
 }
 
-/** 对标 create_batch_bind_results（:21-28） */
+/** 批量绑定结果骨架 */
 export function createBatchBindResults(total: number): BatchBindResults {
   return { total, success_count: 0, failed_count: 0, failed_list: [] };
 }
 
-/** 对标 create_batch_delete_results（:31-39） */
+/** 批量删除结果骨架 */
 export function createBatchDeleteResults(total: number): BatchDeleteResults {
   return { total, deleted_accounts: 0, deleted_windows: 0, failed_count: 0, failed_list: [] };
 }
 
 
-/** 对标 create_stopped_result（:74-80） */
+/** 任务被停止时的结果骨架 */
 export function createStoppedResult(taskType: string): StoppedResult {
   return { type: "stopped", task_type: taskType, message: "用户停止任务" };
 }
@@ -72,14 +69,13 @@ function emailOf(account: AccountDict): string {
   return v === null || v === undefined ? "" : String(v);
 }
 
-// ==================== 批量绑定（:233-259） ====================
+// ==================== 批量绑定 ====================
 
 /**
- * 对标 execute_batch_bind（:233-259）
+ * 批量绑定
  *
- * 与 Python 的有意偏差：
- *   1. bindAccount 返回 false（数据库未写入）时计为失败 —— Python 不检查 bind_account_to_browser 的返回值，
- *      会把写库失败当成成功计数。
+ * 设计取舍：
+ *   1. bindAccount 返回 false（数据库未写入）时计为失败（不检查返回值会把写库失败当成成功计数）。
  *   2. 提供 ownerOf 时，每条执行前再查一次窗口当前归属；已被其他账号占用则记失败并跳过，
  *      避免预检与执行之间数据变化导致同一窗口绑给两个账号。
  */
@@ -87,7 +83,7 @@ export function executeBatchBind(params: {
   matchedPairs: ReadonlyArray<readonly [string, string]>;
   shouldStop: () => boolean;
   bindAccount: (email: string, browserId: string) => boolean | void;
-  /** 查询窗口当前绑定的账号邮箱（未绑定返回 null）；对标 getAccountByBrowser */
+  /** 查询窗口当前绑定的账号邮箱（未绑定返回 null） */
   ownerOf?: (browserId: string) => string | null;
   log: LogFn;
   progress: (current: number) => void;
@@ -127,7 +123,7 @@ export function executeBatchBind(params: {
   return results;
 }
 
-// ==================== 批量删除（:262-309） ====================
+// ==================== 批量删除 ====================
 
 /** ixBrowser 窗口 ID 必须是纯数字字符串 */
 export function isValidWindowId(id: string): boolean {
@@ -135,11 +131,11 @@ export function isValidWindowId(id: string): boolean {
 }
 
 /**
- * 对标 execute_batch_delete（:262-309）
+ * 批量删除
  *
- * 与 Python 的有意偏差：
- *   1. 顺序改为「先删账号，账号删除成功后再关闭 / 删除窗口」。Python 先删窗口再删账号，
- *      账号删除失败时会留下指向已删除窗口的账号记录；反过来最多留下一个孤立窗口。
+ * 设计取舍：
+ *   1. 顺序是「先删账号，账号删除成功后再关闭 / 删除窗口」。
+ *      先删窗口的话，账号删除失败时会留下指向已删除窗口的账号记录；当前顺序最多留下一个孤立窗口。
  *   2. deleteAccount 返回 false（库里没删掉）时计为失败，不计入 deleted_accounts，也不删窗口。
  *   3. 窗口 ID 不是纯数字字符串时不调用 closeBrowser / deleteBrowser，只记日志。
  */
@@ -194,13 +190,13 @@ export async function executeBatchDelete(params: {
         try {
           await params.closeBrowser(browserId);
         } catch {
-          // 照搬 Python：关闭失败忽略
+          // 关闭失败忽略
         }
         try {
           const r = await params.deleteBrowser(browserId);
           if (r && r.success) results.deleted_windows += 1;
         } catch {
-          // 照搬 Python：删除窗口失败忽略
+          // 删除窗口失败忽略
         }
       }
     }
@@ -209,12 +205,12 @@ export async function executeBatchDelete(params: {
   return results;
 }
 
-// ==================== 批处理任务（adapter :30-102 + orchestrator :386-454） ====================
+// ==================== 批处理任务 ====================
 
 /** 账号批处理任务类型 */
 export type WorkerTaskType = "login";
 
-/** LLM 参数（Python 侧均为 None，由下游 use_config 读取配置；这里由调用方从配置读出后传入） */
+/** LLM 参数（由调用方从配置读出后传入；未配置时为 null） */
 export interface LlmParams {
   apiKey: string | null;
   model: string | null;
@@ -231,7 +227,7 @@ export interface WorkerProcessor {
   stop(): void;
 }
 
-/** 把 BatchResult 转成 Python to_dict() 的形状，并截断超长字符串 */
+/** 把 BatchResult 转成普通对象（字段名不变），并截断超长字符串 */
 export function batchResultPayload(result: BatchResult): Record<string, unknown> {
   return truncateLongStrings(batchResultToDict(result)) as Record<string, unknown>;
 }
@@ -248,7 +244,7 @@ export function truncateLongStrings(value: unknown, max = MAX_RESULT_STRING): un
   return value;
 }
 
-/** 对标 AutomationEngineAdapter.run_account_worker_task（adapter :30-104） */
+/** 按任务类型把一批账号交给批处理器执行，返回可跨进程传输的结果 */
 export async function runAccountWorkerTask(params: {
   taskType: string;
   processor: WorkerProcessor;
@@ -267,7 +263,7 @@ export async function runAccountWorkerTask(params: {
   return { type: "unknown" };
 }
 
-/** 对标 execute_account_worker_task（:386-454） */
+/** 执行账号 worker 任务：创建批处理器、注册停止钩子、汇总结果 */
 export async function executeAccountWorkerTask(params: {
   taskType: string;
   accounts: readonly AccountDict[];
@@ -280,7 +276,7 @@ export async function executeAccountWorkerTask(params: {
   log: LogFn;
   /** 从日志解析进度（createLogProgressTracker 的返回值） */
   progressFromLog: LogFn;
-  /** 对标 create_batch_processor(concurrency)；callback 即 processor_progress */
+  /** 创建批处理器；callback 即进度回调 */
   createProcessor: (options: { concurrency: number; callback: LogFn }) => WorkerProcessor;
   /**
    * 逐条目结果上报（任务历史用）。批量登录是并发跑的，逐账号结果只有收尾时才成对出现，
@@ -292,7 +288,7 @@ export async function executeAccountWorkerTask(params: {
   let processor: WorkerProcessor | null = null;
   let stopLogged = false;
 
-  // 对标 processor_progress（:406-424）
+  // 进度回调：转发日志，并在收到日志时兜底检查停止请求
   const processorProgress = (message: string): void => {
     log(message);
     if (shouldStop()) {
@@ -324,7 +320,7 @@ export async function executeAccountWorkerTask(params: {
   return result;
 }
 
-// ==================== 完成日志（照搬界面层的 finished 处理） ====================
+// ==================== 完成日志 ====================
 
 function num(obj: unknown, key: string): number {
   if (obj === null || typeof obj !== "object") return 0;
@@ -332,7 +328,7 @@ function num(obj: unknown, key: string): number {
   return typeof v === "number" ? v : 0;
 }
 /**
- * 批处理任务结束时的日志行 —— 对标 gui/account_manager_interface.py:1383-1431 的 _onTaskFinished
+ * 批处理任务结束时的日志行
  */
 export function workerFinishedLogLines(result: Record<string, unknown>): string[] {
   const type = result["type"];

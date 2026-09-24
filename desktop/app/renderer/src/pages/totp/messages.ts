@@ -1,5 +1,5 @@
 /**
- * TOTP 导入页的确认 / 完成文案 —— 照搬 gui/import_totp_interface.py
+ * TOTP 导入页的确认 / 完成文案
  */
 import type { TotpEntry, TotpImportResult, TotpMatchStatus } from "../../../../shared/channels/totp.ts";
 
@@ -8,11 +8,11 @@ export interface SelectedForImport {
   status: TotpMatchStatus;
 }
 
-/** 确认导入文案（:889-905） */
+/** 确认导入文案 */
 export function importConfirmMessage(selected: readonly SelectedForImport[]): string {
   const overwriteCount = selected.filter((r) => r.status === "has_secret").length;
   const newCount = selected.length - overwriteCount;
-  // 检查是否有密码需要更新（:894-897）
+  // 检查是否有密码需要更新
   const passwordUpdateCount = selected.filter((r) => r.entry.kind === "text" && r.entry.password).length;
 
   let msg = `即将导入 ${selected.length} 个账号的 TOTP 密钥:\n\n`;
@@ -29,7 +29,7 @@ export interface FinishedNotice {
   message: string;
 }
 
-/** 完成汇总（:956-974） */
+/** 完成汇总 */
 export function importFinishedNotice(r: TotpImportResult): FinishedNotice {
   const failedCount = r.failed_list.length;
   const warningCount = r.warning_list.length;
@@ -40,7 +40,7 @@ export function importFinishedNotice(r: TotpImportResult): FinishedNotice {
   if (r.password_count > 0) msg += `\n已更新 ${r.password_count} 个密码`;
   if (r.bind_count > 0) msg += `\n已自动绑定 ${r.bind_count} 个窗口`;
   if (r.ix_update_count > 0) msg += `\n已更新 ${r.ix_update_count} 个窗口备注`;
-  // Python 没有停止功能；停止时补一行说明
+  // 停止是本地新增的能力；停止时补一行说明
   if (r.skipped_count > 0) msg += `\n已停止，${r.skipped_count} 个未处理`;
 
   if (failedCount > 0) return { level: "error", title: "导入完成（有失败）", message: msg };

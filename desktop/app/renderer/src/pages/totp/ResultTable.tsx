@@ -1,8 +1,8 @@
 /**
- * 匹配结果表格 —— 对标 _createTable（:486-525）+ _updateTable（:753-826）
+ * 匹配结果表格
  *
  * 7 列：选择 / 提取邮箱 / 来源 / 密钥(前16位) / 匹配账号 / 当前密钥(前8位) / 状态。
- * 「未匹配」行不可勾选（:774）。
+ * 「未匹配」行不可勾选。
  */
 import type { ReactElement } from "react";
 import { Table, Tooltip, Typography } from "antd";
@@ -23,7 +23,7 @@ export interface ResultRow {
 
 const GREY = "#888888";
 
-/** 密钥显示前 16 位（:792-793） */
+/** 密钥显示前 16 位 */
 function secretDisplay(secret: string): string {
   return secret.length > 16 ? `${secret.slice(0, 16)}...` : secret;
 }
@@ -33,7 +33,7 @@ const columns: ColumnsType<ResultRow> = [
     title: "提取邮箱",
     key: "email",
     ellipsis: true,
-    // :784 extracted_email or otp_acc.name
+    // 优先显示提取出的邮箱，否则用条目名
     render: (_, r) => r.entry.email || r.entry.name,
   },
   {
@@ -41,7 +41,7 @@ const columns: ColumnsType<ResultRow> = [
     key: "issuer",
     width: 100,
     ellipsis: true,
-    // :788 issuer or "-"
+    // 来源，缺省显示 "-"
     render: (_, r) => r.entry.issuer || "-",
   },
   {
@@ -65,7 +65,7 @@ const columns: ColumnsType<ResultRow> = [
     title: "当前密钥",
     key: "current",
     width: 120,
-    // :806-817：匹配到且有密钥 → 前 8 位；匹配到无密钥 → 灰色「无」；未匹配 → "-"
+    // 匹配到且有密钥 → 前 8 位；匹配到无密钥 → 灰色「无」；未匹配 → "-"
     render: (_, r) => {
       if (r.match.currentSecret === null) return "-";
       if (!r.match.currentSecret) return <span style={{ color: GREY }}>无</span>;

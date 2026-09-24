@@ -1,5 +1,5 @@
 /**
- * 预加载脚本 —— 渲染层与主进程之间唯一的桥（对标 PI-Desktop 的 preload/index.cjs）
+ * 预加载脚本 —— 渲染层与主进程之间唯一的桥（-Desktop 的 preload/index.cjs）
  *
  * 暴露 window.abb = { invoke, on, channels, platform }：
  *   - invoke 只接受 invoke 通道，on 只接受 event 通道（各自单独校验；

@@ -1,25 +1,19 @@
 /**
- * 批量账号处理器（Node 重写）
+ * 批量账号处理器
  *
- * 对标 automation/batch_account_processor.py 的以下部分：
- *   L242-272   __init__ / _log / stop
- *   L273-427   batch_login / _login_with_semaphore
- *   L2196-2217 quick_batch_login
+ * 本文件覆盖：构造与日志 / 停止控制、batch_login 与信号量包装、quick_batch_login；
+ * BatchResult 那组类型在 ./batch/types.ts。
  *
- * 不在本文件内（已在别处移植，这里直接复用）：
- *   L95-226    BatchResult → ./batch/types.ts
- *
- * 与 Python 的差异（全部为结构性差异，判定分支 / 日志文案逐字对齐）：
- *   1. 依赖注入：Python 到处直接调模块级 `DBManager.*` / `ConfigManager.*`，
- *      TS 侧统一收进构造函数第二参 `BatchProcessorDeps`，默认值是真实实现，
- *      单测可整体替身、完全离线。
+ * 设计取舍（判定分支与日志文案保持既有行为不变）：
+ *   1. 依赖注入：所有外部依赖统一收进构造函数第二参 `BatchProcessorDeps`，
+ *      默认值是真实实现，单测可整体替身、完全离线。
  *   2. `accountRepo` 可不注入（默认 null），未注入时登录状态写库被跳过 —— 这是有意的离线设计。
- *   3. `auto_google_login` 的 Node 版没有 api_key/model/provider 参数，
+ *   3. 本文件用的登录适配器没有 api_key/model/provider 参数，
  *      默认适配器会丢弃它们（见 makeDefaultLoginFn）。
- *   4. `datetime.now()` → `Date.now()`（毫秒）；`asyncio.sleep(秒)` → `sleepImpl(秒 * 1000)`。
- *   5. `f"{x:.1f}"` → `toFixed(1)`（半数进位规则在 .05 边界上与 Python 不同，耗时场景无影响）；
- *      Python 打印 `None` 的位置用 "None" 字面量还原。
- *   6. Python 的 `str | None` / `Optional[X]` 一律映射为 `| null`。
+ *   4. 时间戳统一用毫秒 `Date.now()`；等待统一走 `sleepImpl(毫秒)`。
+ *   5. 耗时保留 1 位小数用 `toFixed(1)`（半数进位规则在 .05 边界上略有不同，耗时场景无影响）；
+ *      空值打印成 "None" 字面量。
+ *   6. 可空字段一律写成 `| null`。
  */
 
 import { RetryHelper, errorMessage } from "../core/retry-helper.ts";
@@ -39,16 +33,16 @@ import type { Db } from "../db/connection.ts";
 
 // ==================== 基础类型 ====================
 
-/** 进度回调 —— 对标 Python 的 `callback: Callable[[str], None]` */
+/** 进度回调 */
 export type ProgressCallback = (msg: string) => void;
 
-/** 账号字典 —— Python 侧是无类型 Dict */
+/** 账号字典 */
 export type AccountDict = Record<string, unknown>;
 
-// ==================== 注入接口（只声明 Python 实际用到的方法） ====================
+// ==================== 注入接口（只声明实际用到的方法） ====================
 
 /**
- * 对标模块级 `ConfigManager`。
+ * 配置读取接口。
  * 真实实现：core/config-manager.ts 的 `configManager` 单例（方法名一致）。
  */
 export interface ConfigManagerLike {
@@ -58,15 +52,15 @@ export interface ConfigManagerLike {
 }
 
 /**
- * 对标 `DBManager` 中与账号相关的调用。
+ * 账号相关写库调用。
  * 真实实现：db/account-repository.ts 的 `AccountRepository`
- * （默认登录适配器把它透传给 auto_google_login 写 login_status）
+ * （默认登录适配器把它透传给 auto-google-login 写 login_status）
  */
 export type AccountRepoLike = Pick<AccountRepository, "updateLoginStatus">;
 
-// ==================== auto_google_login 的注入签名 ====================
+// ==================== 登录函数的注入签名 ====================
 
-/** 对标 `LoginResult` 中被批量处理器读取的字段 */
+/** 批量处理器读取的登录结果字段 */
 export interface BatchLoginResult {
   success: boolean;
   message: string;
@@ -74,7 +68,7 @@ export interface BatchLoginResult {
   totalSteps?: number | null;
 }
 
-/** 对标 `auto_google_login(...)` 的调用点（L379-386） */
+/** 登录函数的签名 */
 export type LoginFn = (args: {
   browserId: string;
   account: AccountDict;
@@ -91,7 +85,7 @@ export interface BatchProcessorDeps {
   config?: ConfigManagerLike;
   /**
    * 数据库连接。给了它就会自动构造 accountRepo，
-   * 这是生产路径推荐的注入方式（Node 侧没有 Python 那种 DBManager 全局单例，
+   * 这是生产路径推荐的注入方式（没有进程级数据库单例，
    * 打开哪个库必须由调用方决定，所以不能在此处默认 openDb）。
    */
   db?: Db;
@@ -104,15 +98,16 @@ export interface BatchProcessorDeps {
 
 // ==================== 默认实现 ====================
 
-/** Python 的 `print(None)` 输出 "None"，这里还原它 */
-function pyNone(value: unknown): string {
+/** 空值（null / undefined）输出 "None" */
+function toNoneText(value: unknown): string {
   return value === null || value === undefined ? "None" : String(value);
 }
 
 /**
  * 登录不可重试的错误类型。
- * Python 原版只有前三个（L403-407，顺序照搬）；有意偏差：人机验证、密码错误、需要两步验证、
- * 账号不存在 / 停用这几类重试不会有不同结果，反而可能触发 Google 风控或锁号，也不再重试。
+ * 前三类是基础集合（stagehand_unavailable / no_api_key / browser_open_failed）；
+ * 其余几类（人机验证、密码错误、需要两步验证、账号不存在 / 停用）重试也不会有
+ * 不同结果，反而可能触发 Google 风控或锁号，所以也一并列入。
  */
 const NON_RETRYABLE_ERRORS = [
   "stagehand_unavailable",
@@ -127,14 +122,14 @@ const NON_RETRYABLE_ERRORS = [
 ];
 
 /**
- * 默认登录适配器做成**工厂**：它要把 accountRepo 透传给下游的 auto_google_login。
+ * 默认登录适配器做成**工厂**：它要把 accountRepo 透传给下游的登录函数。
  *
- * Python 侧 auto_google_login 直接调全局 DBManager 写库（login_status）；
- * Node 版把仓储做成了参数，所以这里必须显式传下去 —— 漏传会让登录状态永远不落库。
+ * 登录函数需要写库（login_status），而仓储在这里是参数，
+ * 所以必须显式传下去 —— 漏传会让登录状态永远不落库。
  */
 function makeDefaultLoginFn(repo: AccountRepoLike | null): LoginFn {
   return async ({ browserId, account, callback }) =>
-    // Node 版 auto_google_login 没有 api_key/model/provider 参数（引擎侧读配置），故丢弃
+    // 登录函数没有 api_key/model/provider 参数（引擎侧读配置），故丢弃
     autoGoogleLogin(browserId, account, {
       callback,
       accountRepo: repo ?? undefined,
@@ -144,7 +139,7 @@ function makeDefaultLoginFn(repo: AccountRepoLike | null): LoginFn {
 // ==================== BatchAccountProcessor ====================
 
 /**
- * 批量账号处理器 —— 对标 BatchAccountProcessor（L228-241 的 docstring 示例同样适用）
+ * 批量账号处理器
  *
  * 使用示例:
  *   const processor = new BatchAccountProcessor({ concurrency: 3 });
@@ -164,10 +159,8 @@ export class BatchAccountProcessor {
   private readonly loginFn: LoginFn;
 
   /**
-   * 对标 __init__（L242-260）
-   *
-   * @param options.concurrency 并发数，默认从配置读取（Python 用 `or`，所以 0 也会回落到配置）
-   * @param options.retryTimes  重试次数（Python 默认 2）
+   * @param options.concurrency 并发数，默认从配置读取（用 `or` 兜底，所以 0 也会回落到配置）
+   * @param options.retryTimes  重试次数（默认 2）
    * @param options.callback    进度回调
    */
   constructor(
@@ -201,20 +194,20 @@ export class BatchAccountProcessor {
     }
   }
 
-  /** 日志输出 —— 对标 _log（L262-266）：print + callback 两个通道 */
+ /** 日志输出 —— print + callback 两个通道 */
   private log(msg: string): void {
     process.stdout.write(`[BatchProcessor] ${msg}\n`);
     if (this.callback) this.callback(msg);
   }
 
-  /** 停止处理 —— 对标 stop（L268-271） */
+ /** 停止处理 */
   stop(): void {
     this.stopFlag = true;
     this.log("收到停止信号");
   }
 
   /**
-   * 对标 `async with self._semaphore:`。
+ * `async with self._semaphore:`。
    * batchLogin 在创建任务前会重建信号量，所以这里的 null 分支不可达。
    */
   private withSemaphore<T>(fn: () => Promise<T>): Promise<T> {
@@ -226,7 +219,7 @@ export class BatchAccountProcessor {
   // ==================== 批量登录 ====================
 
   /**
-   * 批量执行登录 —— 对标 batch_login（L273-334）
+ * 批量执行登录 
    *
    * @param accounts   账号列表，每个账号是 {email, password, secret_key, recovery_email}
    * @param browserIds 浏览器窗口 ID 列表（与账号一一对应）
@@ -257,7 +250,7 @@ export class BatchAccountProcessor {
       `开始批量登录，共 ${accounts.length} 个账号，并发数 ${this.concurrency}，最大尝试 ${retries} 次`,
     );
 
-    // 创建任务（Python 先建协程再 gather，这里先全部启动 Promise 再统一等待，并发同样由信号量控制）
+    // 创建任务（先全部启动 Promise 再统一等待，并发由信号量控制）
     const tasks: Promise<void>[] = [];
     accounts.forEach((account, index) => {
       const browserId = browserIds[index];
@@ -286,7 +279,7 @@ export class BatchAccountProcessor {
     return result;
   }
 
-  /** 带信号量控制的登录任务（支持多次重试） —— 对标 _login_with_semaphore（L336-426） */
+  /** 带信号量控制的登录任务（支持多次重试） */
   private async loginWithSemaphore(
     account: AccountDict,
     browserId: string,
@@ -321,7 +314,7 @@ export class BatchAccountProcessor {
         // 执行登录（带重试）
         let loginResult: BatchLoginResult | null = null;
         let lastError: string | null = null;
-        // 有意偏差：Python 失败日志固定打印 retries；不可重试时提前结束，这里记录实际尝试次数
+        // 逐次记录实际尝试次数：不可重试时提前结束，日志里反映真实次数
         let attempts = 0;
 
         for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -378,7 +371,7 @@ export class BatchAccountProcessor {
           this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${loginResult.message}`);
         } else {
           addFailed(result, email, lastError || "未知错误", "exception");
-          this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${pyNone(lastError)}`);
+          this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${toNoneText(lastError)}`);
         }
       } catch (e) {
         addFailed(result, email, errorMessage(e), "exception");
@@ -391,8 +384,8 @@ export class BatchAccountProcessor {
 // ==================== 便捷函数 ====================
 
 /**
- * 快速批量登录 —— 对标 quick_batch_login（L2196-2217）
- * deps 是 Node 侧新增的可选参数（Python 无），便于测试注入。
+ * 快速批量登录
+ * deps 是可选的注入参数，便于测试。
  */
 export async function quickBatchLogin(
   accounts: AccountDict[],

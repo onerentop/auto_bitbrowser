@@ -1,5 +1,5 @@
 /**
- * 数据库探针：只读打开真实 accounts.db，与 Python 仓储对拍。
+ * 数据库探针：只读打开真实 accounts.db，打印各仓储方法的读取结果。
  * 跑法：cd desktop && node --experimental-strip-types src/db/probe.ts
  */
 import path from "node:path";
@@ -86,5 +86,5 @@ line(`  下一个可用代理: ${next ? `#${next.id}` : "无"}`);
 db.close();
 
 line("\n" + "=".repeat(58));
-line("JSON 结果（供与 Python 对拍）：");
+line("JSON 结果：");
 line(JSON.stringify(result, Object.keys(result).sort()));

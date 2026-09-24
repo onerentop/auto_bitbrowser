@@ -1,6 +1,5 @@
 /**
- * 修改身份验证器（Node 重写）
- * 对标 core/stagehand_engine/operations/modify_auth.py
+ * 修改身份验证器
  *
  * 流程：进验证器设置 → 开始设置 → 切到"手动输入密钥" → 提取密钥 →
  *       用新密钥生成验证码自证 → 提交 → 验证。
@@ -9,7 +8,7 @@
  * "ABCD EFGH IJKL MNOP"（分组）或 "ABCDEFGHIJKLMNOP"（连续），
  * 也可能混在其他文本里，所以先清洗再按两套正则找、最后做 Base32 校验。
  *
- * 真机（2026-09-24，ixBrowser profile 14 + 真实 Google 账号）修正的 Python 侧缺陷：
+ * 真机（2026-09-24，ixBrowser profile 14 + 真实 Google 账号）修正的缺陷：
  *   2SV / 验证器设置页会要求 Google 的「重新验证身份」（真机形态：密码页 /v3/signin/challenge/pwd）。
  *   原实现把跳转后的 accounts.google.com/.../signin/... 判成「需要先登录账号」直接失败（假失败，账号其实已登录）。
  *   这里新增 passReauthIfRequired：处理完验证（密码 → 如有验证码则验证码）再继续主流程。

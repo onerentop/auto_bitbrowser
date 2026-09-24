@@ -1,11 +1,10 @@
 /**
  * Google 账号一键登录
- * 对标 automation/auto_google_login.py
  *
  * 与其他 auto_* 不同：本函数用 use_config=True 连接，
  * 即 AI 配置从 ConfigManager 读取（调用方无需传 model/api_key）。
  *
- * 有意偏差：登录的每一步经 callback 写入任务日志（Python 只写 logger）；
+ * 设计取舍：登录的每一步经 callback 写入任务日志；
  * 失败提示在通用文案后附上具体原因（如「需要短信验证码两步验证」），便于判断下一步怎么处理。
  */
 import type { AccountRepository } from "../db/account-repository.ts";
@@ -22,7 +21,7 @@ export interface AutoLoginResult {
   totalSteps?: number;
 }
 
-/** 登录失败时把 LoginState 映射成 error_type（照搬 Python 的分支表） */
+/** 登录失败时把 LoginState 映射成 error_type */
 const STATE_TO_ERROR: Record<string, [string, string]> = {
   wrong_password: ["wrong_password", "密码错误"],
   account_not_found: ["account_not_found", "账号不存在"],
@@ -73,7 +72,7 @@ export async function autoGoogleLogin(
   repo?.updateLoginStatus(email, "logging_in");
 
   const engineOptions = {
-    // 对齐 Python 的 use_config=True：无 model/apiKey 时由引擎侧兜底
+    // 无 model/apiKey 时由引擎侧兜底
     closeAfter: false,
   };
 

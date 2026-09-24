@@ -1,9 +1,8 @@
 /**
  * 代理内存数据存储（Node 重写）
- * 对标 services/data_store.py
  *
  * 语义：内存里持有一份代理列表，任何写操作都立即全量回写数据库。
- * Python 侧是单例；这里保留 getDataStore() 单例入口，同时允许直接 new 便于测试。
+ * 保留 getDataStore() 单例入口，同时允许直接 new 便于测试。
  */
 import type { ProxyRepository, ProxyRow } from "../db/proxy-repository.ts";
 
@@ -86,7 +85,7 @@ export class DataStore {
     this.saveToDb();
   }
 
-  /** 按下标删除，越界静默忽略（与 Python 一致） */
+  /** 按下标删除，越界静默忽略 */
   removeProxy(index: number): void {
     if (index >= 0 && index < this.proxies.length) {
       this.proxies.splice(index, 1);
@@ -113,7 +112,7 @@ export class DataStore {
 
 let globalStore: DataStore | null = null;
 
-/** 单例入口，对标 Python 的 get_data_store() */
+/** 单例入口 */
 export function getDataStore(repo: ProxyRepository): DataStore {
   if (!globalStore) globalStore = new DataStore(repo, { silent: false });
   return globalStore;

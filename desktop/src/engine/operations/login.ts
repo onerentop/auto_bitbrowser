@@ -1,23 +1,22 @@
 /**
- * Google 登录（Node 重写）
- * 对标 core/stagehand_engine/operations/login.py
+ * Google 登录
  *
  * 流程：检查是否已登录 → 打开登录页 →（账号选择页则点「使用其他账号」）→ 输入邮箱 →
  *       输入密码 → 验证器（TOTP）→ 打开 myaccount 验证登录结果。
  *
- * ==================== 与 Python 的有意偏差（真机测试发现，用户批准） ====================
- * 1. 成功判定：Python 用 LoginKeywords.LOGIN_SUCCESS（含 "account"）匹配页面文本，
- *    而 Google 登录页本身就有 "Use your Google Account"、"Create account"，
- *    一打开登录页就被判为「已登录」。这里改为只认 URL 证据：
+ * ==================== 关键设计取舍（真机测试发现，用户批准） ====================
+ * 1. 成功判定：不能用含 "account" 的关键词匹配页面文本，
+ *    因为 Google 登录页本身就有 "Use your Google Account"、"Create account"，
+ *    一打开登录页就会被判为「已登录」。这里只认 URL 证据：
  *    打开 myaccount.google.com 后仍停留在该域名，且页面里出现目标邮箱，才算登录成功 / 已登录。
- * 2. 页面状态：Python 按关键词顺序判定，"验证码" 同时出现在 TOTP 与 CAPTCHA 关键词里，
+ * 2. 页面状态：不能只按关键词顺序判定，"验证码" 同时出现在 TOTP 与 CAPTCHA 关键词里，
  *    "phone number" 出现在大量页面上，容易误判。这里优先看 Google 登录页的固定元素
  *    （#identifierId / input[name=Passwd] / #totpPin）是否可见，再看 URL 的 /challenge/ 路径，
  *    最后才看少量精确文本。
  * 3. 输入方式：固定元素优先（fill / click / Enter），定位不到才退回 AI act()。
- *    act() 仍使用 Python 原版的提示词。
- * 4. 密码只写入一次：Python 在 act("在密码输入框中输入密码") 之后还会 keyboard.type(password)，
- *    而这条指令本身不含密码，AI 可能先填入别的内容，导致密码被写两次或写错。
+ *    act() 仍使用原有提示词。
+ * 4. 密码只写入一次：act("在密码输入框中输入密码") 这条指令本身不含密码，
+ *    AI 可能先填入别的内容，再加一次键盘输入会让密码被写两次或写错。
  *    这里删掉该 act，按「fill 一次；fill 失败才点击输入框后 type 一次」写入。
  * 5. 两步验证：只处理直接出现验证器输入框（TOTP）的情况；短信、手机提示、
  *    「Verify it's you」选择页等一律判失败并给出明确提示（用户确认）。

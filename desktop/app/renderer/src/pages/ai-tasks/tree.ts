@@ -1,10 +1,10 @@
 /**
  * AI 任务页的树形数据纯函数（渲染层）
  *
- * 照搬 gui/ai_task_interface.py：
- *   - filterByStatus   ← _populateTree 的状态筛选（:275 / :314-316）
- *   - selectedItems    ← _getSelectedAccounts（:336-352）
- *   - statusTone       ← _onTaskProgress 的着色（:415-420）
+ * 三个纯函数的职责：
+ *   - filterByStatus   状态筛选
+ *   - selectedItems    取出勾选的账号
+ *   - statusTone       逐行状态对应的底色
  */
 import type { AiTaskGroupNode, AiTaskStartItem } from "../../../../shared/channels/ai-tasks.ts";
 import { AI_TASK_ITEM_STATUS } from "../../../../shared/channels/ai-tasks.ts";
@@ -16,7 +16,7 @@ export interface VisibleGroup extends AiTaskGroupNode {
 
 /**
  * 状态筛选：statusFilter 为空串表示「全部」。
- * 与原版一致：分组即使没有可见窗口也保留，分组标题的数量是分组内窗口总数（:293 len(browser_list)）。
+ * 分组即使没有可见窗口也保留，分组标题的数量是分组内窗口总数。
  */
 export function filterByStatus(groups: readonly AiTaskGroupNode[], statusFilter: string): VisibleGroup[] {
   return groups.map((g) => ({
@@ -64,7 +64,7 @@ export function statusTone(status: string): StatusTone {
   return "warning";
 }
 
-/** 行底色（半透明，明暗主题都可读），对应 QColor(200,255,200) / (255,200,200) / (255,255,200) */
+/** 行底色（半透明，明暗主题都可读），与上面三种色调一一对应 */
 export const TONE_BACKGROUND: Readonly<Record<StatusTone, string>> = {
   success: "rgba(82, 196, 26, 0.18)",
   error: "rgba(255, 77, 79, 0.18)",

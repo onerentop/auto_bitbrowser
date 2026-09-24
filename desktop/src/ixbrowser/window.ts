@@ -1,17 +1,14 @@
 /**
- * ixBrowser 窗口高层封装 —— 对标 services/ix_window.py
+ * ixBrowser 窗口高层封装
  *
- * 移植范围：get_browser_list / get_browser_info / find_browser_by_email /
- * open_browser_by_id / delete_browser_by_id / get_next_window_name。
+ * 覆盖：窗口列表 / 窗口详情 / 按邮箱找窗口 / 按 ID 打开 / 按 ID 删除 / 下一个窗口名。
  *
- * 与 Python 的对应关系：
- *   - Python 的 IXBrowserClient 出错时返回 None 并把原因放在 client.message；
- *     Node 版 IxBrowserClient 直接抛错。这里把「抛错」折算成 Python 的「返回 None + message」，
- *     重试判定（_is_retryable_error）、退避（BASE_DELAY * BACKOFF_FACTOR ** attempt）、
- *     最终返回值（None / [] / False）逐条照搬。
- *   - _reset_client()：Python 丢弃全局单例以重建 TCP 连接；Node 客户端每次请求都是独立 fetch，
- *     没有可重置的状态，因此省略。
- *   - print → 注入的 log。
+ * 设计取舍：
+ *   - IxBrowserClient 在出错时直接抛错，这里把「抛错」折算成「返回 null + message」，
+ *     重试判定（isRetryableError）、退避（BASE_DELAY * BACKOFF_FACTOR ** attempt）、
+ *     最终返回值（null / [] / false）逐条保持既定行为。
+ *   - 不维护可重置的全局客户端：每次请求都是独立 fetch，没有需要重建的连接状态。
+ *   - 输出走注入的 log。
  */
 import type { IxBrowserClient } from "./client.ts";
 import type { IxProfile } from "./types.ts";
@@ -20,7 +17,6 @@ export const MAX_RETRIES = 3;
 export const BASE_DELAY = 1.0;
 export const BACKOFF_FACTOR = 2.0;
 
-/** 对标 RETRYABLE_ERRORS */
 export const RETRYABLE_ERRORS: readonly string[] = [
   "socket disconnected",
   "tls connection",
@@ -34,7 +30,6 @@ export const RETRYABLE_ERRORS: readonly string[] = [
   "etimedout",
 ];
 
-/** 对标 _is_retryable_error */
 export function isRetryableError(errorMsg: string | null | undefined): boolean {
   if (!errorMsg) return false;
   const lower = errorMsg.toLowerCase();
@@ -59,8 +54,8 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * 通用重试壳：对标 Python 每个函数里重复的 for attempt 循环。
- * 返回 { ok: true, value } 或 { ok: false }（对应 Python 的 return None / False）。
+ * 通用重试壳：每个窗口操作函数共用的「尝试 N 次」循环。
+ * 返回 { ok: true, value } 或 { ok: false }（失败时上层折算成 null / false）。
  */
 async function withRetry<T>(
   deps: IxWindowDeps,
@@ -99,8 +94,8 @@ export interface GetBrowserListOptions {
 }
 
 /**
- * 对标 get_browser_list：自动翻页，某页失败时返回已取到的部分（不抛错）。
- * 翻页终止条件与 Python 一致：失败 / 空页 / 本页条数 < limit。
+ * 窗口列表：自动翻页，某页失败时返回已取到的部分（不抛错）。
+ * 翻页终止条件：失败 / 空页 / 本页条数 < limit。
  */
 export async function getBrowserList(deps: IxWindowDeps, options: GetBrowserListOptions = {}): Promise<IxProfile[]> {
   const limit = options.limit ?? 100;
@@ -131,7 +126,7 @@ export async function getBrowserList(deps: IxWindowDeps, options: GetBrowserList
   return all;
 }
 
-/** 对标 get_browser_info：查不到或失败返回 null */
+/** 查不到或失败返回 null */
 export async function getBrowserInfo(
   deps: IxWindowDeps,
   profileId: number,
@@ -144,7 +139,7 @@ export async function getBrowserInfo(
   return r.value[0] ?? null;
 }
 
-/** 对标 find_browser_by_email：按 name 或 username 精确匹配，未找到返回 null */
+/** 按 name 或 username 精确匹配，未找到返回 null */
 export async function findBrowserByEmail(deps: IxWindowDeps, email: string): Promise<number | null> {
   if (!email) return null;
   const browsers = await getBrowserList(deps, { limit: 1000 });
@@ -154,14 +149,14 @@ export async function findBrowserByEmail(deps: IxWindowDeps, email: string): Pro
   return null;
 }
 
-/** Python 的 `int(profile_id) if profile_id else None`：空值 / 0 / 非数字一律视为无效 */
+/** 空值 / 0 / 非数字一律视为无效 */
 function toProfileId(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined || value === "" || value === 0) return null;
   const n = Number(value);
   return Number.isInteger(n) && n !== 0 ? n : null;
 }
 
-/** 对标 open_browser_by_id（cookies_backup=False, load_profile_info_page=False） */
+/** cookies_backup=False, load_profile_info_page=False */
 export async function openBrowserById(
   deps: IxWindowDeps,
   profileId: number | string,
@@ -175,7 +170,6 @@ export async function openBrowserById(
   return r.ok;
 }
 
-/** 对标 delete_browser_by_id */
 export async function deleteBrowserById(
   deps: IxWindowDeps,
   profileId: number | string,
@@ -187,7 +181,7 @@ export async function deleteBrowserById(
   return r.ok;
 }
 
-/** 对标 get_next_window_name：`{prefix}_{最大序号+1}` */
+/** `{prefix}_{最大序号+1}` */
 export async function getNextWindowName(deps: IxWindowDeps, prefix: string): Promise<string> {
   const browsers = await getBrowserList(deps, { limit: 1000 });
   let maxNum = 0;
@@ -196,7 +190,7 @@ export async function getNextWindowName(deps: IxWindowDeps, prefix: string): Pro
     const name = b.name ?? "";
     if (name.startsWith(pattern)) {
       const suffix = name.slice(pattern.length);
-      // Python int() 接受首尾空白与正负号，拒绝小数与空串
+      // 只接受首尾空白与正负号包裹的整数，拒绝小数与空串
       if (/^\s*[+-]?\d+\s*$/.test(suffix)) {
         const num = Number.parseInt(suffix.trim(), 10);
         if (num > maxNum) maxNum = num;

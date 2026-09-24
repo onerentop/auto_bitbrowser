@@ -1,19 +1,22 @@
 /**
  * 选择器尝试辅助
  *
- * auto_replace_email / auto_replace_phone 这两个脚本是确定性选择器驱动，
- * Python 源码里到处是同一个模式：
+ * auto-replace-email.ts / auto-replace-phone.ts 走确定性选择器，
+ * 两个文件里重复出现同一个模式：
  *
- *     for selector in [一堆候选选择器]:
- *         try:
- *             el = page.locator(selector).first
- *             if await el.count() > 0 and await el.is_visible():
- *                 await el.click()
- *                 break
- *         except:
- *             continue
+ *     for (const selector of selectors) {
+ *       try {
+ *         const el = page.locator(selector).first();
+ *         if ((await el.count()) > 0 && (await el.isVisible())) {
+ *           await el.click();
+ *           break;
+ *         }
+ *       } catch {
+ *         continue;
+ *       }
+ *     }
  *
- * 这段在两个文件里重复了 20 多次，共约 400 行。抽成这里，行为保持一致：
+ * 这段在两个文件里重复了 20 多次、共约 400 行。抽成这里，行为保持一致：
  *   - 逐个尝试，任一成功即返回
  *   - 单个选择器出错不中断整个循环（Google 页面在不同语言/版本下
  *     会命中不同的非法选择器）
@@ -79,8 +82,7 @@ export async function clickFirstVisible(
  * 逐个尝试点击**最后一个**匹配元素。
  *
  * 为什么需要它：Google 的验证弹窗里 "Verify" 按钮在右侧，
- * 用 first 会点到左侧的无关元素。Python 侧对此有明确注释
- * （"用 last 因为 Verify 在右边"），必须保留。
+ * 用 first 会点到左侧的无关元素（原注释：用 last 因为 Verify 在右边）。
  */
 export async function clickLastVisible(
   page: CompatPage,
@@ -146,7 +148,7 @@ export async function fillFirstVisible(
 
 /**
  * 带重试地逐个尝试选择器。
- * Python 侧对应「for attempt in range(N): ... await asyncio.sleep(间隔)」那类结构。
+ * 失败时按固定间隔重试，直到成功或用完次数。
  */
 export async function findFirstVisibleWithRetry(
   page: CompatPage,
@@ -164,7 +166,7 @@ export async function findFirstVisibleWithRetry(
   return null;
 }
 
-// ==================== 选择器表（逐字照搬 Python） ====================
+// ==================== 选择器表 ====================
 
 /** 登录按钮候选 */
 export const SIGN_IN_SELECTORS = [

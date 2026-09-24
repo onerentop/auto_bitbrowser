@@ -12,13 +12,13 @@
 import type { TaskInfo } from "../ipc.ts";
 
 export const HOME_INVOKE = {
-  /** 读取「创建参数配置」卡片的两个输入框（对标 home_interface.py:468 _loadConfigToUI） */
+  /** 读取「创建参数配置」卡片的两个输入框 */
   homeGetConfig: "abb/home/getConfig",
-  /** 写回两个输入框（对标 home_interface.py:481 saveConfig；这里改为失焦时写回） */
+  /** 写回两个输入框（改为失焦时写回） */
   homeSaveConfig: "abb/home/saveConfig",
-  /** 目标分组下拉选项（对标 home_interface.py:227 refreshGroupList） */
+  /** 目标分组下拉选项 */
   homeListGroups: "abb/home/listGroups",
-  /** 分组 + 窗口两级树（对标 home_interface.py:34 BrowserLoadWorker + :295 _populateBrowserTree） */
+  /** 分组 + 窗口两级树 */
   homeListBrowsers: "abb/home/listBrowsers",
   /** 批量打开选中窗口（后台任务；原版 :446 为 TODO 桩） */
   homeOpenBrowsers: "abb/home/openBrowsers",
@@ -58,7 +58,7 @@ export interface HomeBrowserNode {
   /** 窗口 ID；原始数据缺失或非法时为 null（无法打开 / 删除） */
   profileId: number | null;
   name: string;
-  /** 2FA 验证码：与原版一致恒为空（home_interface.py:355） */
+  /** 2FA 验证码：恒为空 */
   tfaCode: string;
   note: string;
 }
@@ -74,7 +74,7 @@ export interface HomeGroupNode {
 export interface HomeBrowserTree {
   groups: HomeGroupNode[];
   totalBrowsers: number;
-  /** 加载过程中的错误（对标 BrowserLoadWorker 的 result['error']） */
+  /** 加载过程中的错误 */
   error: string | null;
 }
 

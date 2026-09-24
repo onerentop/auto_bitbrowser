@@ -1,37 +1,33 @@
 /**
- * 配置管理器（Node 重写）
- * 对标 core/config_manager.py（832 行），逐字移植：DEFAULT_CONFIG、敏感字段清单、
- * _merge_config 合并规则、点号路径 get/set、load() 的明文迁移、全部 get_ai_* / set_ai_* 取值优先级。
+ * 配置管理器
+ * 职责：默认配置模板（DEFAULT_CONFIG）、敏感字段清单、合并规则、点号路径 get/set、
+ * load() 的明文迁移、全部 get_ai_* / set_ai_* 的取值优先级。
  *
- * 与 Python 的刻意差异（其余一律照抄）：
- *   1. 单例形态：Python 是「类方法单例」（ConfigManager.get(...)，状态挂在类属性 _config 上）；
- *      TS 侧改为可实例化的 class + 默认单例 configManager + 模块级便捷函数委托单例。
+ * 设计取舍：
+ *   1. 单例形态：可实例化的 class + 默认单例 configManager + 模块级便捷函数委托单例。
  *      理由：可测试性（测试可注入独立的 configFile，互不污染）。
- *   2. 线程锁：Python 用 threading.RLock 保护 _config / 文件写入；Node 单线程事件循环下
- *      这里的所有操作都是同步的，不存在交叉执行点，故去掉锁，不引入任何等价物。
- *   3. 配置文件路径：Python 是 BASE_PATH/config.json（BASE_PATH = 仓库根，PyInstaller 打包时取 exe 目录）；
- *      TS 侧默认同样解析到仓库根的 config.json（本文件位于 desktop/src/core/ → 上溯三级），
- *      但构造参数 configFile 允许注入（测试用）。没有 sys.frozen 分支的等价物。
- *   4. 打印：Python 用 print()，这里用可注入的 log（默认 console.log），文案逐字保留。
- *   5. b64/UTF-8 解码的**异常语义**：Python 的 b64decode/decode('utf-8') 会抛异常从而
- *      走 `except: return value`；Node 的 Buffer 解码是静默容错的，为保持一致这里显式
- *      校验 base64 长度并用 TextDecoder({fatal:true}) 解码，让非法输入照样落到 catch。
+ *   2. 无锁：Node 单线程事件循环下，这里的所有操作都是同步的，不存在交叉执行点。
+ *   3. 配置文件路径：默认解析到仓库根的 config.json（本文件位于 desktop/src/core/ → 上溯三级），
+ *      构造参数 configFile 允许注入（测试用）。
+ *   4. 打印：用可注入的 log（默认 console.log），文案逐字保留。
+ *   5. b64/UTF-8 解码的**异常语义**：Node 的 Buffer 解码是静默容错的，为让非法输入
+ *      照样落到 catch，这里显式校验 base64 长度并用 TextDecoder({fatal:true}) 解码。
  *
- * 加解密必须与 Python **字节级互通**（config.json 是两侧共用的同一个文件）：
- *   - XOR 作用在 **Unicode 码点** 上（Python 的 ord/chr），不是 UTF-8 字节。
+ * 加解密必须与现存 config.json 的密文**字节级互通**（历史数据是两种实现共用的同一个文件）：
+ *   - XOR 作用在 **Unicode 码点** 上，不是 UTF-8 字节。
  *     因此这里用 Array.from(value) 按码点切分（emoji 等星平面字符算 1 个字符，
- *     绝不能用 JS 的 UTF-16 code unit 逐个处理，否则密钥偏移量会与 Python 错位）。
+ *     绝不能用 JS 的 UTF-16 code unit 逐个处理，否则密钥偏移量会错位）。
  *   - **先 XOR 再 UTF-8 编码**，最后 base64：Buffer.from(obfuscated, "utf8").toString("base64")。
  *   - 解密是完全对称的逆过程；不以 "ENC:" 开头的值原样返回；任何异常都返回原值。
  *
- * 照搬的可疑行为（详见各处 ⚠ 注释）：见 mergeConfig 的浅拷贝别名、get() 返回内部对象引用、
+ * 可疑行为（详见各处 ⚠ 注释）：mergeConfig 的浅拷贝别名、get() 返回内部对象引用、
  * getAiProviderApiKey 的二次解密。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** 配置树里的任意值（Python 侧是 JSON 可序列化的任意对象） */
+/** 配置树里的任意值（JSON 可序列化的任意对象） */
 export type ConfigValue = unknown;
 
 /** 配置字典 */
@@ -39,23 +35,22 @@ export type ConfigDict = Record<string, ConfigValue>;
 
 export type LogFn = (message: string) => void;
 
-/** 对标 get_base_path()：Python 取 core/ 的上一级 = 仓库根；本文件在 desktop/src/core/ 故上溯三级 */
+/** 基础路径 = 仓库根（本文件在 desktop/src/core/，故上溯三级） */
 export function getBasePath(): string {
   return path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
 }
 
-/** 对标 BASE_PATH */
 export const BASE_PATH: string = getBasePath();
 
-/** 对标 ConfigManager.CONFIG_FILE 的默认值 */
+/** 配置文件名的默认值 */
 export function resolveDefaultConfigFile(): string {
   return path.join(BASE_PATH, "config.json");
 }
 
-/** 对标 _OBFUSCATION_KEY（混淆密钥，简单混淆，非高安全性加密） */
+/** 混淆密钥，简单混淆，非高安全性加密 */
 export const OBFUSCATION_KEY = "ixBrowser_AutoManager_2024";
 
-/** 对标 _SENSITIVE_CONFIG_PATHS：需要加密保存的敏感字段路径 */
+/** 需要加密保存的敏感字段路径 */
 export const SENSITIVE_CONFIG_PATHS: readonly string[] = [
   "gmail_imap_password",
   "sub2api.password",
@@ -65,8 +60,8 @@ export const SENSITIVE_CONFIG_PATHS: readonly string[] = [
 ];
 
 /**
- * 对标 DEFAULT_CONFIG（默认配置模板），键与默认值逐条对齐。
- * ⚠ 与 Python 一样是**可变的共享对象**：mergeConfig 用浅拷贝，
+ * 默认配置模板（DEFAULT_CONFIG）
+ * ⚠ 这是**可变的共享对象**：mergeConfig 用浅拷贝，
  *   未被用户配置覆盖的嵌套子树仍然是这里的引用（见 mergeConfig 注释）。
  */
 export const DEFAULT_CONFIG: ConfigDict = {
@@ -171,7 +166,7 @@ export const DEFAULT_CONFIG: ConfigDict = {
   },
 };
 
-/** 对标 copy.deepcopy(DEFAULT_CONFIG) */
+/** DEFAULT_CONFIG */
 export function createDefaultConfig(): ConfigDict {
   return structuredClone(DEFAULT_CONFIG);
 }
@@ -180,15 +175,15 @@ function isRecord(value: unknown): value is ConfigDict {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ==================== 加解密（与 Python 字节级互通） ====================
+// ==================== 加解密（与 config.json 的密文格式互通） ====================
 
 /**
- * 模拟 Python base64.b64decode 的严格性：
- * 非法字符被丢弃，剩余长度不是 4 的倍数则抛异常（Python 抛 binascii.Error）。
- * Node 的 Buffer.from(s, "base64") 本身完全静默容错，不做这一步就会与 Python 的
- * `except: return value` 分支行为分叉。
+ * 严格 base64 解码：
+ * 非法字符被丢弃，剩余长度不是 4 的倍数则抛异常。
+ * Node 的 Buffer.from(s, "base64") 本身完全静默容错，不做这一步，
+ * 非法输入就不会落到调用方的 `catch { return value }` 分支。
  */
-function pythonB64Decode(encoded: string): Buffer {
+function strictB64Decode(encoded: string): Buffer {
   const cleaned = encoded.replace(/[^A-Za-z0-9+/=]/g, "");
   if (cleaned.length % 4 !== 0) {
     throw new Error("Invalid base64-encoded string");
@@ -196,14 +191,14 @@ function pythonB64Decode(encoded: string): Buffer {
   return Buffer.from(cleaned, "base64");
 }
 
-/** 与 Python 的 bytes.decode('utf-8') 一致：非法 UTF-8 抛异常而不是替换成 U+FFFD */
+/** 非法 UTF-8 抛异常而不是替换成 U+FFFD */
 function strictUtf8Decode(buf: Buffer): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(buf);
 }
 
-/** 按 Unicode 码点做 XOR 混淆（Python: chr(ord(c) ^ ord(KEY[i % len(KEY)]))） */
+/** 按 Unicode 码点做 XOR 混淆 */
 function xorByCodePoint(text: string): string {
-  // Array.from 按码点切分，星平面字符（emoji）算 1 个字符，与 Python 的 enumerate 对齐
+  // Array.from 按码点切分，星平面字符（emoji）算 1 个字符
   const chars = Array.from(text);
   let out = "";
   for (let i = 0; i < chars.length; i += 1) {
@@ -214,7 +209,7 @@ function xorByCodePoint(text: string): string {
   return out;
 }
 
-/** 对标 encrypt_sensitive()：简单加密敏感信息（base64 + 混淆） */
+/** 简单加密敏感信息（base64 + 混淆） */
 export function encryptSensitive(value: string): string {
   if (!value) {
     return "";
@@ -230,7 +225,7 @@ export function encryptSensitive(value: string): string {
   }
 }
 
-/** 对标 decrypt_sensitive()：解密敏感信息 */
+/** 解密敏感信息 */
 export function decryptSensitive(value: string): string {
   if (!value || !value.startsWith("ENC:")) {
     return value;
@@ -239,7 +234,7 @@ export function decryptSensitive(value: string): string {
     // 去掉前缀
     const encoded = value.slice(4);
     // Base64 解码
-    const obfuscated = strictUtf8Decode(pythonB64Decode(encoded));
+    const obfuscated = strictUtf8Decode(strictB64Decode(encoded));
     // 反混淆
     return xorByCodePoint(obfuscated);
   } catch {
@@ -252,7 +247,7 @@ export function decryptSensitive(value: string): string {
 export interface ConfigManagerOptions {
   /** 配置文件路径，默认 BASE_PATH/config.json（测试可注入） */
   configFile?: string;
-  /** 日志输出，默认 console.log（对标 Python 的 print） */
+  /** 日志输出，默认 console.log */
   log?: LogFn;
 }
 
@@ -266,16 +261,15 @@ export interface LlmConfigResult {
 }
 
 /**
- * 配置管理器 —— 对标 Python 的 ConfigManager 类。
- * Python 是类方法单例；这里是普通类，模块底部导出默认单例 configManager。
+ * 配置管理器
+ * 可实例化的普通类，模块底部导出默认单例 configManager。
  */
 export class ConfigManager {
-  /** 对标 CONFIG_FILE */
   readonly configFile: string;
 
   private readonly log: LogFn;
 
-  /** 对标 _config（None 表示尚未加载） */
+ /** None 表示尚未加载 */
   private config: ConfigDict | null = null;
 
   constructor(options: ConfigManagerOptions = {}) {
@@ -285,7 +279,7 @@ export class ConfigManager {
 
   // ---------- 敏感字段 ----------
 
-  /** 对标 _is_sensitive_key_path()：判断是否为敏感配置路径 */
+ /** 判断是否为敏感配置路径 */
   static isSensitiveKeyPath(keyPath: string): boolean {
     if (SENSITIVE_CONFIG_PATHS.includes(keyPath)) {
       return true;
@@ -300,10 +294,10 @@ export class ConfigManager {
 
   // ---------- 加载 / 保存 ----------
 
-  /** 对标 load()：加载配置，不存在则创建默认配置 */
+ /** 加载配置，不存在则创建默认配置 */
   load(): ConfigDict {
     if (this.config !== null) {
-      // Python 是 dict.copy()（浅拷贝），嵌套子树仍与内部状态共享
+      // 浅拷贝：嵌套子树仍与内部状态共享
       return { ...this.config };
     }
 
@@ -339,11 +333,10 @@ export class ConfigManager {
   }
 
   /**
-   * 对标 _merge_config()：递归合并配置，保留现有值，添加新字段。
-   * ⚠ 照搬 Python 的浅拷贝语义：`result = default.copy()` 之后，凡是 current 里
+   * 递归合并配置，保留现有值，添加新字段。
+   * ⚠ 浅拷贝语义：`result = { ...defaults }` 之后，凡是 current 里
    *   没有出现的嵌套 dict，result 持有的是 DEFAULT_CONFIG 里那棵子树的**引用**，
-   *   后续 set() 写入会顺带改到 DEFAULT_CONFIG。Python 侧存在同样的别名问题，
-   *   这里不做修正以保证行为一致。
+   *   后续 set() 写入会顺带改到 DEFAULT_CONFIG。这是既有行为，不做修正。
    */
   static mergeConfig(defaults: ConfigDict, current: ConfigDict): ConfigDict {
     const result: ConfigDict = { ...defaults };
@@ -362,7 +355,7 @@ export class ConfigManager {
     return result;
   }
 
-  /** 对标 save()：保存配置到文件 */
+ /** 保存配置到文件 */
   save(config?: ConfigDict | null): void {
     if (config !== undefined && config !== null) {
       this.config = config;
@@ -372,17 +365,17 @@ export class ConfigManager {
     this.saveInternal();
   }
 
-  /** 对标 _save_internal()（Python 需在锁内调用，Node 无锁） */
+  /** 内部保存实现 */
   private saveInternal(): void {
     try {
-      // 对标 json.dump(..., ensure_ascii=False, indent=2)
+ // ..., ensure_ascii=False, indent=2
       fs.writeFileSync(this.configFile, JSON.stringify(this.config, null, 2), "utf-8");
     } catch (e) {
       this.log(`[ConfigManager] 保存配置失败: ${errText(e)}`);
     }
   }
 
-  /** 对标 reload()：强制重新加载配置 */
+ /** 强制重新加载配置 */
   reload(): ConfigDict {
     this.config = null;
     return this.load();
@@ -391,11 +384,11 @@ export class ConfigManager {
   // ---------- 点号路径读写 ----------
 
   /**
-   * 对标 get()：获取配置项，支持嵌套 key
+ * 获取配置项，支持嵌套 key
    * 例如: configManager.get("timeouts.page_load", 30)
    *
-   * 差异：Python 的 default 形参默认 None，这里默认 null（JSON 语义一致）。
-   * ⚠ 与 Python 一样返回**内部对象的引用**（不深拷贝），调用方修改会直接改到配置树。
+   * 参数默认值：defaultValue 默认为 null（JSON 语义一致）。
+   * ⚠ 返回的是**内部对象的引用**（不深拷贝），调用方修改会直接改到配置树。
    */
   get(key: string, defaultValue: ConfigValue = null): ConfigValue {
     const config = this.load();
@@ -403,7 +396,7 @@ export class ConfigManager {
     let value: ConfigValue = config;
 
     for (const k of keys) {
-      // Python: dict 缺键抛 KeyError、非 dict 下标抛 TypeError，两者都落到 default
+      // 缺键 / 中间层不是对象，两种情况都落到 defaultValue
       if (!isRecord(value) || !(k in value)) {
         return defaultValue;
       }
@@ -417,10 +410,10 @@ export class ConfigManager {
   }
 
   /**
-   * 对标 set()：设置配置项，支持嵌套 key
+ * 设置配置项，支持嵌套 key
    * 例如: configManager.set("timeouts.page_load", 30)
    *
-   * 差异：Python 在中间层是标量时（`k not in 5`）抛 TypeError；这里显式抛 Error 对齐。
+   * 中间节点是标量时显式抛 TypeError。
    */
   set(key: string, value: ConfigValue): void {
     if (this.config === null) {
@@ -449,7 +442,7 @@ export class ConfigManager {
     this.saveInternal();
   }
 
-  /** 对标 _get_nested_value()：获取嵌套配置值（内部方法） */
+ /** 获取嵌套配置值（内部方法） */
   private getNestedValue(keyPath: string): ConfigValue {
     if (this.config === null) {
       return null;
@@ -464,7 +457,7 @@ export class ConfigManager {
     return current;
   }
 
-  /** 对标 _set_nested_value()：设置嵌套配置值（内部方法，中间层非 dict 直接覆盖为 {}） */
+ /** 设置嵌套配置值（内部方法，中间层非 dict 直接覆盖为 {}） */
   private setNestedValue(keyPath: string, value: ConfigValue): void {
     if (this.config === null) {
       this.config = createDefaultConfig();
@@ -482,7 +475,7 @@ export class ConfigManager {
     current[keys[keys.length - 1] as string] = value;
   }
 
-  /** 对标 _collect_sensitive_paths()：收集需要加密的敏感字段路径 */
+ /** 收集需要加密的敏感字段路径 */
   private collectSensitivePaths(): string[] {
     const paths = new Set<string>(SENSITIVE_CONFIG_PATHS);
 
@@ -496,7 +489,7 @@ export class ConfigManager {
     return [...paths].sort();
   }
 
-  /** 对标 _migrate_legacy_sensitive_fields()：将历史明文敏感字段迁移为加密存储，返回是否发生迁移 */
+ /** 将历史明文敏感字段迁移为加密存储，返回是否发生迁移 */
   private migrateLegacySensitiveFields(): boolean {
     if (this.config === null) {
       return false;
@@ -527,33 +520,31 @@ export class ConfigManager {
     return false;
   }
 
-  /** 对标 encrypt_sensitive()（类方法转发） */
+ /** 类方法转发 */
   encryptSensitive(value: string): string {
     return encryptSensitive(value);
   }
 
-  /** 对标 decrypt_sensitive()（类方法转发） */
+ /** 类方法转发 */
   decryptSensitive(value: string): string {
     return decryptSensitive(value);
   }
 
   // ============ AI Agent 配置方法 ============
 
-  /** 对标 get_ai_default_provider() */
   getAiDefaultProvider(): string {
     return this.get("ai_agent.default_provider", "gemini") as string;
   }
 
-  /** 对标 set_ai_default_provider() */
   setAiDefaultProvider(provider: string): void {
     this.set("ai_agent.default_provider", provider);
   }
 
   /**
-   * 对标 get_ai_provider_config()：获取指定提供商的配置（provider 为空则用默认提供商）
-   * ⚠ 无 api_key 时返回的是内部对象引用（与 Python 的 cls.get 一致）；
+ * 获取指定提供商的配置（provider 为空则用默认提供商）
+   * ⚠ 无 api_key 时返回的是内部对象引用；
    *   有 api_key 时才浅拷贝一份并解密。
-   * 差异：路径上的值不是 dict 时 Python 会 AttributeError，这里返回 {}。
+   * 路径上的值不是 dict 时返回 {}。
    */
   getAiProviderConfig(provider?: string | null): ConfigDict {
     const name = provider ? provider : this.getAiDefaultProvider();
@@ -570,7 +561,7 @@ export class ConfigManager {
     return config;
   }
 
-  /** 对标 set_ai_provider_config()：设置指定提供商的配置（api_key 加密存储） */
+ /** 设置指定提供商的配置（api_key 加密存储） */
   setAiProviderConfig(provider: string, config: ConfigDict): void {
     let next = config;
     // 加密 API Key
@@ -583,9 +574,9 @@ export class ConfigManager {
   }
 
   /**
-   * 对标 get_ai_provider_api_key()：获取指定提供商的解密后 API Key
-   * ⚠ 照搬 Python 的二次解密：该路径已被 get() 判定为敏感并解密过一次，
-   *   这里再 decrypt 一次对非 ENC: 值是幂等的（无害），保留以对齐。
+ * 获取指定提供商的解密后 API Key
+   * ⚠ 二次解密：该路径已被 get() 判定为敏感并解密过一次，
+   *   这里再 decrypt 一次对非 ENC: 值是幂等的（无害），保留。
    */
   getAiProviderApiKey(provider?: string | null): string {
     const name = provider ? provider : this.getAiDefaultProvider();
@@ -594,47 +585,41 @@ export class ConfigManager {
     return decryptSensitive(encrypted);
   }
 
-  /** 对标 set_ai_provider_api_key()：设置指定提供商的 API Key（加密存储） */
+ /** 设置指定提供商的 API Key（加密存储） */
   setAiProviderApiKey(provider: string, apiKey: string): void {
     const encrypted = encryptSensitive(apiKey);
     this.set(`ai_agent.providers.${provider}.api_key`, encrypted);
   }
 
-  /** 对标 get_ai_provider_base_url() */
   getAiProviderBaseUrl(provider?: string | null): string {
     const name = provider ? provider : this.getAiDefaultProvider();
 
     return this.get(`ai_agent.providers.${name}.base_url`, "") as string;
   }
 
-  /** 对标 set_ai_provider_base_url() */
   setAiProviderBaseUrl(provider: string, baseUrl: string): void {
     this.set(`ai_agent.providers.${provider}.base_url`, baseUrl);
   }
 
-  /** 对标 get_ai_provider_model() */
   getAiProviderModel(provider?: string | null): string {
     const name = provider ? provider : this.getAiDefaultProvider();
 
     return this.get(`ai_agent.providers.${name}.model`, "") as string;
   }
 
-  /** 对标 set_ai_provider_model() */
   setAiProviderModel(provider: string, model: string): void {
     this.set(`ai_agent.providers.${provider}.model`, model);
   }
 
-  /** 对标 is_ai_provider_enabled() */
   isAiProviderEnabled(provider: string): boolean {
     return this.get(`ai_agent.providers.${provider}.enabled`, false) as boolean;
   }
 
-  /** 对标 set_ai_provider_enabled() */
   setAiProviderEnabled(provider: string, enabled: boolean): void {
     this.set(`ai_agent.providers.${provider}.enabled`, enabled);
   }
 
-  /** 对标 get_enabled_ai_providers()：获取所有启用的提供商列表 */
+ /** 获取所有启用的提供商列表 */
   getEnabledAiProviders(): string[] {
     const providers = this.get("ai_agent.providers", {});
     if (!isRecord(providers)) {
@@ -646,7 +631,7 @@ export class ConfigManager {
   }
 
   /**
-   * 对标 get_ai_api_key()：获取解密后的 AI Agent API Key（向后兼容）
+ * 获取解密后的 AI Agent API Key（向后兼容）
    * 优先使用默认提供商的 API Key，兼容旧的单一配置
    */
   getAiApiKey(): string {
@@ -663,7 +648,7 @@ export class ConfigManager {
   }
 
   /**
-   * 对标 set_ai_api_key()：加密保存 AI Agent API Key（向后兼容）
+ * 加密保存 AI Agent API Key（向后兼容）
    * 同时更新默认提供商和兼容字段
    */
   setAiApiKey(apiKey: string): void {
@@ -675,7 +660,7 @@ export class ConfigManager {
     this.set("ai_agent.api_key", encrypted);
   }
 
-  /** 对标 get_ai_base_url()：获取 AI Agent Base URL（向后兼容） */
+ /** 获取 AI Agent Base URL（向后兼容） */
   getAiBaseUrl(): string {
     // 先尝试新的多提供商配置
     const provider = this.getAiDefaultProvider();
@@ -688,7 +673,7 @@ export class ConfigManager {
     return this.get("ai_agent.base_url", "") as string;
   }
 
-  /** 对标 set_ai_base_url()：设置 AI Agent Base URL（向后兼容） */
+ /** 设置 AI Agent Base URL（向后兼容） */
   setAiBaseUrl(baseUrl: string): void {
     // 更新默认提供商
     const provider = this.getAiDefaultProvider();
@@ -697,7 +682,7 @@ export class ConfigManager {
     this.set("ai_agent.base_url", baseUrl);
   }
 
-  /** 对标 get_ai_model()：获取 AI Agent 模型名称（向后兼容） */
+ /** 获取 AI Agent 模型名称（向后兼容） */
   getAiModel(): string {
     // 先尝试新的多提供商配置
     const provider = this.getAiDefaultProvider();
@@ -710,7 +695,7 @@ export class ConfigManager {
     return this.get("ai_agent.model", "gemini-2.5-flash") as string;
   }
 
-  /** 对标 set_ai_model()：设置 AI Agent 模型名称（向后兼容） */
+ /** 设置 AI Agent 模型名称（向后兼容） */
   setAiModel(model: string): void {
     // 更新默认提供商
     const provider = this.getAiDefaultProvider();
@@ -719,27 +704,23 @@ export class ConfigManager {
     this.set("ai_agent.model", model);
   }
 
-  /** 对标 get_ai_max_steps() */
   getAiMaxSteps(): number {
     return this.get("ai_agent.max_steps", 25) as number;
   }
 
-  /** 对标 set_ai_max_steps() */
   setAiMaxSteps(maxSteps: number): void {
     this.set("ai_agent.max_steps", maxSteps);
   }
 
-  /** 对标 get_ai_max_tokens() */
   getAiMaxTokens(): number {
     return this.get("ai_agent.max_tokens", 8192) as number;
   }
 
-  /** 对标 set_ai_max_tokens() */
   setAiMaxTokens(maxTokens: number): void {
     this.set("ai_agent.max_tokens", maxTokens);
   }
 
-  /** 对标 get_llm_config()：获取用于创建 LLM 实例的配置 */
+ /** 获取用于创建 LLM 实例的配置 */
   getLlmConfig(provider?: string | null): LlmConfigResult {
     const name = provider ? provider : this.getAiDefaultProvider();
 
@@ -757,23 +738,22 @@ export class ConfigManager {
 
   // ============ Gmail IMAP 配置方法 ============
 
-  /** 对标 get_gmail_imap_email()：获取 Gmail IMAP 邮箱（用于接收验证码） */
+ /** 获取 Gmail IMAP 邮箱（用于接收验证码） */
   getGmailImapEmail(): string {
     return this.get("gmail_imap_email", "") as string;
   }
 
-  /** 对标 set_gmail_imap_email() */
   setGmailImapEmail(email: string): void {
     this.set("gmail_imap_email", email);
   }
 
-  /** 对标 get_gmail_imap_password()：获取 Gmail IMAP 应用密码 */
+ /** 获取 Gmail IMAP 应用密码 */
   getGmailImapPassword(): string {
     const encrypted = this.get("gmail_imap_password", "") as string;
     return decryptSensitive(encrypted);
   }
 
-  /** 对标 set_gmail_imap_password()：设置 Gmail IMAP 应用密码 */
+ /** 设置 Gmail IMAP 应用密码 */
   setGmailImapPassword(password: string): void {
     const encrypted = encryptSensitive(password);
     this.set("gmail_imap_password", encrypted);
@@ -781,42 +761,38 @@ export class ConfigManager {
 
   // ============ 账号管理配置方法 ============
 
-  /** 对标 get_login_concurrency()：获取并发登录数 */
+ /** 获取并发登录数 */
   getLoginConcurrency(): number {
     return this.get("account_manager.login_concurrency", 3) as number;
   }
 
-  /** 对标 set_login_concurrency() */
   setLoginConcurrency(concurrency: number): void {
     this.set("account_manager.login_concurrency", concurrency);
   }
 
-  /** 对标 get_login_timeout()：获取登录超时时间（秒） */
+ /** 获取登录超时时间（秒） */
   getLoginTimeout(): number {
     return this.get("account_manager.login_timeout", 120) as number;
   }
 
-  /** 对标 set_login_timeout() */
   setLoginTimeout(timeout: number): void {
     this.set("account_manager.login_timeout", timeout);
   }
 
-  /** 对标 get_login_max_retries()：获取登录最大重试次数 */
+ /** 获取登录最大重试次数 */
   getLoginMaxRetries(): number {
     return this.get("account_manager.login_max_retries", 2) as number;
   }
 
-  /** 对标 set_login_max_retries() */
   setLoginMaxRetries(retries: number): void {
     this.set("account_manager.login_max_retries", retries);
   }
 
-  /** 对标 get_login_retry_delay()：获取登录重试间隔（秒） */
+ /** 获取登录重试间隔（秒） */
   getLoginRetryDelay(): number {
     return this.get("account_manager.login_retry_delay", 3) as number;
   }
 
-  /** 对标 set_login_retry_delay() */
   setLoginRetryDelay(delay: number): void {
     this.set("account_manager.login_retry_delay", delay);
   }
@@ -829,40 +805,35 @@ function errText(e: unknown): string {
 
 // ==================== 默认单例 + 模块级便捷函数 ====================
 
-/** 默认单例，等价于 Python 的「类方法单例」用法 */
+/** 默认单例 */
 export const configManager = new ConfigManager();
 
-/** 对标 ConfigManager.load() */
 export function load(): ConfigDict {
   return configManager.load();
 }
 
-/** 对标 ConfigManager.save() */
 export function save(config?: ConfigDict | null): void {
   configManager.save(config);
 }
 
-/** 对标 ConfigManager.get() */
 export function get(key: string, defaultValue: ConfigValue = null): ConfigValue {
   return configManager.get(key, defaultValue);
 }
 
-/** 对标 ConfigManager.set() */
 export function set(key: string, value: ConfigValue): void {
   configManager.set(key, value);
 }
 
-/** 对标 ConfigManager.reload() */
 export function reload(): ConfigDict {
   return configManager.reload();
 }
 
-/** 对标模块级便捷函数 get_config() */
+/** 模块级便捷函数 get_config */
 export function getConfig(key: string, defaultValue: ConfigValue = null): ConfigValue {
   return configManager.get(key, defaultValue);
 }
 
-/** 对标模块级便捷函数 set_config() */
+/** 模块级便捷函数 set_config */
 export function setConfig(key: string, value: ConfigValue): void {
   configManager.set(key, value);
 }

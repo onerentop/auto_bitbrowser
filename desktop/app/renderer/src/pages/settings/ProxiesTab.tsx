@@ -1,5 +1,5 @@
 /**
- * 「代理」标签 —— 对标 gui/data_management/proxies_tab.py 的 ProxiesTab / ProxyEditDialog / ProxyDetailDialog
+ * 「代理」标签（列表 / 增删改 / 批量导入 / 绑定详情）
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { Alert, App, Button, Card, Empty, Form, Input, List, Modal, Select, Space, Table, Tooltip, Typography } from "antd";
@@ -30,14 +30,14 @@ import { BatchImportModal } from "./BatchImportModal.tsx";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 
-/** 使用情况颜色（proxies_tab.py:276-281） */
+/** 使用情况颜色（满 / 已用 / 空闲） */
 function usageColor(p: ProxyListItemDto): string {
   if (p.is_full) return "#f44336";
   if (p.used_count > 0) return "#ff9800";
   return "#4caf50";
 }
 
-/** 对标 ProxyEditDialog（proxies_tab.py:21-81） */
+/** 新增 / 编辑代理弹窗 */
 function ProxyEditModal(props: {
   editing: ProxyListItemDto | null;
   open: boolean;
@@ -59,7 +59,7 @@ function ProxyEditModal(props: {
 
   const ok = async (): Promise<void> => {
     const v = form.getFieldsValue(true) as ProxyInputDto;
-    // 照搬 get_data：除类型外全部 strip
+    // 除类型外全部 strip
     const data: ProxyInputDto = {
       proxy_type: v.proxy_type,
       host: (v.host ?? "").trim(),
@@ -108,8 +108,8 @@ function ProxyEditModal(props: {
 }
 
 /**
- * 对标 ProxyDetailDialog（proxies_tab.py:84-162）。
- * Python 显示的 window_name 在绑定表中不存在（恒为「未知窗口」），这里显示窗口 ID 与邮箱。
+ * 代理详情弹窗：显示该代理绑定的窗口与邮箱。
+ * 绑定表里没有窗口名，直接显示窗口 ID 与邮箱。
  */
 function ProxyDetailModal(props: { proxyId: number | null; onClose: () => void }): ReactElement {
   const { message } = App.useApp();
@@ -196,7 +196,7 @@ export function ProxiesTab(): ReactElement {
   const [importOpen, setImportOpen] = useState(false);
   const hostReady = useHostStatus()?.state === "ready";
 
-  /** 对标 loadData（proxies_tab.py:241-321） */
+  /** 加载列表数据 */
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -226,7 +226,7 @@ export function ProxiesTab(): ReactElement {
     setEditOpen(true);
   };
 
-  /** 对标 addProxy / editProxy（proxies_tab.py:329-368） */
+  /** 提交新增 / 编辑 */
   const submitEdit = async (data: ProxyInputDto): Promise<void> => {
     try {
       if (editing) {
@@ -247,7 +247,7 @@ export function ProxiesTab(): ReactElement {
     }
   };
 
-  /** 对标 deleteSelected（proxies_tab.py:370-402） */
+  /** 删除选中代理 */
   const deleteSelected = (): void => {
     const rows = items.filter((p) => selected.includes(p.index));
     if (rows.length === 0) {
@@ -295,7 +295,7 @@ export function ProxiesTab(): ReactElement {
           <Tooltip title="编辑">
             <Button type="text" icon={<EditOutlined />} onClick={() => openEdit(p)} />
           </Tooltip>
-          {/* proxies_tab.py:297-305：有 proxy_id 且已使用时才显示详情 */}
+          {/* 有 proxy_id 且已使用时才显示详情 */}
           {p.proxy_id && p.used_count > 0 ? (
             <Tooltip title="详情">
               <Button type="text" icon={<InfoCircleOutlined />} onClick={() => setDetailId(p.proxy_id)} />
@@ -347,7 +347,7 @@ export function ProxiesTab(): ReactElement {
         proxyId={detailId}
         onClose={() => {
           setDetailId(null);
-          // proxies_tab.py:323-327：关闭详情后总是刷新
+          // 关闭详情后总是刷新
           void load();
         }}
       />

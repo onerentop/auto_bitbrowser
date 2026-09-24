@@ -1,6 +1,5 @@
 /**
  * 自动替换辅助手机号
- * 对标 automation/auto_replace_recovery_phone.py
  */
 import { printBanner, withEngine, type CommonOptions, type Result2 } from "./shared.ts";
 

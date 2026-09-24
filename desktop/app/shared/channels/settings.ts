@@ -15,13 +15,13 @@ import type { TaskInfo } from "../ipc.ts";
 
 export const SETTINGS_INVOKE = {
   // ---------- 配置 ----------
-  /** 读取设置快照（对标 SettingsService.load_settings_snapshot） */
+ /** 读取设置快照 */
   settingsLoad: "abb/settings/load",
-  /** 保存设置快照，只落盘一次（对标 save_settings_snapshot） */
+ /** 保存设置快照，只落盘一次 */
   settingsSave: "abb/settings/save",
-  /** 立即写入 data_dir（对标 set_data_dir） */
+ /** 立即写入 data_dir */
   settingsSetDataDir: "abb/settings/setDataDir",
-  /** 测试 AI 提供商连接（对标 TestAIConnectionWorker） */
+ /** 测试 AI 提供商连接 */
   settingsTestAi: "abb/settings/testAi",
   /** 只读主题（启动时 theme-init 用）：只返回 { theme }，不把密钥带到渲染层 */
   settingsGetTheme: "abb/settings/getTheme",
@@ -50,7 +50,7 @@ export const AI_PROVIDERS: readonly AiProviderName[] = ["gemini", "anthropic"];
 export type SettingsThemeValue = "auto" | "light" | "dark";
 export const SETTINGS_THEMES: readonly SettingsThemeValue[] = ["auto", "light", "dark"];
 
-/** 设置快照 —— 字段名照搬 application/settings_service.py:16 的 SettingsSnapshot */
+/** 设置快照 */
 export interface SettingsSnapshotDto {
   ai_default_provider: string;
   gemini_api_key: string;
@@ -86,7 +86,7 @@ export type SettingsNumberField =
   | "proxy_max_windows_per_ip"
   | "default_thread_count";
 
-/** 数值字段的 [最小, 最大, 默认]，照搬 gui/setting_interface.py 各 SpinBox 的 setRange / setValue */
+/** 数值字段的 [最小, 最大, 默认] */
 export const SETTINGS_NUMBER_RANGES: Readonly<Record<SettingsNumberField, readonly [number, number, number]>> = {
   ai_max_steps: [5, 50, 25], // :264-266
   timeout_page_load: [10, 120, 30], // :320-322
@@ -101,7 +101,7 @@ export const SETTINGS_NUMBER_RANGES: Readonly<Record<SettingsNumberField, readon
 
 /**
  * 把数值字段夹紧到 SpinBox 范围内。
- * 对标 Python QSpinBox.setValue 的静默夹紧：config.json 里的越界值载入界面后变成边界值，
+ * 静默夹紧：config.json 里的越界值载入界面后变成边界值，
  * 保存时写回的是夹紧后的值（否则后端校验会拒绝整份配置）。
  */
 export function clampSettingsNumber(field: SettingsNumberField, value: number): number {
@@ -126,11 +126,11 @@ export interface TestAiInput {
   model: string;
 }
 
-/** 测试连接结果（对标 finished_signal(bool, str, dict)） */
+/** 测试连接结果（bool, str, dict） */
 export interface TestAiResultDto {
   success: boolean;
   message: string;
-  /** true = 解析后仍无 API Key，未发请求（对标 _testProviderConnection 的 warning 分支） */
+ /** true = 解析后仍无 API Key，未发请求（ 的 warning 分支） */
   missingKey: boolean;
   details: {
     provider?: string;
@@ -146,7 +146,7 @@ export interface TestAiResultDto {
 export type ProxyTypeName = "socks5" | "http" | "https";
 export const PROXY_TYPES: readonly ProxyTypeName[] = ["socks5", "http", "https"];
 
-/** 代理编辑输入（对标 ProxyEditDialog.get_data） */
+/** 代理编辑输入 */
 export interface ProxyInputDto {
   proxy_type: string;
   host: string;
@@ -157,7 +157,7 @@ export interface ProxyInputDto {
 
 /** 代理列表的一行：DataStore 的代理 + 使用统计 */
 export interface ProxyListItemDto extends ProxyInputDto {
-  /** DataStore 列表下标（编辑 / 删除按下标，对标 Python 的 row） */
+  /** 列表下标（编辑 / 删除按下标） */
   index: number;
   /** host:port（写操作时用于核对下标没有漂移） */
   key: string;
@@ -193,7 +193,7 @@ export interface SettingsAccountDto {
   status: string;
 }
 
-/** 添加 / 编辑账号输入（对标 AccountEditDialog.get_data） */
+/** 添加 / 编辑账号输入 */
 export interface SettingsAccountInputDto {
   email: string;
   password: string;
@@ -201,7 +201,7 @@ export interface SettingsAccountInputDto {
   secret_key: string;
 }
 
-/** 批量导入结果（对标 BatchImportDialog._validateInputs 的统计） */
+/** 批量导入结果（ 的统计） */
 export interface ImportResultDto {
   success_count: number;
   fail_count: number;
