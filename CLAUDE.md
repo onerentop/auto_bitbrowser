@@ -160,13 +160,17 @@ auto_bitbrowser2/
 现在：改密只写数据库 + 窗口 `password` 字段；导入 TOTP / 修改验证器只写 `tfa_secret`。
 **新增自动化功能时不要碰 `note`**；要写也只允许「用户显式触发的单字段写入」这一种形式。
 
+### 标签（tag）字段的约定
+
+**标签是 ixBrowser 自己的标签，我们不自建字段。** 读：窗口 	ag_id（空格分隔的多个 id）+ 	ag-list 词表映射，**不要按空格解析 	ag_name**（标题可能含空格）。写：profile-update 的 	ag，值是**标签名数组**；只有用户在账号页显式操作时才写，自动化任务不写标签。
+
 ---
 
 ## 测试与门禁
 
 ```powershell
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
-pnpm test                   # 全量单测（当前基线 587 通过 / 0 失败）
+pnpm test                   # 全量单测（当前基线 596 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
 pnpm run check:deps         # 分层依赖规则（ARCHITECTURE.md §3），0 个 error

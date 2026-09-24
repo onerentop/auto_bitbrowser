@@ -28,6 +28,22 @@ export interface IxEnvelope<T = unknown> {
 }
 
 /**
+ * 标签（ixBrowser 的标签词表项）。
+ * 注意：`color` 由 ixBrowser 自己决定，创建 / 改名接口都不接受颜色。
+ */
+export interface IxTag {
+  id: number;
+  title: string;
+  color: string;
+}
+
+/** tag-list 的原始返回（分页，默认 limit=10） */
+export interface IxTagListData {
+  total: number;
+  data: IxTag[];
+}
+
+/**
  * 窗口对象。
  * 类型陷阱（实测）：proxy_port 是字符串；tag_id/tag_name 空值是空串而非 null。
  */

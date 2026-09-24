@@ -7,7 +7,7 @@
  * 勾选的「刷新后保留 / 隐藏计数」复用 home-list.ts 的 reconcileChecked / selectionSummary（行 key 为 email）。
  * 纯 TS，不依赖 node / DOM / electron。
  */
-import type { AccountListRow, AutoBindSummary, BindWindowOption } from "../channels/accounts.ts";
+import type { AccountListRow, AutoBindSummary, BindWindowOption, TagRef } from "../channels/accounts.ts";
 
 export type AccountLoginFilter = "all" | "logged_in" | "not_logged" | "login_failed";
 
@@ -25,6 +25,8 @@ export interface AccountQuery {
   text: string;
   /** 只看有多个同名窗口的账号 */
   sameNameOnly?: boolean;
+  /** 按标签筛：任选多个命中任一即显示（OR）；空数组或不传 = 不筛 */
+  tagIds?: number[];
 }
 
 /** 登录状态筛选：未登录 = 空 / not_logged（「登录中」只在「全部」里） */
@@ -44,11 +46,13 @@ export function matchLogin(status: string | null, login: AccountLoginFilter): bo
 /** 叠加筛选；没有任何条件时原样返回同一个数组 */
 export function filterAccounts(rows: readonly AccountListRow[], q: AccountQuery): readonly AccountListRow[] {
   const text = q.text.trim().toLowerCase();
-  if (q.groupId === null && q.login === "all" && !text && !q.sameNameOnly) return rows;
+  const tagIds = q.tagIds ?? [];
+  if (q.groupId === null && q.login === "all" && !text && !q.sameNameOnly && tagIds.length === 0) return rows;
   return rows.filter((r) => {
     if (q.groupId !== null && r.group_id !== q.groupId) return false;
     if (!matchLogin(r.login_status, q.login)) return false;
     if (q.sameNameOnly && !hasSameNameWindows(r)) return false;
+    if (tagIds.length > 0 && !r.tags.some((t) => tagIds.includes(t.id))) return false;
     if (!text) return true;
     return (
       r.email.toLowerCase().includes(text) ||
@@ -188,6 +192,20 @@ export function applyNoteUpdate(rows: readonly AccountListRow[], email: string, 
     if (r.email !== email) return r;
     changed = true;
     return { ...r, note };
+  });
+  return changed ? next : rows;
+}
+
+/**
+ * 标签保存成功后就地更新那一行（不整表刷新）。
+ * 邮箱不在列表里时原样返回同一个数组（调用方据此跳过重渲染）。
+ */
+export function applyTagsUpdate(rows: readonly AccountListRow[], email: string, tags: TagRef[]): readonly AccountListRow[] {
+  let changed = false;
+  const next = rows.map((r) => {
+    if (r.email !== email) return r;
+    changed = true;
+    return { ...r, tags };
   });
   return changed ? next : rows;
 }

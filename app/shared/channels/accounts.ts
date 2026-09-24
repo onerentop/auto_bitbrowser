@@ -38,6 +38,15 @@ export const ACCOUNTS_INVOKE = {
   accountsTfaCodes: "abb/accounts/tfaCodes",
   /** 修改窗口备注（只写 note 字段；仅用户点击保存时触发，自动化任务从不读写备注） */
   accountsUpdateNote: "abb/accounts/updateNote",
+  // ---------- 标签（ixBrowser 的标签：读走窗口 tag_id + 词表，写走 profile-update 的 tag） ----------
+  /** 设置某个账号窗口的标签（传标签 id 数组，内部映射成标签名写窗口） */
+  accountsSetTags: "abb/accounts/setTags",
+  /** 新建标签（重名会被 ixBrowser 拒绝） */
+  accountsCreateTag: "abb/accounts/createTag",
+  /** 重命名标签（影响所有挂了它的窗口） */
+  accountsUpdateTag: "abb/accounts/updateTag",
+  /** 删除标签（影响所有挂了它的窗口） */
+  accountsDeleteTag: "abb/accounts/deleteTag",
   // ---------- 账号数据（从设置页迁来） ----------
   /** 按邮箱取账号原文（编辑弹窗用） */
   accountsGet: "abb/accounts/get",
@@ -75,6 +84,8 @@ export interface AccountListRow {
   password: string;
   /** 窗口备注（ixBrowser 里的那份，与首页同一份；未绑定窗口或窗口不存在时为空串） */
   note: string;
+  /** 该账号所绑窗口的标签（按窗口 tag_id 顺序；未绑定或词表取不到时为空数组） */
+  tags: TagRef[];
   last_login_at: string | null;
   /** 与邮箱同名的窗口个数（窗口名去空白、不区分大小写；窗口列表取失败时为 0）；≥2 说明需要人工确认绑定 */
   same_name_windows: number;
@@ -92,6 +103,16 @@ export interface AccountGroupCount {
   groupName: string;
   count: number;
 }
+/**
+ * 标签引用（ixBrowser 标签词表里的一项）。
+ * color 由 ixBrowser 决定（创建/改名接口不接受颜色）。
+ */
+export interface TagRef {
+  id: number;
+  title: string;
+  color: string;
+}
+
 
 export interface AccountsListResult {
   rows: AccountListRow[];
@@ -99,6 +120,10 @@ export interface AccountsListResult {
   groups: AccountGroupCount[];
   /** 取窗口列表失败的原因；成功为 null */
   windowError: string | null;
+  /** 标签词表（一次带回，用于筛选与编辑；取失败时为空数组） */
+  tags: TagRef[];
+  /** 取标签词表失败的原因；成功为 null */
+  tagError: string | null;
 }
 
 export interface AccountsDefaults {
@@ -264,4 +289,8 @@ export interface AccountsInvokeMap {
   "abb/accounts/exportText": { args: [emails: string[]]; result: AccountsExportResult };
   "abb/accounts/tfaCodes": { args: [emails: string[]]; result: AccountsTfaCodes };
   "abb/accounts/updateNote": { args: [email: string, note: string]; result: boolean };
+  "abb/accounts/setTags": { args: [email: string, tagIds: number[]]; result: boolean };
+  "abb/accounts/createTag": { args: [title: string]; result: TagRef };
+  "abb/accounts/updateTag": { args: [id: number, title: string]; result: boolean };
+  "abb/accounts/deleteTag": { args: [id: number]; result: boolean };
 }

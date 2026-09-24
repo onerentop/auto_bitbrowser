@@ -18,6 +18,8 @@ import {
 import type { HomeBrowserNode } from "../../app/shared/channels/home.ts";
 import { buildBrowserList } from "../../app/shared/logic/home-list.ts";
 import { sameNameWindowCounts, windowNameKey } from "./window-binding.ts";
+import { resolveTags, tagIdsByWindow } from "./tags.ts";
+import type { IxTag } from "../ixbrowser/types.ts";
 
 export const UNBOUND_GROUP_NAME = "未绑定窗口";
 export const MISSING_WINDOW_GROUP_NAME = "窗口不存在";
@@ -43,6 +45,8 @@ export function buildAccountRows(
   accounts: readonly Record<string, unknown>[],
   groups: readonly unknown[],
   windows: readonly unknown[] | null,
+  /** 标签词表（用于把窗口的 tag_id 映射成标签名与颜色）；取不到时传空数组 */
+  tagVocabulary: readonly IxTag[] = [],
 ): { rows: AccountListRow[]; groups: AccountGroupCount[] } {
   // 窗口 ID → 窗口节点（重复 ID 取第一个）
   const nodeById = new Map<string, HomeBrowserNode>();
@@ -56,6 +60,9 @@ export function buildAccountRows(
 
   // 与邮箱同名的窗口个数（窗口列表取失败时全为 0）
   const sameNames = windows ? sameNameWindowCounts(windows) : new Map<string, number>();
+
+  // 窗口 ID → 标签（用窗口的 tag_id + 词表映射；**不用 tag_name**，因为标题本身可能含空格）
+  const tagsByWindow = windows ? tagIdsByWindow(windows) : new Map<string, number[]>();
 
   const counts = new Map<number, { name: string; count: number }>();
   const rows = accounts.map((a): AccountListRow => {
@@ -96,6 +103,7 @@ export function buildAccountRows(
       has_secret: nonEmpty(a["secret_key"]),
       password: nonEmpty(a["password"]) ? String(a["password"]) : "",
       note,
+      tags: resolveTags(tagsByWindow.get(browserId) ?? [], tagVocabulary),
       last_login_at: nonEmpty(a["last_login_at"]) ? String(a["last_login_at"]) : null,
       same_name_windows: sameNames.get(windowNameKey(a["email"])) ?? 0,
       updated_at: str(a["updated_at"]),

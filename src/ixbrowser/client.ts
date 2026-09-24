@@ -16,6 +16,7 @@ import {
   type IxProfile,
   type IxProfileListData,
   type IxProfileListQuery,
+  type IxTagListData,
 } from "./types.ts";
 
 /** HTTP 状态码非 200 */
@@ -153,6 +154,40 @@ export class IxBrowserClient {
   }
 
   /**
+   * 标签词表（分页，默认 limit=10，所以取全量时要显式给大 limit）。
+   * 实测 2026-09-25：返回 { total, data: [{id, title, color}] }。
+   */
+  async getTagList(query: { page?: number; limit?: number; title?: string } = {}): Promise<IxTagListData> {
+    const params: Record<string, unknown> = { page: query.page ?? 1, limit: query.limit ?? 100 };
+    if (query.title) params["title"] = query.title;
+    const data = await this.call<IxTagListData>("tag-list", params);
+    if (data === true) return { total: 0, data: [] };
+    return { total: data?.total ?? 0, data: data?.data ?? [] };
+  }
+
+  /**
+   * 新建标签，返回新标签 id。
+   * 重名由服务端拒绝（code 113002「标签名称已经存在」），这里不特殊处理，交给上层展示。
+   */
+  async createTag(title: string): Promise<number> {
+    const data = await this.call<number>("tag-create", { title });
+    if (typeof data !== "number" || !Number.isInteger(data) || data <= 0) {
+      throw new IxUnexpectedError(`tag-create 返回的标签 ID 不合法: ${JSON.stringify(data)}`);
+    }
+    return data;
+  }
+
+  /** 重命名标签（影响所有挂了它的窗口）；接口只收 title 与 id */
+  async updateTag(id: number, title: string): Promise<void> {
+    await this.call("tag-update", { id, title });
+  }
+
+  /** 删除标签（影响所有挂了它的窗口） */
+  async deleteTag(id: number): Promise<void> {
+    await this.call("tag-delete", { id });
+  }
+
+  /**
    * 打开窗口，返回 CDP 端点。
    * 陷阱：cookie 为空时绝对不能发送该键，否则服务端 cookie 加载失败。
    */
@@ -245,7 +280,7 @@ export class IxBrowserClient {
   async updateProfile(
     profileId: number,
     // password / username 是窗口信息面板上的账号字段（F1 改密后要同步窗口 password）
-    fields: { note?: string; tfa_secret?: string; name?: string; password?: string; username?: string },
+    fields: { note?: string; tfa_secret?: string; name?: string; password?: string; username?: string; tag?: string[] },
   ): Promise<boolean> {
     const params: Record<string, unknown> = { profile_id: profileId };
     for (const [k, v] of Object.entries(fields)) {

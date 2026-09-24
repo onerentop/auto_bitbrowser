@@ -23,6 +23,7 @@ import {
   type AccountsRunOptions,
   type SelectedRow,
   type AccountsTfaCodes,
+  type TagRef,
 } from "../../shared/channels/accounts.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
 import type { HostContext } from "../context.ts";
@@ -51,6 +52,8 @@ import {
 } from "../../../src/application/health-check.ts";
 import { buildAccountRows } from "../../../src/application/account-list.ts";
 import { rankBindCandidates } from "../../../src/application/window-binding.ts";
+import { tagTitles, unknownTagIds } from "../../../src/application/tags.ts";
+import type { IxTag } from "../../../src/ixbrowser/types.ts";
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
 import type { IxBrowserClient } from "../../../src/ixbrowser/client.ts";
 import { BACKOFF_FACTOR, BASE_DELAY, MAX_RETRIES, isRetryableError } from "../../../src/ixbrowser/window.ts";
@@ -77,6 +80,8 @@ export interface AccountsHandlerDeps {
   listWindows?: () => Promise<WindowLike[]>;
   /** 取分组列表（默认 getGroupList，出错返回 []） */
   listGroups?: () => Promise<unknown[]>;
+  /** 取标签词表（默认走 ixBrowser tag-list，失败抛错） */
+  listTags?: () => Promise<IxTag[]>;
   /** 测试注入：跳过 ixBrowser 重试的真实等待（默认 listWindows / listGroups 用） */
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -138,6 +143,41 @@ function requireEmails(value: unknown, max: number): string[] {
     out.push(item);
   }
   return out;
+}
+
+/** 一次最多设置多少个标签（防御性上限） */
+export const MAX_TAG_IDS = 100;
+/** 标签名长度上限（ixBrowser 侧也是短名字；超长直接拒绝） */
+export const MAX_TAG_TITLE_LENGTH = 50;
+
+/** 标签 id 数组（正整数、去重、限长） */
+function requireTagIds(value: unknown): number[] {
+  if (!Array.isArray(value)) throw invalid("tagIds 必须是数组");
+  if (value.length > MAX_TAG_IDS) throw invalid(`tagIds 超过上限 ${MAX_TAG_IDS}`);
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const item of value) {
+    if (typeof item !== "number" || !Number.isInteger(item) || item <= 0) throw invalid("tagIds 必须是正整数数组");
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+/** 单个标签 id */
+function requireTagId(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) throw invalid("tag id 必须是正整数");
+  return value;
+}
+
+/** 标签名（去首尾空白后非空、限长） */
+function requireTagTitle(value: unknown): string {
+  if (typeof value !== "string") throw invalid("标签名必须是字符串");
+  const t = value.trim();
+  if (t === "") throw invalid("标签名不能为空");
+  if (t.length > MAX_TAG_TITLE_LENGTH) throw invalid(`标签名最多 ${MAX_TAG_TITLE_LENGTH} 个字符`);
+  return t;
 }
 
 function requireOptions(value: unknown): AccountsRunOptions {
@@ -236,6 +276,9 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
   const listWindows = deps.listWindows ?? (() => listAllWindows(ctx.ix(), { log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
   const listGroups =
     deps.listGroups ?? (() => getGroupList({ client: ctx.ix(), log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
+
+  // 标签词表：一次取全量（实测默认 limit=10 会截断，所以显式给大值）
+  const listTags = deps.listTags ?? (() => ctx.ix().getTagList({ limit: 500 }).then((r) => r.data));
 
   const createProcessor =
     deps.createProcessor ??
@@ -344,21 +387,31 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
     /**
      * 账号列表 + 窗口名 / 分组。分组与窗口列表并发请求，窗口列表翻页取全量（以前只取第 1 页 500 个）。
      * ixBrowser 不可达时窗口名留空、绑定了窗口的账号归「窗口信息获取失败」，不报错。
-     * 不下发密码 / 密钥 / 辅助邮箱原文（见 buildAccountRows）。
+     * 密码明文按用户要求下发；密钥与辅助邮箱原文不下发（见 buildAccountRows）。
+     * 标签：窗口 tag_id + 词表映射成名字与颜色（词表失败只记 tagError，不影响列表）。
      */
     [ACCOUNTS_INVOKE.accountsList]: async (): Promise<AccountsListResult> => {
       const accounts = repo().getAllAccounts();
       let windowError: string | null = null;
-      const [groups, windows] = await Promise.all([
+      let tagError: string | null = null;
+      const [groups, windows, vocabulary] = await Promise.all([
         listGroups(),
         listWindows().catch((error: unknown) => {
           windowError = errorText(error);
           return null;
         }),
+        listTags().catch((error: unknown) => {
+          tagError = errorText(error);
+          return [] as IxTag[];
+        }),
       ]);
-      return { ...buildAccountRows(accounts, groups, windows), windowError };
+      return {
+        ...buildAccountRows(accounts, groups, windows, vocabulary),
+        windowError,
+        tags: vocabulary,
+        tagError,
+      };
     },
-
 
     /**
      * 按邮箱取当前 2FA 验证码：密钥取自数据库的 secret_key（登录用的就是它），
@@ -392,6 +445,43 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       const id = account.browser_profile_id ? String(account.browser_profile_id) : "";
       if (!/^\d+$/.test(id)) throw invalid(`账号 ${e} 未绑定窗口，无法编辑窗口备注`);
       return ctx.ix().updateProfile(Number(id), { note });
+    },
+    /**
+     * 设置窗口标签：**只写 tag 一个字段**，值是**标签名数组**（官方文档：profile-update 的 tag，
+     * 多标签传数组）。标签挂在窗口上，所以未绑定窗口的账号改不了。
+     * 写入前先取一次词表：词表里没有的 id 直接拒绝，避免静默丢标签。
+     */
+    [ACCOUNTS_INVOKE.accountsSetTags]: async (email: unknown, tagIds: unknown): Promise<boolean> => {
+      const e = requireEmail(email);
+      const ids = requireTagIds(tagIds);
+      const account = repo().getAccountByEmail(e);
+      if (!account) throw invalid(`未找到账号: ${e}`);
+      const profileId = account.browser_profile_id ? String(account.browser_profile_id) : "";
+      if (!/^\d+$/.test(profileId)) throw invalid(`账号 ${e} 未绑定窗口，无法设置标签`);
+      const vocabulary = await listTags();
+      const unknown = unknownTagIds(ids, vocabulary);
+      if (unknown.length > 0) throw invalid(`标签不存在（可能已被删除）: ${unknown.join(", ")}`);
+      return ctx.ix().updateProfile(Number(profileId), { tag: tagTitles(ids, vocabulary) });
+    },
+
+    /** 新建标签；重名由 ixBrowser 拒绝（113002「标签名称已经存在」），错误消息原样透出 */
+    [ACCOUNTS_INVOKE.accountsCreateTag]: async (title: unknown): Promise<TagRef> => {
+      const t = requireTagTitle(title);
+      const newId = await ctx.ix().createTag(t);
+      const vocabulary = await listTags();
+      return vocabulary.find((x) => x.id === newId) ?? { id: newId, title: t, color: "" };
+    },
+
+    /** 重命名标签（影响所有挂了它的窗口） */
+    [ACCOUNTS_INVOKE.accountsUpdateTag]: async (id: unknown, title: unknown): Promise<boolean> => {
+      await ctx.ix().updateTag(requireTagId(id), requireTagTitle(title));
+      return true;
+    },
+
+    /** 删除标签（影响所有挂了它的窗口） */
+    [ACCOUNTS_INVOKE.accountsDeleteTag]: async (id: unknown): Promise<boolean> => {
+      await ctx.ix().deleteTag(requireTagId(id));
+      return true;
     },
     [ACCOUNTS_INVOKE.accountsGetDefaults]: (): AccountsDefaults => {
       let n: unknown = 3;

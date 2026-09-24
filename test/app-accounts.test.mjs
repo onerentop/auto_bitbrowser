@@ -22,6 +22,7 @@ import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
 import {
   applyLoginItem,
   applyNoteUpdate,
+  applyTagsUpdate,
   accountSorter,
   autoBindNotice,
   countLogin,
@@ -32,7 +33,16 @@ import {
 
 const CH = ACCOUNTS_INVOKE;
 
-function fakeIx(windows, { fail = false } = {}) {
+/**
+ * 假 ixBrowser 客户端（只实现账号页用到的部分）
+ * @param {Array<{ profile_id: number, name: string, group_id?: number, note?: string, tag_id?: string }>} windows
+ * @param {{ fail?: boolean, tags?: Array<{ id: number, title: string, color: string }>, tagFail?: boolean }} [options]
+ */
+function fakeIx(windows, { fail = false, tags = [], tagFail = false } = {}) {
+  // 词表可变：createTag / deleteTag 会真的改它，模拟 ixBrowser 的行为
+  /** @type {Array<{ id: number, title: string, color: string }>} */
+  const vocabulary = tags.map((t) => ({ ...t }));
+  let nextTagId = 900001;
   const calls = [];
   return {
     calls,
@@ -59,17 +69,39 @@ function fakeIx(windows, { fail = false } = {}) {
       calls.push(["updateProfile", profileId, fields]);
       return true;
     },
+    vocabulary,
+    async getTagList(q) {
+      calls.push(["tagList", q]);
+      if (tagFail) throw new Error("connect ECONNREFUSED 127.0.0.1:53200");
+      return { total: vocabulary.length, data: vocabulary.map((t) => ({ ...t })) };
+    },
+    async createTag(title) {
+      calls.push(["createTag", title]);
+      const id = nextTagId++;
+      vocabulary.push({ id, title, color: "#67C23A" });
+      return id;
+    },
+    async updateTag(id, title) {
+      calls.push(["updateTag", id, title]);
+      const t = vocabulary.find((x) => x.id === id);
+      if (t) t.title = title;
+    },
+    async deleteTag(id) {
+      calls.push(["deleteTag", id]);
+      const i = vocabulary.findIndex((x) => x.id === id);
+      if (i >= 0) vocabulary.splice(i, 1);
+    },
   };
 }
 
 /**
  * 建上下文：临时数据根（不碰仓库根的 config.json / accounts.db）、:memory: 库
- * @param {{ windows?: Array<{ profile_id: number, name: string, group_id?: number, note?: string }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
+ * @param {{ windows?: Array<{ profile_id: number, name: string, group_id?: number, note?: string, tag_id?: string }>, tags?: Array<{ id: number, title: string, color: string }>, ixFail?: boolean, tagFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
  */
-function setup({ windows = [], ixFail = false, deps = {} } = {}) {
+function setup({ windows = [], tags = [], ixFail = false, tagFail = false, deps = {} } = {}) {
   const events = [];
   const waiters = [];
-  const ix = fakeIx(windows, { fail: ixFail });
+  const ix = fakeIx(windows, { fail: ixFail, tags, tagFail });
   const ctx = createHostContext({
     dataRoot: mkdtempSync(join(tmpdir(), "abb-accounts-test-")),
     emit: (channel, payload) => {
@@ -1057,6 +1089,7 @@ const row = (o) => ({
   has_secret: false,
   password: "",
   note: "",
+  tags: [],
   last_login_at: null,
   same_name_windows: 0,
   updated_at: null,
@@ -1255,4 +1288,135 @@ test("applyNoteUpdate：只改那一行；邮箱不在列表里时原样返回",
     ],
   );
   assert.equal(applyNoteUpdate(rows, "ghost@x.com", "x"), rows);
+});
+
+// ==================== 标签（ixBrowser 的标签，同步） ====================
+
+const VOCAB = [
+  { id: 142399, title: "已修改2fa", color: "#67C23A" },
+  { id: 140180, title: "已使用", color: "#67C23A" },
+  { id: 151612, title: "Google Cloud不可用", color: "#67C23A" },
+];
+
+test("list：标签由窗口 tag_id + 词表映射（标题含空格也不受影响）；词表失败只记 tagError", async () => {
+  const s = setup({
+    windows: [
+      { profile_id: 101, name: "win-a", tag_id: "142399 151612" },
+      { profile_id: 102, name: "win-b", tag_id: "" },
+    ],
+    tags: VOCAB,
+  });
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "101" },
+    { email: "b@x.com", browser_profile_id: "102" },
+    { email: "c@x.com" },
+  ]);
+  const r = await s.call(CH.accountsList);
+  const by = Object.fromEntries(r.rows.map((x) => [x.email, x]));
+  assert.deepEqual(
+    by["a@x.com"].tags.map((t) => [t.id, t.title]),
+    [
+      [142399, "已修改2fa"],
+      [151612, "Google Cloud不可用"],
+    ],
+    "按 tag_id 取词表项；标题里的空格不影响解析",
+  );
+  assert.deepEqual(by["b@x.com"].tags, [], "窗口没有标签");
+  assert.deepEqual(by["c@x.com"].tags, [], "账号未绑定窗口");
+  assert.equal(r.tagError, null);
+  assert.deepEqual(r.tags.map((t) => t.id), [142399, 140180, 151612], "词表随列表一起下发");
+  // 词表请求应与分组 / 窗口并发（同一批 Promise.all）
+  assert.equal(s.ix.calls.filter((c) => c[0] === "tagList").length, 1);
+
+  const s2 = setup({ windows: [{ profile_id: 101, name: "win-a", tag_id: "142399" }], tags: VOCAB, tagFail: true });
+  seed(s2.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
+  const r2 = await s2.call(CH.accountsList);
+  assert.match(r2.tagError, /ECONNREFUSED/);
+  assert.deepEqual(r2.tags, []);
+  assert.deepEqual(r2.rows[0].tags, [], "词表取不到时不显示半个标签");
+});
+
+test("setTags：只写 tag 一个字段、值是标签名数组；未绑定窗口 / 未知标签 / 非法参数一律拒绝", async () => {
+  const s = setup({ tags: VOCAB });
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "101" },
+    { email: "b@x.com" },
+  ]);
+  assert.equal(await s.call(CH.accountsSetTags, "a@x.com", [151612, 142399]), true);
+  assert.deepEqual(
+    s.ix.calls.filter((c) => c[0] === "updateProfile"),
+    [["updateProfile", 101, { tag: ["Google Cloud不可用", "已修改2fa"] }]],
+    "只传 tag，值是标签名数组（按传入顺序；标题含空格也原样）",
+  );
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsSetTags, "b@x.com", [142399]), bad, "未绑定窗口");
+  await assert.rejects(s.call(CH.accountsSetTags, "ghost@x.com", [142399]), bad);
+  await assert.rejects(s.call(CH.accountsSetTags, "a@x.com", [999999]), bad, "词表里没有的标签");
+  await assert.rejects(s.call(CH.accountsSetTags, "a@x.com", ["142399"]), bad, "字符串 id 不接受");
+  await assert.rejects(s.call(CH.accountsSetTags, "a@x.com", [0]), bad);
+  await assert.rejects(s.call(CH.accountsSetTags, "a@x.com", [1.5]), bad);
+  await assert.rejects(
+    s.call(CH.accountsSetTags, "a@x.com", Array.from({ length: 101 }, (_, i) => i + 1)),
+    bad,
+    "超过上限",
+  );
+  assert.equal(await s.call(CH.accountsSetTags, "a@x.com", []), true, "清空标签是合法的");
+  assert.deepEqual(s.ix.calls.filter((c) => c[0] === "updateProfile").at(-1), ["updateProfile", 101, { tag: [] }]);
+});
+
+test("标签词表：createTag 返回词表项（名字去空白）；updateTag / deleteTag 直通；参数非法拒绝", async () => {
+  const s = setup({ tags: VOCAB });
+  const created = await s.call(CH.accountsCreateTag, "  新标签  ");
+  assert.equal(created.title, "新标签");
+  assert.ok(created.id > 0);
+  assert.deepEqual(s.ix.calls.filter((c) => c[0] === "createTag"), [["createTag", "新标签"]]);
+  assert.ok(created.color !== undefined, "返回词表项（带 ixBrowser 给的颜色）");
+
+  assert.equal(await s.call(CH.accountsUpdateTag, 142399, "改名后"), true);
+  assert.deepEqual(s.ix.calls.filter((c) => c[0] === "updateTag"), [["updateTag", 142399, "改名后"]]);
+  assert.equal(await s.call(CH.accountsDeleteTag, 140180), true);
+  assert.deepEqual(s.ix.calls.filter((c) => c[0] === "deleteTag"), [["deleteTag", 140180]]);
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsCreateTag, "   "), bad, "空名字");
+  await assert.rejects(s.call(CH.accountsCreateTag, "x".repeat(51)), bad, "名字太长");
+  await assert.rejects(s.call(CH.accountsCreateTag, 42), bad);
+  await assert.rejects(s.call(CH.accountsUpdateTag, 0, "x"), bad);
+  await assert.rejects(s.call(CH.accountsUpdateTag, 142399, ""), bad);
+  await assert.rejects(s.call(CH.accountsDeleteTag, "142399"), bad);
+});
+
+test("filterAccounts：按标签多选筛（命中任一即显示）；applyTagsUpdate 只改那一行", () => {
+  const T = (/** @type {number} */ id, /** @type {string} */ title) => ({ id, title, color: "#67C23A" });
+  const rows = [
+    row({ email: "a@x.com", tags: [T(1, "一")] }),
+    row({ email: "b@x.com", tags: [T(2, "二")] }),
+    row({ email: "c@x.com", tags: [T(1, "一"), T(2, "二")] }),
+    row({ email: "d@x.com" }),
+  ];
+  const q = (o) => ({ groupId: null, login: "all", text: "", ...o });
+  const emails = (list) => list.map((r) => r.email);
+  assert.deepEqual(emails(filterAccounts(rows, q({ tagIds: [1] }))), ["a@x.com", "c@x.com"]);
+  assert.deepEqual(emails(filterAccounts(rows, q({ tagIds: [2] }))), ["b@x.com", "c@x.com"]);
+  assert.deepEqual(
+    emails(filterAccounts(rows, q({ tagIds: [1, 2] }))),
+    ["a@x.com", "b@x.com", "c@x.com"],
+    "任选多个命中任一即显示（OR）",
+  );
+  assert.deepEqual(emails(filterAccounts(rows, q({ tagIds: [999] }))), []);
+  assert.equal(filterAccounts(rows, q({ tagIds: [] })), rows, "空数组不筛");
+
+  const next = applyTagsUpdate(rows, "d@x.com", [T(3, "三")]);
+  assert.notEqual(next, rows);
+  assert.deepEqual(
+    next.map((r) => [r.email, r.tags.map((t) => t.id)]),
+    [
+      ["a@x.com", [1]],
+      ["b@x.com", [2]],
+      ["c@x.com", [1, 2]],
+      ["d@x.com", [3]],
+    ],
+  );
+  assert.equal(applyTagsUpdate(rows, "ghost@x.com", []), rows);
 });

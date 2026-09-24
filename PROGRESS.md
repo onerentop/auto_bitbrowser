@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 587/587 通过
+pnpm test              # 应 596/596 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
@@ -67,7 +67,7 @@ pnpm run typecheck:test # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 587/587 通过
+pnpm test               # 596/596 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
@@ -127,6 +127,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 - 批量登录：批处理器的逐账号回调（`onAccountDone`）同时驱动逐条目、进度与关窗——进度按账号计数（成功+失败，跳过不计）；**登录成功的账号完成即关窗，失败与跳过保留窗口**（账号页「登录后关窗」勾选，默认开，取消则都不关）；任务坞不再靠日志猜进度
 - 账号列表直接带出**明文密码**（可复制）、按数据库 `secret_key` 算的 **2FA 验证码**（只回码不回密钥）、以及**窗口备注**（点击小窗编辑，只写 `note` 一个字段）；2FA 密钥与辅助邮箱原文仍只在编辑弹窗里取
 - 账号页与首页共用同一套验证码取数逻辑（`components/TfaCodeCell.tsx`）：密钥在后端，界面只拿 6 位码与周期结束时间
+- 标签是 **ixBrowser 自己的标签**（不做本地字段）：读走窗口 `tag_id` + `tag-list` 词表映射（**不用 `tag_name`**，因为标题本身可能含空格），写走 `profile-update` 的 `tag`（标签名数组）；账号页可勾选增删标签、按标签多选筛（命中任一）、并管理词表（新建/改名/删除，改删会影响所有挂它的窗口，删前提示窗口数）。标签挂在窗口上，未绑定窗口的账号改不了；列显示与否可在「列」里自己勾选，记在 localStorage
 - 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）；开始前有确认框
 - AI 任务界面上的并发数只记录不使用，**串行执行**；`modify_2sv` 任务结束关闭窗口；停止后「开始」要等任务真正结束才可用
 - 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖其它键）；越界数值加载时夹紧；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层

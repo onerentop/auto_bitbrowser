@@ -4,6 +4,8 @@
  * 布局：PageHeader（添加 / 批量导入 / 导出选中）→ 列表面板（筛选工具栏、批量操作栏、分组标签、平铺虚拟表格）。
  *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表直接带出明文密码（可复制）、
  *     2FA 验证码（按数据库密钥算）与窗口备注（点击可编辑）；2FA 密钥与辅助邮箱原文仍只在编辑弹窗里取
+ *   - 标签来自 ixBrowser 窗口：读窗口 tag_id + 词表，写走 profile-update 的 tag；显示哪些列可在工具栏「列」里
+ *     自己勾选，勾选结果记在 localStorage（邮箱与操作两列始终显示）
  *   - 筛选全部在前端叠加（分组 / 登录状态 / 搜索）；被筛选隐藏的勾选保留，批量操作作用于全部勾选，确认前提示隐藏数
  *   - 批量操作：先 precheck（后端做候选筛选、生成提示 / 确认文案），逐个确认后 start（后台任务）
  *   - 任务运行中写操作禁用；停止用底部任务坞；任务结束后刷新列表
@@ -57,6 +59,7 @@ import {
   autoBindNotice,
   applyLoginItem,
   applyNoteUpdate,
+  applyTagsUpdate,
   type AccountLoginFilter,
 } from "../../../shared/logic/account-list.ts";
 import {
@@ -75,6 +78,8 @@ import { loginView } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
 import { TfaCell, useTfaCodes } from "../components/TfaCodeCell.tsx";
 import { NoteModal, type NoteTarget } from "./accounts/NoteModal.tsx";
+import { TagEditModal, type TagEditTarget } from "./accounts/TagEditModal.tsx";
+import { TagManagerModal } from "./accounts/TagManagerModal.tsx";
 import { PageHeader } from "../components/PageHeader.tsx";
 import { Panel } from "../components/Section.tsx";
 import { useTokens } from "../theme/tokens.ts";
@@ -88,6 +93,37 @@ const EXPORT_FILE_NAME = "accounts_export.txt";
 const TABLE_CHROME = 40;
 
 const EMPTY_LIST: readonly AccountListRow[] = [];
+/** 列设置（显示哪些列）在 localStorage 里的键 */
+const HIDDEN_COLUMNS_KEY = "abb/accounts/hiddenColumns";
+/** 默认隐藏的列：分组 / 辅助邮箱 / 最后登录 */
+const DEFAULT_HIDDEN_COLUMNS = ["group", "recovery", "lastLogin"];
+/** 始终显示的列（不出现在「列」里，也不能取消勾选） */
+const ALWAYS_VISIBLE_COLUMNS = ["email", "action"];
+/** 勾选列（rowSelection）的宽度：横向滚动宽度 = 可见列宽之和 + 它 */
+const SELECTION_COLUMN_WIDTH = 40;
+
+/** 读列设置：localStorage 里必须是字符串数组，否则回落默认值 */
+function readHiddenColumns(): string[] {
+  try {
+    const raw = localStorage.getItem(HIDDEN_COLUMNS_KEY);
+    if (raw === null) return [...DEFAULT_HIDDEN_COLUMNS];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((x) => typeof x !== "string")) return [...DEFAULT_HIDDEN_COLUMNS];
+    return parsed as string[];
+  } catch {
+    // 读不到（禁用 localStorage / 存的不是合法 JSON）时用默认值，界面照常可用
+    return [...DEFAULT_HIDDEN_COLUMNS];
+  }
+}
+
+/** 写列设置（只在用户改动时调用；写不进去也只是这次会话不记住） */
+function writeHiddenColumns(keys: string[]): void {
+  try {
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(keys));
+  } catch {
+    logLocal("列设置保存失败：localStorage 不可写");
+  }
+}
 
 function toSelected(row: AccountListRow): SelectedRow {
   return { email: row.email, browserId: row.browser_profile_id };
@@ -120,6 +156,42 @@ function downloadText(fileName: string, text: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/**
+ * 工具栏里的「下拉勾选」面板（「列」与「标签筛选」共用）：把 Checkbox 放进 Dropdown 的菜单项里。
+ * Dropdown 默认点一下菜单项就关闭，勾选要连点几次很不方便，所以这里自己托管 open——
+ * 只认触发按钮与点空白处的开关，点菜单里的 Checkbox 不关。
+ */
+function CheckDropdown({
+  button,
+  items,
+  disabled,
+}: {
+  /** 触发按钮 */
+  button: ReactElement;
+  items: MenuProps["items"];
+  disabled?: boolean;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  // 变禁用（例如标签词表取不到）时，把已经打开的面板收起来
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+  return (
+    <Dropdown
+      open={open}
+      disabled={disabled}
+      trigger={["click"]}
+      menu={{ items }}
+      onOpenChange={(next, info) => {
+        if (info.source === "menu") return;
+        setOpen(next);
+      }}
+    >
+      {button}
+    </Dropdown>
+  );
+}
+
 interface ContextMenuState {
   row: AccountListRow;
   x: number;
@@ -150,6 +222,10 @@ export function AccountsPage(): ReactElement {
   const closeBind = useCallback(() => setBindEmail(null), []);
   const closeEdit = useCallback(() => setEditEmail(null), []);
   const closeNote = useCallback(() => setNoteTarget(null), []);
+  /** 标签编辑小窗的目标行；null = 关闭 */
+  const [tagEdit, setTagEdit] = useState<TagEditTarget | null>(null);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const closeTagEdit = useCallback(() => setTagEdit(null), []);
 
   // 筛选条件
   const [search, setSearch] = useState("");
@@ -157,6 +233,11 @@ export function AccountsPage(): ReactElement {
   const [groupId, setGroupId] = useState<number | null>(null);
   const [login, setLogin] = useState<AccountLoginFilter>("all");
   const [sameNameOnly, setSameNameOnly] = useState(false);
+
+  // 标签筛选（多选，命中任一即显示；空数组 = 不筛）
+  const [tagFilter, setTagFilter] = useState<number[]>([]);
+  // 自己勾选要显示哪些列（默认隐藏分组 / 辅助邮箱 / 最后登录），改动记在 localStorage
+  const [hiddenColumns, setHiddenColumns] = useState<string[]>(readHiddenColumns);
 
   // ---------- 数据加载 ----------
 
@@ -224,11 +305,26 @@ export function AccountsPage(): ReactElement {
 
   const rows = list?.rows ?? EMPTY_LIST;
   const visible = useMemo(
-    () => filterAccounts(rows, { groupId, login, text: deferredSearch, sameNameOnly }),
-    [rows, groupId, login, deferredSearch, sameNameOnly],
+    () => filterAccounts(rows, { groupId, login, text: deferredSearch, sameNameOnly, tagIds: tagFilter }),
+    [rows, groupId, login, deferredSearch, sameNameOnly, tagFilter],
   );
   const loginCounts = useMemo(() => countLogin(rows), [rows]);
   const sameNameCount = useMemo(() => rows.filter(hasSameNameWindows).length, [rows]);
+
+  /** 标签 → 使用它的窗口数（按当前列表统计；标签筛选与标签管理共用） */
+  const tagUsage = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const r of rows) {
+      for (const t of r.tags) m.set(t.id, (m.get(t.id) ?? 0) + 1);
+    }
+    return m;
+  }, [rows]);
+
+  /** 标签词表与取词表的失败原因（列表接口一次带回） */
+  const vocabulary = list?.tags ?? [];
+  const tagError = list?.tagError ?? null;
+  /** 标签相关操作是否不可用：没有词表，或词表取不到 */
+  const tagsUnavailable = tagError !== null || vocabulary.length === 0;
   const checkedSet = useMemo(() => new Set(checked), [checked]);
   /** 全部勾选（含被筛选隐藏的），按列表顺序 */
   const checkedRows = useMemo(() => rows.filter((r) => checkedSet.has(r.email)), [rows, checkedSet]);
@@ -408,138 +504,243 @@ export function AccountsPage(): ReactElement {
   const tfa = useTfaCodes(tfaEmails, listVersion, (emails) => invoke(IPC.invoke.accountsTfaCodes, emails));
   const invalidTfa = useMemo(() => new Set(tfa?.invalid ?? []), [tfa]);
 
-  const columns: TableColumnsType<AccountListRow> = [
-    { title: "邮箱", key: "email", width: 240, ellipsis: true, sorter: accountSorter("email"), render: (_, r) => r.email },
-    {
-      title: "登录状态",
-      key: "login",
-      width: 170,
-      ellipsis: true,
-      render: (_, r) => {
-        const v = loginView(r);
-        const t = (
-          <Tag bordered={false} color={v.color}>
-            {v.text}
-          </Tag>
-        );
-        return v.tooltip ? <Tooltip title={v.tooltip}>{t}</Tooltip> : t;
+  // 列的定义：数组顺序就是显示顺序；每列都必须有数字 width（横向滚动宽度由可见列宽算出）
+  const allColumns = useMemo<TableColumnsType<AccountListRow>>(
+    () => [
+      { title: "邮箱", key: "email", width: 240, ellipsis: true, sorter: accountSorter("email"), render: (_, r) => r.email },
+      {
+        title: "登录状态",
+        key: "login",
+        width: 170,
+        ellipsis: true,
+        render: (_, r) => {
+          const v = loginView(r);
+          const t = (
+            <Tag bordered={false} color={v.color}>
+              {v.text}
+            </Tag>
+          );
+          return v.tooltip ? <Tooltip title={v.tooltip}>{t}</Tooltip> : t;
+        },
       },
-    },
-    {
-      title: "窗口ID",
-      key: "windowId",
-      width: 90,
-      sorter: accountSorter("windowId"),
-      defaultSortOrder: "descend",
-      render: (_, r) =>
-        r.browser_profile_id ? <span className="abb-mono">{r.browser_profile_id}</span> : <Typography.Text type="secondary">—</Typography.Text>,
-    },
-    {
-      title: "窗口名",
-      key: "windowName",
-      width: 180,
-      ellipsis: true,
-      render: (_, r) => (
-        <>
-          {hasSameNameWindows(r) && (
-            <Tooltip title={`有 ${r.same_name_windows} 个同名窗口，右键「重新绑定窗口」可确认或更换`}>
-              <Tag bordered={false} color="warning" style={{ marginInlineEnd: 4 }}>
-                同名×{r.same_name_windows}
-              </Tag>
-            </Tooltip>
-          )}
-          {r.window_name || "—"}
-        </>
-      ),
-    },
-    { title: "分组", key: "group", width: 120, ellipsis: true, render: (_, r) => <Tag bordered={false}>{r.group_name}</Tag> },
-    {
-      title: "密码",
-      key: "pw",
-      width: 170,
-      render: (_, r) =>
-        r.password ? (
-          <Typography.Text
-            className="abb-mono"
-            style={{ maxWidth: 140 }}
-            ellipsis={{ tooltip: r.password }}
-            copyable={{ text: r.password, tooltips: ["复制密码", "已复制"] }}
-          >
-            {r.password}
-          </Typography.Text>
-        ) : (
-          <Typography.Text type="secondary">—</Typography.Text>
+      {
+        title: "密码",
+        key: "pw",
+        width: 170,
+        render: (_, r) =>
+          r.password ? (
+            <Typography.Text
+              className="abb-mono"
+              style={{ maxWidth: 140 }}
+              ellipsis={{ tooltip: r.password }}
+              copyable={{ text: r.password, tooltips: ["复制密码", "已复制"] }}
+            >
+              {r.password}
+            </Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">—</Typography.Text>
+          ),
+      },
+      {
+        title: "验证码",
+        key: "tfaCode",
+        width: 150,
+        render: (_, r) => (
+          <TfaCell
+            hasTfa={r.has_secret}
+            code={tfa?.codes[r.email]}
+            invalid={invalidTfa.has(r.email)}
+            periodEndsAt={tfa?.periodEndsAt ?? null}
+          />
         ),
-    },
-    { title: "辅助邮箱", key: "rec", width: 76, align: "center", render: (_, r) => <Flag on={r.has_recovery_email} label="辅助邮箱" /> },
-    {
-      title: "验证码",
-      key: "tfaCode",
-      width: 150,
-      render: (_, r) => (
-        <TfaCell
-          hasTfa={r.has_secret}
-          code={tfa?.codes[r.email]}
-          invalid={invalidTfa.has(r.email)}
-          periodEndsAt={tfa?.periodEndsAt ?? null}
-        />
-      ),
-    },
-    {
-      title: "备注",
-      key: "note",
-      width: 220,
-      render: (_, r) => {
-        // 备注在 ixBrowser 窗口上：没绑定窗口就无从修改
-        if (!/^\d+$/.test(r.browser_profile_id)) {
+      },
+      {
+        title: "标签",
+        key: "tags",
+        width: 200,
+        render: (_, r) => {
+          // 标签挂在 ixBrowser 窗口上：没绑定窗口就无从编辑
+          if (!/^\d+$/.test(r.browser_profile_id)) {
+            return (
+              <Tooltip title="账号未绑定窗口，标签挂在窗口上">
+                <Typography.Text type="secondary">—</Typography.Text>
+              </Tooltip>
+            );
+          }
           return (
-            <Tooltip title="账号未绑定窗口，窗口备注无从修改">
-              <Typography.Text type="secondary">—</Typography.Text>
+            <Tooltip title={r.tags.length > 0 ? r.tags.map((t) => t.title).join("、") : "点击设置标签"}>
+              <span
+                onClick={() => setTagEdit({ email: r.email, windowName: r.window_name, tagIds: r.tags.map((t) => t.id) })}
+                style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {r.tags.length === 0 ? (
+                  <Typography.Text type="secondary">—</Typography.Text>
+                ) : (
+                  <Space size={4}>
+                    {r.tags.map((t) => (
+                      <Tag key={t.id} color={t.color || undefined} bordered={false}>
+                        {t.title}
+                      </Tag>
+                    ))}
+                  </Space>
+                )}
+              </span>
             </Tooltip>
           );
-        }
-        return (
-          <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{r.note || "点击添加备注"}</span>}>
-            <span
-              onClick={() => setNoteTarget({ email: r.email, windowName: r.window_name, note: r.note })}
-              style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            >
-              {r.note || <Typography.Text type="secondary">添加备注</Typography.Text>}
-            </span>
-          </Tooltip>
-        );
+        },
       },
-    },
-    {
-      title: "最后登录",
-      key: "lastLogin",
-      width: 150,
-      sorter: accountSorter("lastLogin"),
-      render: (_, r) => r.last_login_at ?? <Typography.Text type="secondary">—</Typography.Text>,
-    },
-    {
-      title: "操作",
-      key: "action",
-      width: 130,
-      render: (_, r) => (
-        <Space size={0}>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditEmail(r.email)}>
-            编辑
-          </Button>
-          {r.login_status !== "logged_in" && (
-            <Button
-              type="link"
-              size="small"
-              disabled={busy}
-              onClick={() => void runAction("single_login", [toSelected(r)])}
-            >
-              登录
+      {
+        title: "窗口ID",
+        key: "windowId",
+        width: 90,
+        sorter: accountSorter("windowId"),
+        defaultSortOrder: "descend",
+        render: (_, r) =>
+          r.browser_profile_id ? <span className="abb-mono">{r.browser_profile_id}</span> : <Typography.Text type="secondary">—</Typography.Text>,
+      },
+      {
+        title: "窗口名",
+        key: "windowName",
+        width: 180,
+        ellipsis: true,
+        render: (_, r) => (
+          <>
+            {hasSameNameWindows(r) && (
+              <Tooltip title={`有 ${r.same_name_windows} 个同名窗口，右键「重新绑定窗口」可确认或更换`}>
+                <Tag bordered={false} color="warning" style={{ marginInlineEnd: 4 }}>
+                  同名×{r.same_name_windows}
+                </Tag>
+              </Tooltip>
+            )}
+            {r.window_name || "—"}
+          </>
+        ),
+      },
+      { title: "分组", key: "group", width: 120, ellipsis: true, render: (_, r) => <Tag bordered={false}>{r.group_name}</Tag> },
+      {
+        title: "备注",
+        key: "note",
+        width: 220,
+        render: (_, r) => {
+          // 备注在 ixBrowser 窗口上：没绑定窗口就无从修改
+          if (!/^\d+$/.test(r.browser_profile_id)) {
+            return (
+              <Tooltip title="账号未绑定窗口，窗口备注无从修改">
+                <Typography.Text type="secondary">—</Typography.Text>
+              </Tooltip>
+            );
+          }
+          return (
+            <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{r.note || "点击添加备注"}</span>}>
+              <span
+                onClick={() => setNoteTarget({ email: r.email, windowName: r.window_name, note: r.note })}
+                style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >
+                {r.note || <Typography.Text type="secondary">添加备注</Typography.Text>}
+              </span>
+            </Tooltip>
+          );
+        },
+      },
+      { title: "辅助邮箱", key: "recovery", width: 76, align: "center", render: (_, r) => <Flag on={r.has_recovery_email} label="辅助邮箱" /> },
+      {
+        title: "最后登录",
+        key: "lastLogin",
+        width: 150,
+        sorter: accountSorter("lastLogin"),
+        render: (_, r) => r.last_login_at ?? <Typography.Text type="secondary">—</Typography.Text>,
+      },
+      {
+        title: "操作",
+        key: "action",
+        width: 130,
+        render: (_, r) => (
+          <Space size={0}>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditEmail(r.email)}>
+              编辑
             </Button>
-          )}
-        </Space>
-      ),
-    },
-  ];
+            {r.login_status !== "logged_in" && (
+              <Button
+                type="link"
+                size="small"
+                disabled={busy}
+                onClick={() => void runAction("single_login", [toSelected(r)])}
+              >
+                登录
+              </Button>
+            )}
+          </Space>
+        ),
+      },
+    ],
+    [busy, runAction, tfa, invalidTfa],
+  );
+
+  /** 实际显示的列：邮箱与操作始终显示，其余看「列」里的勾选 */
+  const visibleColumns = useMemo(
+    () => allColumns.filter((c) => ALWAYS_VISIBLE_COLUMNS.includes(String(c.key)) || !hiddenColumns.includes(String(c.key))),
+    [allColumns, hiddenColumns],
+  );
+
+  /** 表格横向滚动宽度：按可见列宽之和算（隐藏列后右侧不再留白 / 显示不全） */
+  const visibleColumnsWidth = useMemo(
+    () => visibleColumns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : 0), 0),
+    [visibleColumns],
+  );
+
+  /** 勾选 / 取消一列并记住（邮箱与操作不在「列」里，永远显示） */
+  const toggleColumn = (key: string, show: boolean): void => {
+    const next = show ? hiddenColumns.filter((k) => k !== key) : [...hiddenColumns, key];
+    setHiddenColumns(next);
+    writeHiddenColumns(next);
+  };
+
+  /** 「列」下拉的项：可隐藏列各一项，勾选 = 显示（顺序与显示顺序一致） */
+  const columnItems: MenuProps["items"] = allColumns
+    .filter((c) => !ALWAYS_VISIBLE_COLUMNS.includes(String(c.key)))
+    .map((c) => {
+      const key = String(c.key);
+      return {
+        key,
+        label: (
+          <Checkbox checked={!hiddenColumns.includes(key)} onChange={(e) => toggleColumn(key, e.target.checked)}>
+            {String(c.title)}
+          </Checkbox>
+        ),
+      };
+    });
+
+  /** 标签筛选下拉的项：多选（命中任一即显示）；词表取不到时只显示原因 */
+  const tagFilterItems: MenuProps["items"] =
+    tagError !== null
+      ? [{ key: "tagError", disabled: true, label: <Typography.Text type="secondary">标签词表获取失败：{tagError}</Typography.Text> }]
+      : [
+          ...vocabulary.map((t) => ({
+            key: String(t.id),
+            label: (
+              <Checkbox
+                checked={tagFilter.includes(t.id)}
+                onChange={(e) => setTagFilter((prev) => (e.target.checked ? [...prev, t.id] : prev.filter((id) => id !== t.id)))}
+              >
+                <Space size={4}>
+                  <Tag color={t.color || undefined} bordered={false}>
+                    {t.title}
+                  </Tag>
+                  <Typography.Text type="secondary">({tagUsage.get(t.id) ?? 0})</Typography.Text>
+                </Space>
+              </Checkbox>
+            ),
+          })),
+          { type: "divider" },
+          {
+            key: "clear",
+            label: (
+              <Button type="link" size="small" disabled={tagFilter.length === 0} onClick={() => setTagFilter([])}>
+                清空
+              </Button>
+            ),
+          },
+        ];
 
   // ---------- 渲染 ----------
 
@@ -570,7 +771,7 @@ export function AccountsPage(): ReactElement {
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 600 }}>
       <PageHeader
         title="账号"
-        description="Google 账号与绑定的 ixBrowser 窗口。勾选后可以批量登录、巡检或删除，右键单个账号有更多操作。"
+        description="Google 账号与绑定的 ixBrowser 窗口。勾选后可以批量登录、巡检或删除，右键单个账号有更多操作；显示哪些列可在工具栏「列」里自己勾选。"
         extra={
           <>
             <Button icon={<PlusOutlined />} onClick={() => setEditEmail("")}>
@@ -589,7 +790,7 @@ export function AccountsPage(): ReactElement {
       />
 
       <Panel fill>
-        {/* 筛选工具栏：刷新 + 搜索 + 登录状态 + 同名 | 计数 */}
+        {/* 筛选工具栏：刷新 + 搜索 + 登录状态 + 同名 + 标签筛选 / 标签管理 / 列设置 | 计数 */}
         <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
           <Space wrap>
             <Button icon={<SyncOutlined />} loading={loading} onClick={() => void load()}>
@@ -615,6 +816,22 @@ export function AccountsPage(): ReactElement {
                 </Checkbox>
               </Tooltip>
             )}
+
+            {/* 标签筛选（多选，命中任一即显示） / 标签管理 / 列设置 */}
+            <CheckDropdown
+              disabled={tagsUnavailable}
+              button={<Button>{tagFilter.length > 0 ? `标签筛选 (${tagFilter.length})` : "标签筛选"}</Button>}
+              items={tagFilterItems}
+            />
+            <Tooltip title={tagError !== null ? `标签词表获取失败：${tagError}` : "新建 / 改名 / 删除标签（改的是 ixBrowser 里的词表）"}>
+              {/* disabled 的按钮自己收不到鼠标事件，包一层 span 才能挂上 Tooltip */}
+              <span style={{ display: "inline-block" }}>
+                <Button disabled={tagsUnavailable} onClick={() => setTagManagerOpen(true)}>
+                  标签管理
+                </Button>
+              </span>
+            </Tooltip>
+            <CheckDropdown button={<Button>列</Button>} items={columnItems} />
           </Space>
           <Typography.Text type="secondary">{filtered ? `显示 ${visible.length} / 共 ${total}` : `共 ${total} 个账号`}</Typography.Text>
         </Space>
@@ -694,14 +911,15 @@ export function AccountsPage(): ReactElement {
           <Table<AccountListRow>
             size="small"
             rowKey="email"
-            columns={columns}
+            columns={visibleColumns}
             dataSource={visible as AccountListRow[]}
             loading={loading}
             pagination={false}
             showSorterTooltip={false}
-            // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，容器更宽时各列按容器宽度补齐
+            // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，所以按可见列宽之和算（含勾选列），
+            // 容器更宽时 antd 会让各列按容器宽度补齐
             virtual
-            scroll={{ x: 1700, y: bodyHeight }}
+            scroll={{ x: visibleColumnsWidth + SELECTION_COLUMN_WIDTH, y: bodyHeight }}
             locale={{
               emptyText: (
                 <Empty
@@ -711,7 +929,7 @@ export function AccountsPage(): ReactElement {
               ),
             }}
             rowSelection={{
-              columnWidth: 40,
+              columnWidth: SELECTION_COLUMN_WIDTH,
               selectedRowKeys: checked,
               // 被筛选隐藏的勾选也要保留（antd 默认会丢掉不在 dataSource 里的 key）
               preserveSelectedRowKeys: true,
@@ -768,6 +986,23 @@ export function AccountsPage(): ReactElement {
         onSaved={(email, note) =>
           setList((prev) => (prev ? { ...prev, rows: applyNoteUpdate(prev.rows, email, note) as AccountListRow[] } : prev))
         }
+      />
+
+      <TagEditModal
+        target={tagEdit}
+        vocabulary={vocabulary}
+        onClose={closeTagEdit}
+        onSaved={(email, tags) =>
+          setList((prev) => (prev ? { ...prev, rows: applyTagsUpdate(prev.rows, email, tags) as AccountListRow[] } : prev))
+        }
+        onVocabularyChanged={() => void load()}
+      />
+      <TagManagerModal
+        open={tagManagerOpen}
+        vocabulary={vocabulary}
+        usage={tagUsage}
+        onClose={() => setTagManagerOpen(false)}
+        onChanged={() => void load()}
       />
       <BatchImportModal
         open={importOpen}
