@@ -606,15 +606,15 @@ GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩�
 ### 修改账号密码（F1，2026-09-24）
 
 账号管理 / AI 任务页新增「修改密码」：勾账号 → 系统**自动生成强随机密码**（20 位、四类字符齐全、
-排除易混淆的 `I O l 0 1`）→ 走 Google 改密页 → **确认 Google 侧确实改成功之后**才写回三处落点
-（`accounts.password` / 窗口备注第 2 段 / 窗口 `password` 字段）。这个顺序是刻意的：
+排除易混淆的 `I O l 0 1`）→ 走 Google 改密页 → **确认 Google 侧确实改成功之后**才写回两处落点
+（`accounts.password` / 窗口 `password` 字段；**窗口备注一律不碰**，见下）。这个顺序是刻意的：
 反过来会留下「库里是新密码、Google 还是旧密码」，之后所有登录都会失败。
 
 | 文件 | 作用 |
 |---|---|
 | `src/core/random-password.ts` | `generateStrongPassword()`（长度 < 16 直接抛错，不静默降级） |
 | `src/engine/operations/change-password.ts` | `ChangePasswordOperation`：两步重新验证身份（密码 → TOTP）→ 填两次新密码 → 点「更改密码」→ 判定 |
-| `src/automation/auto-change-password.ts` | 三处写回 `saveNewPassword()`、结果上报 `describeSaveOutcome()`、编排 `autoChangePassword()` |
+| `src/automation/auto-change-password.ts` | 两处写回 `saveNewPassword()`、结果上报 `describeSaveOutcome()`、编排 `autoChangePassword()` |
 | `src/application/ai-task-runner.ts`、`app/host/handlers/ai-tasks.ts` | AI 任务 `change_password`（`ai_change_password`）；op 日志接通任务日志 |
 | `app/renderer/src/App.tsx` | 「修改密码」页 |
 
@@ -645,12 +645,23 @@ GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩�
   并要求连续两轮命中才算拒绝。
 
 另有一处接线缺陷（代码审查发现）：`ChangePasswordDeps` 少了 `callback` 时，op 的全部日志
-（含判定依据）会被静默丢弃、到不了界面 —— handler 里已把 `api.log` 接上。三处落点**全部**写失败时
+（含判定依据）会被静默丢弃、到不了界面 —— handler 里已把 `api.log` 接上。两处落点**都**写失败时
 不再报成功，而是报失败并在消息里给出重设指引（`describeSaveOutcome`）。
+
+**窗口备注（note 字段）交回用户手工维护。** 真机核查时用户问「新密码记录了吗」，逐字段核对发现
+备注第 2 段不是当前密码，而备注里有三个按时间排列的密码段 —— 用户确认那是**他手写的**历史记录。
+根因是三条写备注的路径互相覆盖：改密替换第 2 段（会顶掉他手写的旧密码）、导入 TOTP 用
+`邮箱----密码----辅助邮箱----密钥` 整条**重建**（清空手写内容）、修改验证器按段数把密钥插进备注
+（还会拼出空段）。用户决定「自动化任务一律不碰备注」，于是三处全部收窄为只写该写的：
+改密 → 数据库 + 窗口 `password` 字段；导入 TOTP / 修改验证器 → 只写 `tfa_secret`；
+`replacePasswordInNote` / `NOTE_SEPARATOR` / `SavePasswordResult.note` 随之删除。
+真机零副作用复核（写入值与现值相同，只看备注有没有被动）：改密写回与导入 TOTP 跑完，
+备注 135 字符、sha256 `7feb063319cb` **一字未改**，`updateProfile` 收到的参数只剩 `tfa_secret`。
 
 未覆盖：GUI 里没有真点按钮（任务体与界面走同一条 `change_password` 路径，但按钮本身没点过）；
 「一次改多个账号」未真机（单测覆盖计数与停止语义）；`describeSaveOutcome` 四种组合只有单测；
-「点击后二次确认弹层」没有任何真机证据，真机没出现过。
+「点击后二次确认弹层」没有任何真机证据，真机没出现过；「修改验证器不再写备注」只有代码改动 +
+grep 复核，未真机跑（验证它要真的改一次验证器）。
 
 ### Electron 骨架的架构约定与审查修正
 
@@ -704,10 +715,11 @@ pnpm verify:selectors
      目标分组，界面带个数输入与确认框）；真机创建 → 12 项配置与模板一致 → 列表可见 → 删除 → 窗口列表恢复原状。
      真机暴露并修掉「新窗口 ID 丢失」（`profile-copy` 的 `data` 是裸数字，不是 `{profile_id:N}`），
      详见 `.trellis/tasks/09-24-create-windows-real-run/real-run-log.md`
-   - **修改密码（F1）**：勾账号后系统自动生成强随机密码，**确认 Google 侧改成功**才写回数据库 / 窗口备注第 2 段 /
-     窗口 `password` 字段。真机第一轮「改成功却判定失败」把新密码弄丢了（根因：真机确认文案是「已成功更改」，
-     而成功词表只有「已更改」），恢复后复跑端到端通过。已修：词表缺口、提交后记页面文本、兜底判据取正例、
-     静态提示词不再当拒绝、op 日志接通任务日志，详见 `.trellis/tasks/09-24-change-password-real-run/real-run-log.md`
+   - **修改密码（F1）**：勾账号后系统自动生成强随机密码，**确认 Google 侧改成功**才写回数据库与窗口
+     `password` 字段（**窗口备注一律不碰** —— 备注是用户手工维护的笔记区）。真机第一轮「改成功却判定失败」
+     把新密码弄丢了（根因：真机确认文案是「已成功更改」，而成功词表只有「已更改」），恢复后复跑端到端通过。
+     已修：词表缺口、提交后记页面文本、兜底判据取正例、静态提示词不再当拒绝、op 日志接通任务日志，
+     详见 `.trellis/tasks/09-24-change-password-real-run/real-run-log.md`
 
 ## 六、Python 侧现状（勿动）
 

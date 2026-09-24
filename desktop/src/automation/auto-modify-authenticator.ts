@@ -67,36 +67,17 @@ export function saveNewSecret(options: SaveSecretOptions): boolean {
     }
   }
 
-  // 3. ixBrowser 备注
+  // 3. ixBrowser 窗口：只写 tfa_secret —— **备注（note）一律不碰**
+  // 备注是用户自己的笔记区（真机实测用户会在里面手写历史密码）；原实现按段数把密钥插进备注，
+  // 既会覆盖用户手写的内容，也会拼出空段（用户备注里那个空段就是它的痕迹）。
   const bid = options.browserId;
   if (bid != null && /^\d+$/.test(String(bid)) && options.ixClient) {
     void (async () => {
       try {
         const profileId = Number.parseInt(String(bid), 10);
-        const profile = await options.ixClient!.getProfileInfo(profileId);
-        if (!profile) return;
-
-        const currentNote = profile.note || "";
-        const parts = currentNote.split("----");
-        let newNote: string;
-        // 四种分支严格照搬：按现有段数决定往哪个位置填密钥
-        if (parts.length >= 4) {
-          parts[3] = cleanSecret;
-          newNote = parts.join("----");
-        } else if (parts.length === 3) {
-          newNote = `${currentNote}----${cleanSecret}`;
-        } else if (parts.length === 2) {
-          newNote = `${currentNote}--------${cleanSecret}`;
-        } else {
-          newNote = `${options.email}----${options.password}--------${cleanSecret}`;
-        }
-
-        await options.ixClient!.updateProfile(profileId, {
-          note: newNote,
-          tfa_secret: cleanSecret,
-        });
+        await options.ixClient!.updateProfile(profileId, { tfa_secret: cleanSecret });
       } catch (err) {
-        console.error(`❌ 更新 ixBrowser 窗口备注失败: ${err}`);
+        console.error(`❌ 更新 ixBrowser 窗口的 2FA 密钥失败: ${err}`);
       }
     })();
   }

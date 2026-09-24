@@ -13,42 +13,28 @@ import type { IxBrowserClient } from "../ixbrowser/client.ts";
 import { generateStrongPassword } from "../core/random-password.ts";
 import { printBanner, withEngine, type CommonOptions, type Result2 } from "./shared.ts";
 
-/** 备注分段格式：`邮箱----密码----辅助邮箱----2FA密钥`（第 2 段就是密码） */
-export const NOTE_SEPARATOR = "----";
-
-/**
- * 把备注第 2 段换成新密码。
- * 段数不足时补成 `邮箱----新密码----<原有内容>`：宁可在第 3 段保留原有文本，也不丢用户写的东西。
+/*
+ * 备注（窗口的 note 字段）**不由自动化维护** —— 它是用户自己的笔记区：
+ * 真机实测（2026-09-24）用户会在里面手写历史密码，而写入备注的三条路径（改密 / 导入 TOTP /
+ * 修改验证器）互相覆盖：导入 TOTP 会整条重建（`邮箱----密码----辅助邮箱----密钥`）、
+ * 修改验证器会追加并拼出空段，都吃掉过用户手写的内容。用户已决定：
+ * **自动化任务一律不碰备注**，密码只写数据库与窗口的 password 字段。
  */
-export function replacePasswordInNote(note: string | null | undefined, email: string, newPassword: string): string {
-  const current = String(note ?? "");
-  const parts = current.split(NOTE_SEPARATOR);
-  if (parts.length >= 2) {
-    parts[1] = newPassword;
-    return parts.join(NOTE_SEPARATOR);
-  }
-  return parts[0]
-    ? `${email}${NOTE_SEPARATOR}${newPassword}${NOTE_SEPARATOR}${parts[0]}`
-    : `${email}${NOTE_SEPARATOR}${newPassword}`;
-}
 
 export interface SavePasswordOptions {
   email: string;
   newPassword: string;
   browserId?: string | number | null;
   accountRepo?: Pick<AccountRepository, "upsertAccount">;
-  ixClient?: Pick<IxBrowserClient, "getProfileInfo" | "updateProfile">;
+  ixClient?: Pick<IxBrowserClient, "updateProfile">;
 }
 
 export interface SavePasswordResult {
   /** 数据库（accounts.password） */
   db: boolean;
-  /** 窗口备注第 2 段 */
-  note: boolean;
-  /** 窗口的 password 字段 */
+  /** 窗口信息面板上的 password 字段 */
   windowPassword: boolean;
 }
-
 
 /**
  * 把写回结果翻成「任务行状态 + 给人看的消息」。
@@ -58,25 +44,28 @@ export interface SavePasswordResult {
  * 逼操作者按消息里的指引去重设密码，而不是看到一个绿点以为一切正常。
  */
 export function describeSaveOutcome(saved: SavePasswordResult): { ok: boolean; message: string } {
-  const windowOk = saved.note && saved.windowPassword;
-  if (saved.db && windowOk) return { ok: true, message: "密码已更改，新密码已写入数据库与窗口信息" };
-  if (saved.db && !windowOk) {
-    return { ok: true, message: "密码已更改；窗口信息未写入（数据库已是新密码，请手动同步窗口备注第 2 段与窗口密码字段）" };
+  if (saved.db && saved.windowPassword) {
+    return { ok: true, message: "密码已更改，新密码已写入数据库与窗口的 password 字段" };
   }
-  if (!saved.db && windowOk) {
-    return { ok: true, message: "密码已更改；数据库密码未写入（新密码在窗口备注第 2 段，请手动同步数据库）" };
+  if (saved.db && !saved.windowPassword) {
+    return { ok: true, message: "密码已更改；窗口的 password 字段未写入（数据库已是新密码，请手动同步窗口信息）" };
+  }
+  if (!saved.db && saved.windowPassword) {
+    return { ok: true, message: "密码已更改；数据库未写入（新密码在窗口的 password 字段里，请手动同步数据库）" };
   }
   return {
     ok: false,
     message: "密码已在 Google 侧更改，但新密码未能写入数据库与窗口，本地密码已失效；请人工重设密码后再同步",
   };
 }
+
 /**
- * 把新密码写回三处。三处各自独立尝试：Google 侧已经改掉了，
- * 任何一处失败都只影响那一处，能修一处是一处（失败由调用方汇总上报）。
+ * 把新密码写回两处（数据库 + 窗口 password 字段），两处各自独立尝试：
+ * Google 侧已经改掉了，任何一处失败都只影响那一处，能修一处是一处（失败由调用方汇总上报）。
+ * 备注（note）刻意不写 —— 那是用户自己的笔记区，见文件头说明。
  */
 export async function saveNewPassword(options: SavePasswordOptions): Promise<SavePasswordResult> {
-  const result: SavePasswordResult = { db: false, note: false, windowPassword: false };
+  const result: SavePasswordResult = { db: false, windowPassword: false };
 
   // 1) 数据库：upsertAccount 是「未传即不动」，所以这里只会动 password 与 updated_at
   if (options.accountRepo) {
@@ -88,21 +77,14 @@ export async function saveNewPassword(options: SavePasswordOptions): Promise<Sav
     }
   }
 
-  // 2) ixBrowser 窗口：备注第 2 段 + password 字段（一次调用）
+  // 2) ixBrowser 窗口：只写 password 字段（不读、不写 note）
   const bid = options.browserId;
   if (bid != null && /^\d+$/.test(String(bid)) && options.ixClient) {
     try {
       const profileId = Number.parseInt(String(bid), 10);
-      const profile = await options.ixClient.getProfileInfo(profileId);
-      if (profile) {
-        const note = replacePasswordInNote(profile.note, options.email, options.newPassword);
-        // 注意：这里的 params 里带着**明文新密码**（note 第 2 段 + password 字段），
-        // 任何日志/错误上报都不得把 params 或服务端响应体打印出来。
-        const ok = await options.ixClient.updateProfile(profileId, { note, password: options.newPassword });
-        result.note = ok;
-        result.windowPassword = ok;
-        if (!ok) console.error("[改密] 窗口信息写入返回 false");
-      }
+      // 注意：params 里带着**明文新密码**，任何日志/错误上报都不得把 params 或服务端响应体打印出来。
+      result.windowPassword = await options.ixClient.updateProfile(profileId, { password: options.newPassword });
+      if (!result.windowPassword) console.error("[改密] 窗口 password 字段写入返回 false");
     } catch (err) {
       console.error(`❌ 更新 ixBrowser 窗口信息失败: ${err}`);
     }

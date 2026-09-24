@@ -109,12 +109,12 @@ export function createTotpHandlers(ctx: HostContext, deps: TotpHandlerDeps = {})
   // 对标 :86-102 的分页 get_profile_list(page, limit=100)；getBrowserList 失败时返回已取到的部分
   const listWindows =
     deps.listWindows ?? (() => getBrowserList({ client: ctx.ix(), log: ctx.log }, { fetchAll: true, limit: 100 }));
-  // 对标 update_profile(int(profile_id), note=note, tfa_secret=secret)。
-  // 真机验证（2026-09-24）：只传 note 会让窗口的 tfa_secret 一直为空 → 这里连密钥一起写。
+  // 只写窗口的 tfa_secret —— **不写 note**（备注是用户自己的笔记区，自动化写入会覆盖他手写的内容）。
+  // 真机验证（2026-09-24）：只传 note 会让窗口的 tfa_secret 一直为空 → 这里必须写密钥。
   // 有意偏差：Python 的 update_profile 对网络类错误有重试，客户端 updateProfile 没有，失败即计为警告。
   const updateProfile =
     deps.updateProfile ??
-    ((id: number, fields: { note: string; tfa_secret: string }) => ctx.ix().updateProfile(id, fields));
+    ((id: number, fields: { tfa_secret: string }) => ctx.ix().updateProfile(id, fields));
 
   return {
     [TOTP_INVOKE.totpParseUris]: (items: unknown): TotpParseUrisResult => entriesFromUris(requireUriItems(items)),

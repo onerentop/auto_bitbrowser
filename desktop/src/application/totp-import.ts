@@ -195,8 +195,8 @@ export interface TotpImportDeps {
   upsertAccount: (fields: { email: string; secret_key?: string; password?: string; browser_profile_id?: string }) => boolean;
   /** 全量窗口列表（对标 :86-102 的分页 get_profile_list(limit=100)） */
   listWindows: () => Promise<ReadonlyArray<{ name?: string | null; profile_id?: number | string | null; id?: number | string | null }>>;
-  /** 对标 services.ix_api.update_profile(profile_id, note=..., tfa_secret=...)，返回是否成功 */
-  updateProfile: (profileId: number, fields: { note: string; tfa_secret: string }) => Promise<boolean>;
+  /** 只写 ixBrowser 窗口的 tfa_secret（**备注不碰**），返回是否成功 */
+  updateProfile: (profileId: number, fields: { tfa_secret: string }) => Promise<boolean>;
   log: (message: string) => void;
   progress: (current: number, total: number) => void;
   item?: (key: string, status: string, message: string) => void;
@@ -208,7 +208,7 @@ export interface TotpImportDeps {
  *   1. 分页取 ixBrowser 窗口，建立 name.lower() → profile_id 映射（:83-106）
  *   2. upsert secret_key；仅文本导入且带密码时同时更新密码（:127-135）
  *   3. 账号没有 browser_profile_id 时按窗口名（= 邮箱）自动绑定（:143-153）
- *   4. 更新窗口备注为 `email----password----recovery_email----secret`（:156-175）
+ *   4. 更新窗口的 tfa_secret（:156-175）；**不再写备注** —— 备注是用户自己的笔记区，自动化写入会覆盖它
  *
  * 与 Python 的差异（均为有意）：
  *   - 数据安全：界面只传 {email, secret, kind, password?}，任务内按数据库当前状态重新匹配；
@@ -299,32 +299,25 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
         }
       }
 
-      // 更新 ixBrowser 窗口备注与 tfa_secret（:156-175）
-      // 注意：这里整条覆盖备注 `email----password----recovery_email----secret`，
-      // 与「修改验证器」只替换备注第 4 段的做法不一致 —— 照搬 Python，不做统一。
-      // 但 tfa_secret 必须一起写：真机验证（2026-09-24）发现只写 note 时窗口的 tfa_secret 一直为空，
-      // 与「修改验证器」「批量绑定窗口」两处落点不一致（那两处都会写 tfa_secret）。
+      // 只更新 ixBrowser 窗口的 tfa_secret —— **备注（note）一律不碰**。
+      // 备注是用户自己的笔记区（真机实测用户会在里面手写历史密码），而原实现会用
+      // `email----password----recovery_email----secret` 整条重建备注，把用户手写的内容清掉。
+      // 另外 tfa_secret 必须写：真机验证（2026-09-24）发现只写 note 时窗口的 tfa_secret 一直为空。
       if (profileId) {
         try {
-          // 获取最新的密码（:160）
-          const password = update.password || dbAccount.password || "";
-          const recovery = dbAccount.recovery_email || "";
-          const note = `${email}----${password}----${recovery}----${secret}`;
-
-          log("  [窗口] 正在更新备注...");
+          log("  [窗口] 正在写入 2FA 密钥...");
           const pid = typeof profileId === "number" ? profileId : pyInt(profileId);
-          // 备注与窗口的 tfa_secret 一起写：只写备注会让 ixBrowser 侧的 2FA 密钥一直为空
-          if (await deps.updateProfile(pid, { note, tfa_secret: secret })) {
-            log("  [窗口] 备注更新成功");
+          if (await deps.updateProfile(pid, { tfa_secret: secret })) {
+            log("  [窗口] 2FA 密钥写入成功");
             ixUpdateCount += 1;
           } else {
             hasWarning = true;
-            warningMsg = "更新窗口备注返回失败";
-            log("  [窗口] ⚠ 备注更新失败");
+            warningMsg = "更新窗口 2FA 密钥返回失败";
+            log("  [窗口] ⚠ 2FA 密钥写入失败");
           }
         } catch (e) {
           hasWarning = true;
-          warningMsg = `更新窗口备注失败: ${errorText(e)}`;
+          warningMsg = `更新窗口 2FA 密钥失败: ${errorText(e)}`;
           log(`  [窗口] ⚠ ${warningMsg}`);
         }
       }
