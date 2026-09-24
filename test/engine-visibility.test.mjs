@@ -28,7 +28,7 @@ function engineWith({ stagehandVisible, rendered, evaluateThrows = false }) {
       return rendered;
     },
   };
-  const engine = new StagehandGoogleEngine({ ixClient: {} });
+  const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} }))); // 用例要直接替换内部私有的 sh / page
   engine.sh = {};
   engine.page = page;
   return { engine, evaluated };

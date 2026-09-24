@@ -28,7 +28,20 @@ const PASSWORD = "pw-must-not-reach-the-llm";
 /** 合成测试向量（RFC 6238 样例密钥），不是任何真实账号的密钥 */
 const SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-/** 假引擎：状态机（重新验证 → 2SV 设置页）+ 只读记录 */
+/**
+ * 假引擎：状态机（重新验证 → 2SV 设置页）+ 只读记录
+ * @param {{
+ *   needsReauth?: boolean,
+ *   signedOut?: boolean,
+ *   totpStyle?: boolean,
+ *   rejectFirstTotpSubmit?: boolean,
+ *   onWait?: ((ms: number) => void) | null,
+ *   dialogHasConfirmWord?: boolean,
+ *   saveDoesNothing?: boolean,
+ *   navigateFails?: boolean,
+ *   nextDoesNothing?: boolean,
+ * }} [options]
+ */
 function fakeEngine({
   needsReauth = false,
   signedOut = false,
@@ -44,6 +57,7 @@ function fakeEngine({
   /** 点「下一步」不生效（弹层仍在）→ 钉住「确认页判定过宽会在弹层上盲点保存」 */
   nextDoesNothing = false,
 } = {}) {
+  /** @type {{ navigate: any[], fill: any[], act: any[], click: any[], jsClick: any[], clickByText: any[], totpSubmits?: number }} */
   const calls = { navigate: [], fill: [], act: [], click: [], jsClick: [], clickByText: [] };
   const initialState = signedOut
     ? "signin"
@@ -81,7 +95,7 @@ function fakeEngine({
 
   return {
     calls,
-    engine: {
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         // 真机：多标签 / 前台不在当前页 / 超时都会让 navigate 失败，此时页面停原地不动
@@ -174,7 +188,7 @@ function fakeEngine({
         // 第 2 次：verifyModification
         return { success: true, data: { status: "已添加手机号" } };
       },
-    },
+    }),
   };
 }
 

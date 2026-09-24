@@ -111,6 +111,10 @@ function repoWith(rows) {
   return repo;
 }
 
+/**
+ * @param {import("../src/db/account-repository.ts").AccountRepository} repo
+ * @param {{ windows?: Array<{ name?: string | null, profile_id?: number | string | null }>, noteOk?: boolean | "throw", stopAfter?: number, listThrows?: boolean }} [options]
+ */
 function importDeps(repo, { windows = [], noteOk = true, stopAfter = Infinity, listThrows = false } = {}) {
   const notes = [];
   const logs = [];
@@ -155,9 +159,13 @@ test("runTotpImport：写入密钥；文本导入带密码时更新密码；二�
     ],
     h.deps,
   );
-  assert.equal(repo.getAccountByEmail("t@x.com").secret_key, "SECRET1");
-  assert.equal(repo.getAccountByEmail("t@x.com").password, "newpw");
-  assert.equal(repo.getAccountByEmail("q@x.com").password, "keep");
+  const textAcc = repo.getAccountByEmail("t@x.com");
+  assert.ok(textAcc);
+  assert.equal(textAcc.secret_key, "SECRET1");
+  assert.equal(textAcc.password, "newpw");
+  const qrAcc = repo.getAccountByEmail("q@x.com");
+  assert.ok(qrAcc);
+  assert.equal(qrAcc.password, "keep");
   assert.equal(r.password_count, 1);
   // 只写窗口的 tfa_secret；**备注（note）不再写** —— 那是用户自己的笔记区，
   // 原实现整条重建备注（email----password----recovery_email----secret）会清掉用户手写的内容。
@@ -205,8 +213,12 @@ test("runTotpImport：未绑定账号按窗口名（小写）自动绑定；已�
     ],
     h.deps,
   );
-  assert.equal(repo.getAccountByEmail("Free@X.com").browser_profile_id, "21");
-  assert.equal(repo.getAccountByEmail("bound@x.com").browser_profile_id, "99");
+  const freeAcc = repo.getAccountByEmail("Free@X.com");
+  assert.ok(freeAcc);
+  assert.equal(freeAcc.browser_profile_id, "21");
+  const boundAcc = repo.getAccountByEmail("bound@x.com");
+  assert.ok(boundAcc);
+  assert.equal(boundAcc.browser_profile_id, "99");
   assert.equal(r.bind_count, 1);
   assert.deepEqual(
     h.notes.map(([id]) => id),
@@ -267,7 +279,9 @@ test("runTotpImport：中途停止，剩余条目计入 skipped_count", async ()
   assert.equal(r.success_count, 1);
   assert.equal(r.skipped_count, 2);
   assert.ok(h.logs.includes("已停止，剩余 2 个账号未处理"));
-  assert.equal(repo.getAccountByEmail("b@x.com").secret_key, null);
+  const stoppedAcc = repo.getAccountByEmail("b@x.com");
+  assert.ok(stoppedAcc);
+  assert.equal(stoppedAcc.secret_key, null);
   assert.ok(importFinishedLogLines(r).length > 0);
 });
 
@@ -313,10 +327,15 @@ function makeHandlers(rows = [], opts = {}) {
       },
     }),
   );
+  /**
+   * @param {string} channel
+   * @param {...any} args
+   * @returns {Promise<any>}
+   */
   const call = async (channel, ...args) => {
     const env = await dispatch(channel, args);
     if (!env.ok) {
-      const e = new Error(env.error.message);
+      const e = /** @type {Error & { code?: string }} */ (new Error(env.error.message));
       e.code = env.error.code;
       throw e;
     }
@@ -346,6 +365,7 @@ test("handler：import 返回 TaskInfo，任务完成后写库并写入窗口 2F
   assert.equal(done.result.success_count, 1);
   assert.equal(done.result.bind_count, 1);
   const acc = h.ctx.accountRepo().getAccountByEmail("a@x.com");
+  assert.ok(acc);
   assert.deepEqual([acc.secret_key, acc.password, acc.browser_profile_id], ["NEW", "p2", "5"]);
   assert.deepEqual(h.notes, [[5, "NEW", null]], "只写 tfa_secret，不传 note");
 });
@@ -355,11 +375,14 @@ test("handler：二维码条目带密码时丢弃密码", async () => {
   const finished = h.nextFinished();
   await h.call(TOTP_INVOKE.totpImport, [{ email: "a@x.com", secret: "Q", kind: "qr", password: "x" }]);
   await finished;
-  assert.equal(h.ctx.accountRepo().getAccountByEmail("a@x.com").password, "keep");
+  const kept = h.ctx.accountRepo().getAccountByEmail("a@x.com");
+  assert.ok(kept);
+  assert.equal(kept.password, "keep");
 });
 
 test("handler 参数校验：各类非法输入 → INVALID_ARGUMENT", async () => {
   const h = makeHandlers();
+  /** @type {Array<[string, any[]]>} */
   const bad = [
     [TOTP_INVOKE.totpParseText, [123]],
     [TOTP_INVOKE.totpParseUris, ["nope"]],
@@ -374,6 +397,11 @@ test("handler 参数校验：各类非法输入 → INVALID_ARGUMENT", async () 
     [TOTP_INVOKE.totpImport, [[{ email: "a@x.com", secret: "S", kind: "text", password: 1 }]]],
   ];
   for (const [channel, args] of bad) {
-    await assert.rejects(h.call(channel, ...args), (e) => e.code === ERROR_CODES.INVALID_ARGUMENT, `${channel} ${JSON.stringify(args)}`);
+    await assert.rejects(
+      h.call(channel, ...args),
+      /** @type {(e: any) => boolean} */
+      (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+      `${channel} ${JSON.stringify(args)}`,
+    );
   }
 });

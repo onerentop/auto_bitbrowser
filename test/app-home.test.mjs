@@ -31,7 +31,9 @@ import { ConfigManager } from "../src/core/config-manager.ts";
 // ==================== 工具 ====================
 
 function fakeClient(overrides = {}) {
+  /** @type {{ open: any[]; del: any[]; groups: number; profiles: any[] }} */
   const calls = { open: [], del: [], groups: 0, profiles: [] };
+  /** @type {any} */
   const client = {
     calls,
     async getGroupList() {
@@ -55,6 +57,7 @@ function fakeClient(overrides = {}) {
   return client;
 }
 
+/** @param {Record<string, any> | null} [configJson] */
 function setup(clientOverrides = {}, configJson = null) {
   const dir = mkdtempSync(join(tmpdir(), "abb-home-"));
   if (configJson !== null) writeFileSync(join(dir, "config.json"), JSON.stringify(configJson, null, 2), "utf-8");
@@ -93,7 +96,7 @@ test("getGroupList：成功直接返回数组；data 非数组时返回 []", asy
   assert.deepEqual(await getGroupList({ client: { getGroupList: async () => [{ id: 2, title: "A" }] } }), [
     { id: 2, title: "A" },
   ]);
-  assert.deepEqual(await getGroupList({ client: { getGroupList: async () => ({ x: 1 }) } }), []);
+  assert.deepEqual(await getGroupList({ client: { getGroupList: async () => /** @type {any} */ ({ x: 1 }) } }), []);
 });
 
 test("getGroupList：可重试错误按 1s/2s 退避后成功", async () => {
@@ -107,7 +110,7 @@ test("getGroupList：可重试错误按 1s/2s 退避后成功", async () => {
         return [{ id: 3 }];
       },
     },
-    sleep: async (ms) => sleeps.push(ms),
+    sleep: async (ms) => void sleeps.push(ms),
     log: (m) => logs.push(m),
   });
   assert.deepEqual(res, [{ id: 3 }]);
@@ -196,8 +199,11 @@ test("buildBrowserTree：分组名优先 group-list，其次 profile.group_name�
       [9, "空分组", 0],
     ],
   );
-  assert.equal(groupLabel(tree[1]), "📁 列表名 (1)");
-  const b = tree[1].browsers[0];
+  const g1 = tree[1];
+  assert.ok(g1);
+  assert.equal(groupLabel(g1), "📁 列表名 (1)");
+  const b = g1.browsers[0];
+  assert.ok(b);
   assert.equal(b.profileId, 11);
   assert.equal(b.name, "a@x.com");
   assert.equal(b.note, "N1");
@@ -235,8 +241,14 @@ test("filterBrowserTree：只匹配名称和备注（不区分大小写、strip�
 
   const r = filterBrowserTree(tree, "  ALICE ", all);
   assert.deepEqual(r.groups.map((g) => g.groupName), ["默认"]);
-  assert.deepEqual(r.groups[0].browsers.map((b) => b.profileId), [1]);
-  assert.deepEqual(r.checkedKeys, [tree.find((g) => g.groupId === 1).browsers[0].key]);
+  const g0 = r.groups[0];
+  assert.ok(g0);
+  assert.deepEqual(g0.browsers.map((b) => b.profileId), [1]);
+  const g1 = tree.find((g) => g.groupId === 1);
+  assert.ok(g1);
+  const b0 = g1.browsers[0];
+  assert.ok(b0);
+  assert.deepEqual(r.checkedKeys, [b0.key]);
 
   const byNote = filterBrowserTree(tree, "vip", []);
   assert.deepEqual(byNote.groups.flatMap((g) => g.browsers.map((b) => b.profileId)), [2]);
@@ -257,7 +269,11 @@ test("selectAllVisible / selectedProfileIds：只作用于可见项", () => {
   const keys = selectAllVisible(visible, [], true);
   assert.deepEqual(selectedProfileIds(visible, keys), [1, 2, 3]);
   // 取消全选只去掉可见项
-  const hiddenKey = tree.find((g) => g.groupId === 2).browsers[1].key; // dave，不含 o
+  const g2 = tree.find((g) => g.groupId === 2);
+  assert.ok(g2);
+  const b1 = g2.browsers[1];
+  assert.ok(b1);
+  const hiddenKey = b1.key; // dave，不含 o
   const kept = selectAllVisible(visible, [...keys, hiddenKey], false);
   assert.deepEqual(kept, [hiddenKey]);
   // 不可见的勾选不计入选中
@@ -330,6 +346,7 @@ test("openBrowsers：成功与失败混合，返回 {total, success_count, faile
     },
   });
   t.after(s.cleanup);
+  /** @type {any} */
   const env = await s.dispatch(HOME_INVOKE.homeOpenBrowsers, [[21, 22, 23, 21]]);
   assert.equal(env.ok, true);
   assert.equal(env.data.type, HOME_TASK_TYPES.open);
@@ -352,6 +369,7 @@ test("openBrowsers：成功与失败混合，返回 {total, success_count, faile
 test("deleteBrowsers：全部成功", async (t) => {
   const s = setup();
   t.after(s.cleanup);
+  /** @type {any} */
   const env = await s.dispatch(HOME_INVOKE.homeDeleteBrowsers, [[7, 8]]);
   assert.equal(env.ok, true);
   assert.equal(env.data.type, HOME_TASK_TYPES.delete);
@@ -383,7 +401,7 @@ test("deleteBrowsers：中途停止 → outcome=stopped，剩余窗口不再处�
 test("openBrowsers：已有任务运行时返回 TASK_BUSY", async (t) => {
   const s = setup();
   t.after(s.cleanup);
-  let release;
+  /** @type {any} */ let release;
   s.runner.start("other", "别的任务", () => new Promise((r) => (release = r)));
   const env = await s.dispatch(HOME_INVOKE.homeOpenBrowsers, [[1]]);
   assert.equal(env.ok, false);
@@ -407,6 +425,7 @@ test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只
     },
   });
   t.after(s.cleanup);
+  /** @type {any} */
   const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null);
@@ -422,10 +441,12 @@ test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只
     },
   });
   t.after(bad.cleanup);
+  /** @type {any} */
   const g = await bad.dispatch(HOME_INVOKE.homeListGroups, []);
   assert.equal(g.ok, true);
   assert.deepEqual(g.data.options, [{ id: 1, label: "默认分组" }]);
 
+  /** @type {any} */
   const good = await s.dispatch(HOME_INVOKE.homeListGroups, []);
   assert.deepEqual(good.data.options, [
     { id: 1, label: "默认分组" },
@@ -444,6 +465,7 @@ test("listBrowsers：翻页中途失败 → 返回已取到的部分，不报错
     },
   });
   t.after(s.cleanup);
+  /** @type {any} */
   const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null, "getBrowserList 吞掉翻页错误，返回部分数据");
@@ -461,6 +483,7 @@ test("listBrowsers：第一页就失败 → 空树（只剩「未分组」），
     },
   });
   t.after(s.cleanup);
+  /** @type {any} */
   const env = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null);
@@ -497,7 +520,11 @@ test("buildBrowserTree：有 profileId 时 key 为 b:{id}，重复 / 无效 id �
   assert.equal(new Set(keys).size, keys.length);
   // 刷新（同一数据重建）后 key 稳定
   const again = buildBrowserTree([{ id: 2, title: "二" }], [{ profile_id: 11, name: "a", group_id: 2 }]).groups;
-  assert.equal(again.find((g) => g.groupId === 2).browsers[0].key, "b:11");
+  const g2 = again.find((g) => g.groupId === 2);
+  assert.ok(g2);
+  const b0 = g2.browsers[0];
+  assert.ok(b0);
+  assert.equal(b0.key, "b:11");
   // 勾选重复 id 的两行只取一次
   const all = groups.flatMap((g) => g.browsers.map((b) => b.key));
   assert.deepEqual(selectedProfileIds(groups, all), [12, 11]);
@@ -516,6 +543,7 @@ test("getConfig / saveConfig：只读写 last_used_template_id 与 window_name_p
   t.after(s.cleanup);
   const file = join(s.dir, "config.json");
 
+  /** @type {any} */
   const got = await s.dispatch(HOME_INVOKE.homeGetConfig, []);
   assert.deepEqual(got.data, { templateId: "123", namePrefix: "old" });
 
@@ -525,6 +553,7 @@ test("getConfig / saveConfig：只读写 last_used_template_id 与 window_name_p
   assert.equal(saved.ok, true);
   assert.deepEqual(saved.data, { templateId: "456", namePrefix: "old" });
 
+  /** @type {any} */
   const saved2 = await s.dispatch(HOME_INVOKE.homeSaveConfig, [{ namePrefix: " pre " }]);
   assert.deepEqual(saved2.data, { templateId: "456", namePrefix: "pre" });
 
@@ -547,6 +576,7 @@ test("getConfig / saveConfig：只读写 last_used_template_id 与 window_name_p
 test("handler 参数校验：非法参数一律 INVALID_ARGUMENT，且不会启动任务", async (t) => {
   const s = setup();
   t.after(s.cleanup);
+  /** @type {Array<[string, unknown[]]>} */
   const bad = [
     [HOME_INVOKE.homeOpenBrowsers, []],
     [HOME_INVOKE.homeOpenBrowsers, [[]]],

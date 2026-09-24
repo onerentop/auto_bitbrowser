@@ -36,6 +36,19 @@ async function waitFor(predicate, timeoutMs = 2000) {
   }
 }
 
+/**
+ * 取数组第 index 项并断言存在（noUncheckedIndexedAccess 下把下标访问收窄成非空）
+ * @template T
+ * @param {readonly T[]} list
+ * @param {number} index
+ * @returns {T}
+ */
+function at(list, index) {
+  const value = list[index];
+  assert.ok(value !== undefined, `下标越界: ${index}`);
+  return value;
+}
+
 function recordOf(overrides = {}) {
   return {
     taskType: "ai_kick_devices",
@@ -62,13 +75,14 @@ test("TaskHistoryRepository：落库任务与逐条目，计数按状态归类",
   assert.equal(runId, 1);
   const runs = repo.listRuns();
   assert.equal(runs.length, 1);
-  assert.equal(runs[0].task_type, "ai_kick_devices");
-  assert.equal(runs[0].outcome, "succeeded");
-  assert.equal(runs[0].total, 3);
-  assert.equal(runs[0].success_count, 1);
-  assert.equal(runs[0].failed_count, 2); // 「失败」与「错误」都算失败
-  assert.equal(runs[0].started_at, "2026-09-24 10:00:00");
-  assert.equal(runs[0].finished_at, "2026-09-24 10:00:12");
+  const run = at(runs, 0);
+  assert.equal(run.task_type, "ai_kick_devices");
+  assert.equal(run.outcome, "succeeded");
+  assert.equal(run.total, 3);
+  assert.equal(run.success_count, 1);
+  assert.equal(run.failed_count, 2); // 「失败」与「错误」都算失败
+  assert.equal(run.started_at, "2026-09-24 10:00:00");
+  assert.equal(run.finished_at, "2026-09-24 10:00:12");
 
   assert.deepEqual(
     repo.listItems(runId).map((i) => [i.item_key, i.status, i.message]),
@@ -91,8 +105,10 @@ test("TaskHistoryRepository：多次运行按倒序返回，limit 生效，条�
     ["第二次", "第一次"],
   );
   assert.equal(repo.listRuns(1).length, 1);
-  assert.equal(repo.listItems(runs[1].id)[0].item_key, "first@x.com");
-  assert.equal(repo.listItems(runs[0].id)[0].item_key, "second@x.com");
+  const firstRun = at(runs, 1); // 倒序：第一次在数组末尾
+  const secondRun = at(runs, 0);
+  assert.equal(at(repo.listItems(firstRun.id), 0).item_key, "first@x.com");
+  assert.equal(at(repo.listItems(secondRun.id), 0).item_key, "second@x.com");
 });
 
 test("TaskHistoryRepository.exportText：表头 + 逐条目一行；逗号/引号/换行被正确转义", () => {
@@ -123,8 +139,9 @@ test("TaskHistoryRepository：没有条目的任务也能落库（total=0）", (
   const repo = new TaskHistoryRepository(makeDb());
   const runId = repo.record(recordOf({ items: [] }));
   const runs = repo.listRuns();
-  assert.equal(runs[0].total, 0);
-  assert.equal(runs[0].success_count, 0);
+  const run = at(runs, 0);
+  assert.equal(run.total, 0);
+  assert.equal(run.success_count, 0);
   assert.deepEqual(repo.listItems(runId), []);
   assert.equal(repo.exportText().split("\n").length, 2); // 表头 + 一行（LEFT JOIN 出一行空条目）
 });
@@ -228,7 +245,7 @@ test("TaskRunner：同一个 key 多次上报只保留最终状态（AI 任务�
   // 落库口径：总数 = 账号数，不是条目事件数
   const repo = new TaskHistoryRepository(makeDb());
   const runId = repo.record(records[0]);
-  const run = repo.listRuns()[0];
+  const run = at(repo.listRuns(), 0);
   assert.equal(run.total, 2);
   assert.equal(run.success_count, 1);
   assert.equal(run.failed_count, 1);
@@ -274,13 +291,14 @@ test("host 装配：真实跑一个任务后，任务历史里能查到它（含
   // 落库发生在 finish 的同一步（onFinished 之后），此时应已可读
   const rows = ctx.taskHistoryRepo().listRuns();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].task_type, "demo_task");
-  assert.equal(rows[0].label, "演示任务（1 个）");
-  assert.equal(rows[0].total, 2);
-  assert.equal(rows[0].success_count, 1);
-  assert.equal(rows[0].failed_count, 1);
+  const row = at(rows, 0);
+  assert.equal(row.task_type, "demo_task");
+  assert.equal(row.label, "演示任务（1 个）");
+  assert.equal(row.total, 2);
+  assert.equal(row.success_count, 1);
+  assert.equal(row.failed_count, 1);
   assert.deepEqual(
-    ctx.taskHistoryRepo().listItems(rows[0].id).map((i) => i.item_key),
+    ctx.taskHistoryRepo().listItems(row.id).map((i) => i.item_key),
     ["a@x.com", "b@x.com"],
   );
 });
@@ -303,18 +321,20 @@ test("host 装配：首页批量打开窗口在任务历史里带逐条目（tot
 
   const env = await dispatch(HOME_INVOKE.homeOpenBrowsers, [[21, 22, 23]]);
   assert.equal(env.ok, true);
-  assert.equal(env.data.type, HOME_TASK_TYPES.open);
+  const openedTask = /** @type {{ type: string }} */ (env.data);
+  assert.equal(openedTask.type, HOME_TASK_TYPES.open);
   await finished;
 
   const runs = ctx.taskHistoryRepo().listRuns();
   assert.equal(runs.length, 1);
-  assert.equal(runs[0].task_type, HOME_TASK_TYPES.open);
-  assert.equal(runs[0].outcome, "succeeded");
-  assert.equal(runs[0].total, 3);
-  assert.equal(runs[0].success_count, 2);
-  assert.equal(runs[0].failed_count, 1);
+  const run = at(runs, 0);
+  assert.equal(run.task_type, HOME_TASK_TYPES.open);
+  assert.equal(run.outcome, "succeeded");
+  assert.equal(run.total, 3);
+  assert.equal(run.success_count, 2);
+  assert.equal(run.failed_count, 1);
   assert.deepEqual(
-    ctx.taskHistoryRepo().listItems(runs[0].id).map((i) => [i.item_key, i.status, i.message]),
+    ctx.taskHistoryRepo().listItems(run.id).map((i) => [i.item_key, i.status, i.message]),
     [
       ["21", "成功", ""],
       ["22", "失败", "窗口打开失败: profile not exist"],
@@ -331,9 +351,11 @@ test("handler：list / items / export 走通；非法参数 → INVALID_ARGUMENT
     recordOf({ items: [{ key: "a@x.com", status: "成功", message: "" }] }),
   );
   const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+  /** @returns {Promise<any>} 信封里的 data（已确保 ok） */
   const call = async (channel, ...args) => {
     const env = await dispatch(channel, args);
     if (!env.ok) {
+      /** @type {Error & { code?: string }} */
       const e = new Error(env.error.message);
       e.code = env.error.code;
       throw e;
@@ -353,18 +375,18 @@ test("handler：list / items / export 走通；非法参数 → INVALID_ARGUMENT
 
   await assert.rejects(
     call(TASK_HISTORY_INVOKE.taskHistoryItems, 0),
-    (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+    (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
   );
   await assert.rejects(
     call(TASK_HISTORY_INVOKE.taskHistoryItems, "1"),
-    (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+    (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
   );
   await assert.rejects(
     call(TASK_HISTORY_INVOKE.taskHistoryList, -5),
-    (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+    (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
   );
   await assert.rejects(
     call(TASK_HISTORY_INVOKE.taskHistoryExport, 0),
-    (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+    (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
   );
 });

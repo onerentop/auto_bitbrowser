@@ -130,7 +130,7 @@ function workerParams(overrides) {
 
 test("executeAccountWorkerTask：login 分派到 batchLogin 并透传 LLM 参数（adapter :43-104）", async () => {
   const p = fakeProcessor();
-  let created = null;
+  let created = /** @type {any} */ (null);
   const { params } = workerParams({
     taskType: "login",
     createProcessor: (o) => {
@@ -160,8 +160,9 @@ test("executeAccountWorkerTask：结果形状照搬 to_dict", async () => {
   const { params } = workerParams({ taskType: "login", createProcessor: () => p });
   const r = await orch.executeAccountWorkerTask(params);
   assert.deepEqual(Object.keys(r).sort(), ["result", "type"]);
-  assert.equal(typeof r.result.success_rate, "string");
-  assert.deepEqual(Object.keys(r.result).sort(), [
+  const result = /** @type {Record<string, any>} */ (r.result);
+  assert.equal(typeof result.success_rate, "string");
+  assert.deepEqual(Object.keys(result).sort(), [
     "duration_seconds",
     "failed_count",
     "results",
@@ -228,7 +229,7 @@ test("workerFinishedLogLines：登录 / 停止文案（:1399-1429），未知类
 
 test("truncateLongStrings：只截断超长字符串，字段名不变", () => {
   const long = "x".repeat(600);
-  const r = orch.truncateLongStrings({ results: [{ data: { page: long, n: 1 } }] });
+  const r = /** @type {any} */ (orch.truncateLongStrings({ results: [{ data: { page: long, n: 1 } }] }));
   assert.equal(r.results[0].data.page.length, orch.MAX_RESULT_STRING + 1);
   assert.equal(r.results[0].data.n, 1);
 });
@@ -273,7 +274,7 @@ test("executeBatchDelete：结果形状，窗口删除失败被忽略，账号�
     browserIds: ["1", "2"],
     withWindows: false,
     shouldStop: () => n >= 1,
-    deleteAccount: () => n++,
+    deleteAccount: () => { n += 1; },
     closeBrowser: () => assert.fail("不应关闭窗口"),
     deleteBrowser: () => assert.fail("不应删除窗口"),
     log: () => {},

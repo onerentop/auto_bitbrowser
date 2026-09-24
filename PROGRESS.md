@@ -20,7 +20,7 @@
 - Stagehand 必须锁 3.7.3，不可升级（原因见第二章）
 - 窗口备注（note）字段由用户自己维护，自动化任务一律不读写它
 - 引擎判定必须锚定真实页面文本 / DOM / URL，不要相信 act() 的成功返回
-- 改动后必须跑门禁：typecheck、typecheck:app、test、build:app、check:deps（见 ARCHITECTURE.md §8）
+- 改动后必须跑门禁：typecheck、typecheck:app、typecheck:test、test、build:app、check:deps（见 ARCHITECTURE.md §8）
 ```
 
 ### 第二步：验证环境没坏
@@ -33,6 +33,7 @@ pnpm test              # 应 558/558 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
+pnpm run typecheck:test # 应无输出
 ```
 
 全部通过说明代码与文档一致，可以放心继续。
@@ -70,6 +71,7 @@ pnpm test               # 558/558 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
+pnpm run typecheck:test # 测试代码类型检查 0 个错误（tsconfig.test.json）
 ```
 
 ## 二、关键决策与坑（重要，勿改）

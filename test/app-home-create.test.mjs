@@ -22,6 +22,10 @@ import { createHomeHandlers, parseCreateSpec } from "../app/host/handlers/home.t
 
 // ==================== ixBrowser 客户端：profile-copy ====================
 
+/**
+ * 假 fetch：只实现被测代码用到的字段，形状不满足 DOM 的 Response
+ * @returns {any}
+ */
 function fakeFetch(body, status = 200) {
   const calls = [];
   const impl = async (url, init) => {
@@ -86,7 +90,10 @@ test("resolveNamePrefix：有前缀用前缀；空前缀用模板名；都为空
 
 // ==================== 批量编排 ====================
 
-/** 造一个可观测的编排依赖 */
+/**
+ * 造一个可观测的编排依赖
+ * @param {{ names?: string[], copyFailOn?: number[], nextNameFailOn?: number[], stopAfter?: number|null }} [opts]
+ */
 function makeDeps({ names, copyFailOn = [], nextNameFailOn = [], stopAfter = null } = {}) {
   const created = [];
   const items = [];
@@ -110,7 +117,8 @@ function makeDeps({ names, copyFailOn = [], nextNameFailOn = [], stopAfter = nul
       nextName: async (prefix) => {
         n += 1;
         if (nextNameFailOn.includes(n)) throw new Error("列窗口失败");
-        return names ? names[n - 1] : `${prefix}_${n}`;
+        // names 里取不到时回落「前缀_序号」（与原来的三元表达式行为一致）
+        return (names ? names[n - 1] : undefined) ?? `${prefix}_${n}`;
       },
       shouldStop: () => stopAfter !== null && calls >= stopAfter,
       log: (m) => logs.push(m),
@@ -196,7 +204,9 @@ test("createWindowsFromTemplate：取名失败也只算这一次失败，不影�
 
   assert.equal(result.success_count, 1);
   assert.equal(result.failed_count, 1);
-  assert.equal(result.created[0].name, "F3_2");
+  const firstCreated = result.created[0];
+  assert.ok(firstCreated);
+  assert.equal(firstCreated.name, "F3_2");
   assert.deepEqual(h.items[0], ["F3", "失败", "列窗口失败"]);
 });
 
@@ -229,8 +239,9 @@ test("parseCreateSpec：合法入参；非法入参一律 INVALID_ARGUMENT", () 
   assert.equal(parseCreateSpec([{ templateId: 7, count: 1 }]).groupId, null);
   assert.equal(parseCreateSpec([{ templateId: 7, count: 1, groupId: null }]).groupId, null);
 
+  /** @type {(args: unknown[]) => void} */
   const bad = (args) =>
-    assert.throws(() => parseCreateSpec(args), (e) => e.code === ERROR_CODES.INVALID_ARGUMENT);
+    assert.throws(() => parseCreateSpec(args), (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT);
   bad([]); // 没有参数
   bad([null]);
   bad([[1, 2]]);
@@ -247,9 +258,14 @@ test("parseCreateSpec：合法入参；非法入参一律 INVALID_ARGUMENT", () 
 
 // ==================== handler 端到端 ====================
 
-/** 假 ixBrowser：只实现创建窗口这条路用到的接口 */
+/**
+ * 假 ixBrowser：只实现创建窗口这条路用到的接口
+ * @param {{ windows?: any[], template?: any }} [opts]
+ */
 function fakeIx({ windows = [], template = { profile_id: 7, name: "模板A", group_id: 1 } } = {}) {
-  const state = { windows: [...windows], copies: [], nextId: 900 };
+  /** @type {any[][]} */
+  const copies = [];
+  const state = { windows: [...windows], copies, nextId: 900 };
   return {
     state,
     async getProfileList() {
@@ -288,9 +304,15 @@ function setup(ix) {
     ctx,
     events,
     nextFinished: () => new Promise((r) => waiters.push(r)),
+    /**
+     * @param {string} channel
+     * @param {...any} args
+     * @returns {Promise<any>}
+     */
     call: async (channel, ...args) => {
       const env = await dispatch(channel, args);
       if (!env.ok) {
+        /** @type {any} */
         const e = new Error(env.error.message);
         e.code = env.error.code;
         throw e;

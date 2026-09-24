@@ -63,6 +63,7 @@ const NEW_PASSWORD = "New-Passw0rd-abcdef";
  *   dead         —— 提交后引擎就死了（取 URL / 页面文本都抛错）
  */
 function fakeEngine({ afterSubmit = "home", hasSaveButton = true } = {}) {
+  /** @type {{ clickByText: string[], pressKey: string[], fill: { selector: string, value: string }[], navigate: string[] }} */
   const calls = { clickByText: [], pressKey: [], fill: [], navigate: [] };
   let state = "form";
   let dead = false; // 仅「提交后引擎死掉」那条用例由 submit() 置位
@@ -115,7 +116,7 @@ function fakeEngine({ afterSubmit = "home", hasSaveButton = true } = {}) {
   };
   return {
     calls,
-    engine: {
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         state = "form";
@@ -157,7 +158,7 @@ function fakeEngine({ afterSubmit = "home", hasSaveButton = true } = {}) {
       },
       async wait() {},
       async stop() {},
-    },
+    }),
   };
 }
 
@@ -196,8 +197,11 @@ test("真机确认文案「密码已成功更改」必须被词表命中 → 判
   assert.match(result.message, /页面出现确认文案「已成功」/);
   // 两个密码输入框都填了同一个新密码（只走 fill，不进日志）
   assert.equal(fake.calls.fill.length, 2);
-  assert.equal(fake.calls.fill[0].value, NEW_PASSWORD);
-  assert.equal(fake.calls.fill[1].value, NEW_PASSWORD);
+  const firstFill = fake.calls.fill[0];
+  const secondFill = fake.calls.fill[1];
+  assert.ok(firstFill && secondFill);
+  assert.equal(firstFill.value, NEW_PASSWORD);
+  assert.equal(secondFill.value, NEW_PASSWORD);
   assert.ok(!logs.join("\n").includes(NEW_PASSWORD), "日志不得出现新密码");
 });
 
@@ -305,6 +309,7 @@ test("既找不到按钮、回车也无效 → 明确失败，不写本地", asy
  * 否则公共模块的默认正则就能命中，这条用例就测不到 extraTextPattern 了。
  */
 function reauthEngine({ stayOnTotp = false } = {}) {
+  /** @type {{ fill: { selector: string, value: string }[], pressKey: string[], clickByText: string[], waits: number[] }} */
   const calls = { fill: [], pressKey: [], clickByText: [], waits: [] };
   let clock = 1_700_000_000_000;
   let state = stayOnTotp ? "reauth_totp" : "reauth";
@@ -340,7 +345,7 @@ function reauthEngine({ stayOnTotp = false } = {}) {
   return {
     calls,
     now: () => clock,
-    engine: {
+    engine: /** @type {any} */ ({
       async navigate() {
         return { success: true, error: null };
       },
@@ -385,7 +390,7 @@ function reauthEngine({ stayOnTotp = false } = {}) {
         clock += ms;
       },
       async stop() {},
-    },
+    }),
   };
 }
 
@@ -415,7 +420,9 @@ test("重新验证身份（改密）：只凭文案「验证身份」认出验�
     'input[name="password"]',
     'input[name="confirmation_password"]',
   ]);
-  assert.equal(fake.calls.fill[0].value, CURRENT);
+  const firstFill = fake.calls.fill[0];
+  assert.ok(firstFill);
+  assert.equal(firstFill.value, CURRENT);
   // log 接线：只有长度，没有内容
   assert.ok(logs.includes(`重新验证身份（第 1 轮）：输入当前密码（长度 ${CURRENT.length}）`), JSON.stringify(logs));
   for (const line of logs) assert.ok(!line.includes(CURRENT), `日志里出现了当前密码: ${line}`);

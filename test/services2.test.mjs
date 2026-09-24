@@ -92,7 +92,9 @@ test("DataStore: 增删改即时落库", () => {
 
   store.removeProxy(0);
   assert.equal(repo.count(), 1);
-  assert.equal(repo.getAllProxies()[0].host, "2.2.2.2");
+  const first = repo.getAllProxies()[0];
+  assert.ok(first);
+  assert.equal(first.host, "2.2.2.2");
 
   store.clearProxies();
   assert.equal(repo.count(), 0);
@@ -108,7 +110,9 @@ test("DataStore: saveAllProxies 会清理冗余并连带删绑定", () => {
 
   repo.saveAllProxies([{ host: "9.9.9.9", port: "99" }]);
   assert.equal(repo.count(), 1);
-  assert.equal(repo.getAllProxies()[0].host, "9.9.9.9");
+  const first = repo.getAllProxies()[0];
+  assert.ok(first);
+  assert.equal(first.host, "9.9.9.9");
   db.close();
 });
 

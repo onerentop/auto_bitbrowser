@@ -59,11 +59,14 @@ const WINDOW_START = 1_700_000_000_000 - (1_700_000_000_000 % 30_000);
  * 假引擎：
  *   next[页面] = 在该页提交后去哪（留在原页 = 被拒）；
  *   pressKeyOk / clickOk / jsClickOk 控制三种提交方式是否生效。
+ * @param {string} start 起始页面（PAGES 的键）
+ * @param {{ next?: Record<string, string>, pressKeyOk?: boolean, clickOk?: boolean, jsClickOk?: boolean, onWait?: (n: number, setState: (s: string) => void) => void }} [options]
  */
 function fakeEngine(start, { next = {}, pressKeyOk = true, clickOk = true, jsClickOk = true, onWait } = {}) {
   let clock = WINDOW_START;
   let state = start;
   let filled = false;
+  /** @type {{ fill: any[], press: number, click: any[], jsClick: any[], waits: any[], act: any[] }} */
   const calls = { fill: [], press: 0, click: [], jsClick: [], waits: [], act: [] };
   const submit = (ok) => {
     if (ok && filled) {

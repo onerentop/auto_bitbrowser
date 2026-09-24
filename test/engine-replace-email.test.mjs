@@ -33,8 +33,10 @@ const SECRET = "JBSWY3DPEHPK3PXP";
  * 假引擎：state 由 navigate / fill 驱动。
  *   reauthShape: "totp"（直接要验证码，真机形态）| "password_then_totp" | null
  *   needsEmailCode: true 时，第二次 extract（提交后的检查）返回「检测到验证码框」
+ * @param {{ reauthShape?: string | null, signedOut?: boolean, needsEmailCode?: boolean }} [options]
  */
 function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = false } = {}) {
+  /** @type {{ navigate: any[], fill: any[], act: any[] }} */
   const calls = { navigate: [], fill: [], act: [] };
   const initialState = signedOut
     ? "signin"
@@ -60,7 +62,8 @@ function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = fa
 
   return {
     calls,
-    engine: {
+    // 假引擎只实现被用到的门面方法，用 any 局部标注避免与真引擎门面形状对拍
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         state = initialState;
@@ -108,7 +111,7 @@ function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = fa
         }
         return { success: true, data: { recovery_email_shown: NEW_EMAIL } };
       },
-    },
+    }),
   };
 }
 

@@ -148,7 +148,7 @@ test("applyHealthResult：ok → logged_in（顺带清掉上一次的错误）",
   const r = repo();
   r.updateLoginStatus(EMAIL, "login_failed", "上次的失败原因");
   applyHealthResult(r, EMAIL, { status: "ok", message: "已登录", url: MYACCOUNT, reason: "" });
-  const row = r.getAccountByEmail(EMAIL);
+  const row = /** @type {any} */ (r.getAccountByEmail(EMAIL));
   assert.equal(row.login_status, "logged_in");
   assert.equal(row.last_error, null);
 });
@@ -157,14 +157,14 @@ test("applyHealthResult：need_login → not_logged", () => {
   const r = repo();
   r.updateLoginStatus(EMAIL, "login_failed", "上次的失败原因");
   applyHealthResult(r, EMAIL, { status: "need_login", message: "需要登录", url: "", reason: "" });
-  const row = r.getAccountByEmail(EMAIL);
+  const row = /** @type {any} */ (r.getAccountByEmail(EMAIL));
   assert.equal(row.login_status, "not_logged");
 });
 
 test("applyHealthResult：suspended → login_failed，last_error 写明停用", () => {
   const r = repo();
   applyHealthResult(r, EMAIL, { status: "suspended", message: "账号已被停用", url: "", reason: "" });
-  const row = r.getAccountByEmail(EMAIL);
+  const row = /** @type {any} */ (r.getAccountByEmail(EMAIL));
   assert.equal(row.login_status, "login_failed");
   assert.equal(row.last_error, "账号已被停用");
 });
@@ -172,7 +172,7 @@ test("applyHealthResult：suspended → login_failed，last_error 写明停用",
 test("applyHealthResult：window_error 不改 login_status，只记一条问题消息", () => {
   const r = repo();
   applyHealthResult(r, EMAIL, { status: "ok", message: "已登录", url: MYACCOUNT, reason: "" });
-  assert.equal(r.getAccountByEmail(EMAIL).login_status, "logged_in");
+  assert.equal(/** @type {any} */ (r.getAccountByEmail(EMAIL)).login_status, "logged_in");
 
   applyHealthResult(r, EMAIL, {
     status: "window_error",
@@ -180,7 +180,7 @@ test("applyHealthResult：window_error 不改 login_status，只记一条问题�
     url: "",
     reason: "",
   });
-  const row = r.getAccountByEmail(EMAIL);
+  const row = /** @type {any} */ (r.getAccountByEmail(EMAIL));
   assert.equal(row.login_status, "logged_in", "窗口坏 ≠ 账号状态变坏");
   assert.equal(row.last_error, "窗口打不开: Target closed");
 });
@@ -188,9 +188,9 @@ test("applyHealthResult：window_error 不改 login_status，只记一条问题�
 test("回归：updateLoginStatus(logged_in) 会清空 last_error —— 所以 window_error 不能走它", () => {
   const r = repo();
   r.setLastError(EMAIL, "窗口打不开: Target closed");
-  assert.equal(r.getAccountByEmail(EMAIL).last_error, "窗口打不开: Target closed");
+  assert.equal(/** @type {any} */ (r.getAccountByEmail(EMAIL)).last_error, "窗口打不开: Target closed");
   r.updateLoginStatus(EMAIL, "logged_in");
-  assert.equal(r.getAccountByEmail(EMAIL).last_error, null, "这就是必须单独用 setLastError 的原因");
+  assert.equal(/** @type {any} */ (r.getAccountByEmail(EMAIL)).last_error, null, "这就是必须单独用 setLastError 的原因");
 });
 
 // ==================== 批量编排 ====================
@@ -304,6 +304,7 @@ test("executeHealthCheck：中途停止只为已处理的账号上报条目，�
 test("executeHealthCheck：没有 window_error 之外的路径会改动 login_status（只读承诺）", async () => {
   // 巡检本身不碰引擎的写操作：这里断言编排层只调用 check，不调用任何 fill / click
   const engineCalls = [];
+  /** @type {() => Promise<import("../src/application/health-check.ts").HealthCheckResult>} */
   const fakeCheck = async () => {
     engineCalls.push("check");
     return { status: "ok", message: "已登录", url: MYACCOUNT, reason: "" };

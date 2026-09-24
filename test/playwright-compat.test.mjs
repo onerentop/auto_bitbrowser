@@ -6,10 +6,10 @@ import { createCompatPage } from "../src/engine/playwright-compat.ts";
 /** 造一个假的 V3 Page，用脚本控制 locator 的行为 */
 function fakeV3Page(script = {}) {
   const state = {
-    goto: [],
-    pressed: [],
-    fillCalls: [],
-    clickCalls: [],
+    goto: /** @type {any[]} */ ([]),
+    pressed: /** @type {any[]} */ ([]),
+    fillCalls: /** @type {any[]} */ ([]),
+    clickCalls: /** @type {any[]} */ ([]),
   };
   // script.visible: 每次调用 count/isVisible 时返回什么（按调用序号）
   const countSeq = script.countSeq ? [...script.countSeq] : null;
@@ -117,7 +117,7 @@ test("waitForSelector: 探测过程抛错不终止等待", async () => {
   const page = {
     async goto() {},
     url: () => "",
-    evaluate: async () => "",
+    evaluate: /** @type {() => Promise<any>} */ (async () => ""),
     locator() {
       calls += 1;
       if (calls === 1) throw new Error("transient");
@@ -149,7 +149,7 @@ test("keyboard.press: 无 keyPress 能力且要按 Enter 时明确报错", async
   const page = {
     async goto() {},
     url: () => "",
-    evaluate: async () => "",
+    evaluate: /** @type {() => Promise<any>} */ (async () => ""),
     locator: () => ({
       count: async () => 0,
       isVisible: async () => false,

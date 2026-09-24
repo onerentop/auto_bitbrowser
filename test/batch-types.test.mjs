@@ -52,8 +52,12 @@ test("addSuccess / addFailed / addSkipped: 计数与结果条目形状", () => {
   const r2 = createBatchResult({ total: 1 });
   addSuccess(r2, "d@x.com");
   addFailed(r2, "e@x.com", "err");
-  assert.deepEqual(r2.results[0].data, {});
-  assert.equal(r2.results[1].error_type, null);
+  const first = r2.results[0];
+  const second = r2.results[1];
+  assert.ok(first);
+  assert.ok(second);
+  assert.deepEqual(first.data, {});
+  assert.equal(second.error_type, null);
 });
 
 test("batchSuccessRate: 分母是 success+failed，不含 skipped", () => {
@@ -122,5 +126,6 @@ test("batchResultToDict: 字段齐全且 success_rate 是百分比字符串", ()
   assert.equal(typeof dict.success_rate, "string");
   assert.equal(dict.success_rate, "66.7%");
   assert.equal(dict.duration_seconds, 3);
-  assert.equal(dict.results.length, 4);
+  const results = /** @type {unknown[]} */ (dict.results);
+  assert.equal(results.length, 4);
 });

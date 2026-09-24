@@ -16,6 +16,7 @@
     "build:app": "electron-vite build",
     "preview:app": "electron-vite preview",
     "typecheck:app": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "check:deps": "depcruise app src --config .dependency-cruiser.cjs"
   },
   "devDependencies": {

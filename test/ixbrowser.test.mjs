@@ -11,7 +11,10 @@ import {
   IxUnexpectedError,
 } from "../src/ixbrowser/client.ts";
 
-/** 构造一个假的 fetch，返回给定 JSON */
+/**
+ * 构造一个假的 fetch，返回给定 JSON
+ * @returns {any} 只实现被测代码用到的字段，形状不满足 DOM 的 Response
+ */
 function fakeFetch(body, status = 200) {
   const calls = [];
   const impl = async (url, init) => {

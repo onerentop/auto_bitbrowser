@@ -50,7 +50,10 @@ test("clickByText 脚本：命中的元素会被打上标记，供坐标点击�
 });
 
 
-/** 造一个页面内元素替身 */
+/**
+ * 造一个页面内元素替身
+ * @param {{ tagName?: string, innerText?: string, width?: number, height?: number, href?: string | null, children?: any[], style?: Record<string, string> }} [opts]
+ */
 function el({
   tagName = "DIV",
   innerText = "",
@@ -133,14 +136,14 @@ test("textClickScript：目标文本经 JSON 转义后嵌入（防止引号破�
 });
 
 test("clickByText：拿不到 evaluate 能力时返回 null，不抛错", async () => {
-  const engine = new StagehandGoogleEngine({ ixClient: {} });
+  const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} }))); // 用例要直接替换内部私有的 sh / page
   engine.sh = {};
   engine.page = { url: () => "https://myaccount.google.com/", locator: undefined };
   assert.equal(await engine.clickByText("电话号码"), null);
 });
 
 test("clickByText：页面内点击返回 null（没找到元素）时同样返回 null", async () => {
-  const engine = new StagehandGoogleEngine({ ixClient: {} });
+  const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} })));
   engine.sh = {};
   engine.page = { url: () => "https://myaccount.google.com/", evaluate: async () => null };
   assert.equal(await engine.clickByText("电话号码"), null);
@@ -148,7 +151,7 @@ test("clickByText：页面内点击返回 null（没找到元素）时同样返�
 
 test("clickByText：把脚本交给 page.evaluate，命中时回传 {tag, href}", async () => {
   const scripts = [];
-  const engine = new StagehandGoogleEngine({ ixClient: {} });
+  const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} })));
   engine.sh = {};
   engine.page = {
     url: () => "https://myaccount.google.com/",
@@ -208,7 +211,7 @@ test("clickByText 脚本：不得选中「包含其它命中元素」的祖先�
 });
 
 test("clickByText：page.evaluate 抛错时返回 null（吞错分支，不把异常抛给调用方）", async () => {
-  const engine = new StagehandGoogleEngine({ ixClient: {} });
+  const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} })));
   engine.sh = {};
   engine.page = {
     url: () => "https://myaccount.google.com/",

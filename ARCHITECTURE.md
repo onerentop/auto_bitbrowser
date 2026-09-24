@@ -180,7 +180,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 
 ## 8. 测试与门禁
 
-- 单测：`node:test`，测试文件 `test/*.test.mjs`，直接 import `.ts` 源码（`--experimental-strip-types`）。引擎相关用按真机页面序列建模的假引擎（`test/engine-*.test.mjs`），不需要真实浏览器。
+- 测试代码也做类型检查（`tsconfig.test.json`，`typecheck:test`）：`allowJs` + `checkJs`，**关闭 `noImplicitAny`**，其余与源码同等严格（含 `strict`、`noUncheckedIndexedAccess`）。`.mjs` 由 Node 直接执行，所以**只能写 JSDoc 类型**（`as`、`!`、`<T>` 这类 TS 专有语法会直接让测试跑不起来）；像假引擎这种无法精确建模整份门面的对象允许局部 `/** @type {any} */`，但传给生产函数的依赖对象（假仓储、假 deps）必须按生产接口标注 `@returns {import(...).X}`，否则测试与接口脱节不会有人发现。
 - 缺陷修复**先红后绿**：先写能复现的测试，确认它失败，再修。
 - 需要真机的验证只操作用户指定的测试账号与窗口；跑前备份 `accounts.db`，跑完关窗；记录写在 `.trellis/tasks/<任务>/real-run-log.md`（本地，不入库），结论汇总进 `PROGRESS.md`。
 - 门禁（全部通过才能提交）：
@@ -192,7 +192,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 | `pnpm test` | 全量单测 |
 | `pnpm run build:app` | electron-vite 构建（本项目没有打包配置，只构建到 `out/`）；构建后 `out/main/index.js` 不得出现 `IxBrowserClient` / `stagehand` / `playwright` |
 | `pnpm run check:deps` | 依赖规则（§3）：0 个 error |
-| `pnpm run typecheck:test` | 测试代码类型检查，**待 C5 接入** |
+| `pnpm run typecheck:test` | 测试代码类型检查（`tsconfig.test.json`）：0 个错误 |
 
 ## 9. 当前偏差
 
@@ -201,7 +201,6 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 | # | 偏差 | 违反 | 负责子任务 |
 |---|---|---|---|
 | D10 | 修改验证器时，新密钥生成的 6 位验证码经 `act()` 指令写入页面（`src/engine/operations/modify-auth.ts`「在验证码输入框中输入」），违反凭据只经 `fill()` 的约定；改成 `fill` 前需要真机探针确认输入框选择器 | §6、§7 | 后续任务（随真机验证一起做） |
-| D9 | 测试代码不做类型检查（`tsconfig.json` 只 include `test/**/*.ts`，测试全是 `.mjs`） | §8 | C5 |
 
 ## 10. 参考资料
 

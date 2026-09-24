@@ -75,7 +75,9 @@ test("extractTotpSecretsFromContents：空列表 → NO_QR_FOUND；未知格式�
 
   const bad = extractTotpSecretsFromContents(["otpauth-migration://offline"]);
   assert.equal(bad.accounts.length, 0);
-  assert.match(bad.errors[0], /^解析 QR 码失败: URI 中缺少 data 参数/);
+  const firstError = bad.errors[0];
+  assert.ok(firstError, "解析失败应记入 errors");
+  assert.match(firstError, /^解析 QR 码失败: URI 中缺少 data 参数/);
 
   const ok = extractTotpSecretsFromContents([fixture.migration[0].uri, fixture.standard[0].uri]);
   assert.deepEqual(

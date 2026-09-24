@@ -44,7 +44,10 @@ function fakeIx(windows, { fail = false } = {}) {
   };
 }
 
-/** 建上下文：临时数据根（不碰仓库根的 config.json / accounts.db）、:memory: 库 */
+/**
+ * 建上下文：临时数据根（不碰仓库根的 config.json / accounts.db）、:memory: 库
+ * @param {{ windows?: Array<{ profile_id: number, name: string }>, ixFail?: boolean, deps?: import("../app/host/handlers/accounts.ts").AccountsHandlerDeps }} [options]
+ */
 function setup({ windows = [], ixFail = false, deps = {} } = {}) {
   const events = [];
   const waiters = [];
@@ -57,14 +60,15 @@ function setup({ windows = [], ixFail = false, deps = {} } = {}) {
     },
     log: () => {},
     openDatabase: () => new DatabaseSync(":memory:"),
-    ixClient: ix,
+    ixClient: /** @type {any} */ (ix), // 假客户端只实现账号页用到的四个方法
   });
   const handlers = createAccountsHandlers(ctx, deps);
   const dispatch = createDispatcher(handlers);
+  /** @returns {Promise<any>} 信封里的 data 形状由各用例自行断言 */
   const call = async (channel, ...args) => {
     const env = await dispatch(channel, args);
     if (!env.ok) {
-      const e = new Error(env.error.message);
+      const e = /** @type {Error & { code: string }} */ (new Error(env.error.message));
       e.code = env.error.code;
       throw e;
     }
@@ -204,7 +208,8 @@ test("precheck：批量绑定按窗口名匹配，ix 不可达时报错", async 
 
 test("precheck：任务运行中返回冲突提示（删除带 wait_action）", async () => {
   const s = setup();
-  let release;
+  /** @type {(value?: void) => void} */
+  let release = () => {};
   s.ctx.tasks.start("x", "占位", () => new Promise((r) => (release = r)));
   const r = await s.call(CH.accountsPrecheck, "delete", [{ email: "a", browserId: "" }]);
   assert.deepEqual(r, { ok: false, level: "warning", title: "警告", message: "已有任务在执行中，请等待完成后再删除" });
@@ -214,6 +219,7 @@ test("precheck：任务运行中返回冲突提示（删除带 wait_action）", 
 // ==================== 启动任务 ====================
 
 function fakeProcessorFactory() {
+  /** @type {{ created: any[], calls: any[], stopped: number, gate: Promise<any> | null }} */
   const state = { created: [], calls: [], stopped: 0, gate: null };
   const factory = (opts) => {
     state.created.push(opts);
@@ -262,7 +268,8 @@ test("start：批量登录作为后台任务运行，传入并发数，结果形
 
 test("start：停止会触发 processor.stop，任务结束状态为 stopped", async () => {
   const p = fakeProcessorFactory();
-  let open;
+  /** @type {(value?: void) => void} */
+  let open = () => {};
   p.state.gate = new Promise((r) => (open = r));
   const s = setup({ deps: { createProcessor: p.factory } });
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
@@ -283,7 +290,8 @@ test("start：停止会触发 processor.stop，任务结束状态为 stopped", a
 test("start：已有任务在跑时抛 TASK_BUSY", async () => {
   const s = setup();
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
-  let release;
+  /** @type {(value?: void) => void} */
+  let release = () => {};
   s.ctx.tasks.start("x", "占位任务", () => new Promise((r) => (release = r)));
   const env = await s.dispatch(CH.accountsStart, ["login", [{ email: "a", browserId: "1" }], OPTS]);
   assert.equal(env.ok, false);
@@ -294,6 +302,7 @@ test("start：已有任务在跑时抛 TASK_BUSY", async () => {
 test("start：预检不通过时抛 INVALID_ARGUMENT 并带 Python 文案", async () => {
   const s = setup();
   const env = await s.dispatch(CH.accountsStart, ["login", [], OPTS]);
+  assert.equal(env.ok, false);
   assert.equal(env.error.code, ERROR_CODES.INVALID_ARGUMENT);
   assert.equal(env.error.message, "请先选择要登录的账号");
 });
@@ -343,7 +352,9 @@ test("start：批量绑定 —— 结果形状 {total, success_count, failed_cou
   await s.call(CH.accountsStart, "batch_bind", [{ email: "a@x.com", browserId: "" }], OPTS);
   const e = await done;
   assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
-  assert.equal(s.ctx.accountRepo().getAccountByEmail("a@x.com").browser_profile_id, "7");
+  const boundByEmail = s.ctx.accountRepo().getAccountByEmail("a@x.com");
+  assert.ok(boundByEmail);
+  assert.equal(boundByEmail.browser_profile_id, "7");
   assert.deepEqual(s.items(), [["a@x.com", "成功", ""]]);
 });
 
@@ -370,12 +381,15 @@ test("bindCandidates / bind / unbind / deleteOne", async () => {
 
   // 绑定到被其它账号占用的窗口 → 拒绝
   const env = await s.dispatch(CH.accountsBind, ["c", "2"]);
+  assert.equal(env.ok, false);
   assert.equal(env.error.code, ERROR_CODES.INVALID_ARGUMENT);
 
   assert.deepEqual(await s.call(CH.accountsBind, "a", "3"), { email: "a", browserId: "3", previousBrowserId: "1" });
   assert.deepEqual(await s.call(CH.accountsUnbind, "a"), { email: "a", browserId: "3" });
   assert.deepEqual(await s.call(CH.accountsUnbind, "a"), { email: "a", browserId: "" });
-  assert.equal(s.ctx.accountRepo().getAccountByEmail("a").browser_profile_id, "");
+  const unbound = s.ctx.accountRepo().getAccountByEmail("a");
+  assert.ok(unbound);
+  assert.equal(unbound.browser_profile_id, "");
 
   assert.equal(await s.call(CH.accountsDeleteOne, "c"), true);
   assert.equal(s.ctx.accountRepo().getAccountByEmail("c"), null);
@@ -493,8 +507,12 @@ test("batch_bind：两个大小写不同的邮箱匹配到同一窗口时只绑�
   await s.call(CH.accountsStart, "batch_bind", rows, OPTS);
   const e = await done;
   assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
-  assert.equal(s.ctx.accountRepo().getAccountByEmail("a@x.com").browser_profile_id, "7");
-  assert.ok(!s.ctx.accountRepo().getAccountByEmail("A@X.com").browser_profile_id);
+  const boundA = s.ctx.accountRepo().getAccountByEmail("a@x.com");
+  assert.ok(boundA);
+  assert.equal(boundA.browser_profile_id, "7");
+  const boundUpper = s.ctx.accountRepo().getAccountByEmail("A@X.com");
+  assert.ok(boundUpper);
+  assert.ok(!boundUpper.browser_profile_id);
 });
 
 test("start：仓储写库返回 false 时绑定 / 删除计为失败", async () => {
@@ -531,19 +549,24 @@ test("start：仓储写库返回 false 时绑定 / 删除计为失败", async ()
 test("bind / unbind / deleteOne：有任务在跑时抛 TASK_BUSY", async () => {
   const s = setup();
   seed(s.ctx, [{ email: "a", browser_profile_id: "1" }]);
-  let release;
+  /** @type {(value?: void) => void} */
+  let release = () => {};
   s.ctx.tasks.start("x", "占位", () => new Promise((r) => (release = r)));
-  for (const [channel, args] of [
+  /** @type {Array<[string, unknown[]]>} 通道与参数（数组字面量推断不出元组） */
+  const busyCases = [
     [CH.accountsBind, ["a", "2"]],
     [CH.accountsUnbind, ["a"]],
     [CH.accountsDeleteOne, ["a"]],
-  ]) {
+  ];
+  for (const [channel, args] of busyCases) {
     const env = await s.dispatch(channel, args);
     assert.equal(env.ok, false, channel);
     assert.equal(env.error.code, ERROR_CODES.TASK_BUSY, channel);
     assert.equal(env.error.message, "已有任务在执行中，请等待完成");
   }
-  assert.equal(s.ctx.accountRepo().getAccountByEmail("a").browser_profile_id, "1");
+  const boundRow = s.ctx.accountRepo().getAccountByEmail("a");
+  assert.ok(boundRow);
+  assert.equal(boundRow.browser_profile_id, "1");
   release();
 });
 
@@ -565,11 +588,19 @@ test("默认 createProcessor 注入了 db（批处理器拿到仓储，不打「
   const msgs = [];
   const p = createDefaultProcessor(s.ctx, { concurrency: 2, callback: (m) => msgs.push(m) });
   assert.equal(p.concurrency, 2);
-  assert.ok(p.accountRepo);
+  // accountRepo 是批处理器的私有字段：这里要验证默认工厂确实把仓储注入进去了
+  assert.ok(/** @type {Record<string, any>} */ (p).accountRepo);
   assert.equal(msgs.some((m) => m.includes("未注入")), false);
 });
 
 test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", () => {
+  /**
+   * 构造任务结束事件：type / result 由用例给，extra 覆盖 label / outcome
+   * @param {string} type
+   * @param {unknown} result
+   * @param {{ label?: string, outcome?: import("../app/shared/ipc.ts").TaskOutcome }} [extra]
+   * @returns {Pick<import("../app/shared/ipc.ts").TaskFinishedEvent, "type" | "label" | "outcome" | "result">}
+   */
   const ev = (type, result, extra = {}) => ({ type, label: "", outcome: "succeeded", result, ...extra });
   assert.deepEqual(finishedNotice(ev("batch_bind", { total: 3, success_count: 2 })), {
     title: "绑定完成",
@@ -614,6 +645,8 @@ test("handler 工厂不打开数据库（惰性）", () => {
 
 // ==================== 账号健康巡检（F2） ====================
 
+/** 健康巡检的「正常」结论：对象字面量会把 status 放宽成 string，这里标注回字面量联合 */
+/** @type {import("../src/application/health-check.ts").HealthCheckResult} */
 const HC_OK = { status: "ok", message: "已登录", url: "https://myaccount.google.com/?hl=en", reason: "页面显示了该邮箱" };
 
 test("health_check 是受支持的动作，预检通过后返回账号数", async () => {
@@ -634,7 +667,8 @@ test("health_check：未选择账号时提示；已有任务在跑时拒绝", as
   });
 
   seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
-  let release;
+  /** @type {(value?: void) => void} */
+  let release = () => {};
   s.ctx.tasks.start("x", "占位任务", () => new Promise((r) => (release = r)));
   const busy = await s.call(CH.accountsPrecheck, "health_check", [{ email: "a@x.com", browserId: "11" }]);
   assert.deepEqual(busy, {
@@ -657,7 +691,8 @@ test("health_check：后台任务逐个巡检、统计四种结论、上报逐�
     deps: {
       healthCheck: async (browserId, account) => {
         calls.push([browserId, account.email]);
-        return answers[account.email];
+        // 值形状就是 HealthCheckResult：对象字面量里 status 会放宽成 string，这里断言回字面量联合
+        return /** @type {import("../src/application/health-check.ts").HealthCheckResult} */ (answers[account.email]);
       },
     },
   });

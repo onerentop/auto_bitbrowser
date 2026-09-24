@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { base32Decode, generateTotp } from "../src/engine/totp.ts";
 
 // 期望值由 pyotp.TOTP(secret).at(t) 生成
+/** @type {Array<[string, number, string]>} */
 const PYOTP = [
   ["JBSWY3DPEHPK3PXP", 1700000000, "324550"],
   ["JBSWY3DPEHPK3PXP", 59, "996554"],

@@ -16,10 +16,26 @@ import {
 import { initDb } from "../src/db/schema.ts";
 import { AccountRepository } from "../src/db/account-repository.ts";
 
+/**
+ * 构造注入用的 deps；sleep / log 用块体保证返回类型是 Promise<void> / void。
+ * @returns {{ deps: import("../src/ixbrowser/window.ts").IxWindowDeps, sleeps: number[], logs: string[] }}
+ */
 function deps(client) {
   const sleeps = [];
   const logs = [];
-  return { deps: { client, sleep: async (ms) => sleeps.push(ms), log: (m) => logs.push(m) }, sleeps, logs };
+  return {
+    deps: {
+      client,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      log: (m) => {
+        logs.push(m);
+      },
+    },
+    sleeps,
+    logs,
+  };
 }
 
 function pagedClient(total, { failPage = 0, failTimes = 0, failMsg = "timeout" } = {}) {
@@ -96,7 +112,9 @@ test("getBrowserList：fetchAll=false 只取指定页", async () => {
   const client = pagedClient(250);
   const { deps: d } = deps(client);
   const list = await getBrowserList(d, { fetchAll: false, page: 2, limit: 100 });
-  assert.equal(list[0].profile_id, 101);
+  const first = list[0];
+  assert.ok(first);
+  assert.equal(first.profile_id, 101);
   assert.equal(client.calls.length, 1);
 });
 
@@ -165,8 +183,12 @@ test("deleteAccount：删到返回 true，不存在返回 false", () => {
 test("bindAccountToBrowser：绑定、空串解绑、不存在的邮箱返回 false", () => {
   const { repo } = repoWith([{ email: "a@x.com" }]);
   assert.equal(repo.bindAccountToBrowser("a@x.com", "123"), true);
-  assert.equal(repo.getAccountByEmail("a@x.com").browser_profile_id, "123");
+  const bound = repo.getAccountByEmail("a@x.com");
+  assert.ok(bound);
+  assert.equal(bound.browser_profile_id, "123");
   assert.equal(repo.bindAccountToBrowser("a@x.com", ""), true);
-  assert.equal(repo.getAccountByEmail("a@x.com").browser_profile_id, "");
+  const unbound = repo.getAccountByEmail("a@x.com");
+  assert.ok(unbound);
+  assert.equal(unbound.browser_profile_id, "");
   assert.equal(repo.bindAccountToBrowser("no@x.com", "1"), false);
 });

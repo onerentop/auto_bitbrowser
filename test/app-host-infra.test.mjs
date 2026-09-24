@@ -53,13 +53,14 @@ test("TaskRunner：成功任务推送日志、进度与 succeeded 结束事件",
 
 test("TaskRunner：运行中再启动抛 TASK_BUSY（全局单任务互斥）", async () => {
   const { runner, finished } = recorder();
-  let release;
+  /** @type {((value?: unknown) => void) | undefined} */ let release;
   runner.start("a", "任务A", () => new Promise((r) => (release = r)));
   assert.throws(
     () => runner.start("b", "任务B", async () => {}),
-    (e) => e.code === ERROR_CODES.TASK_BUSY && /任务A/.test(e.message),
+    (/** @type {any} */ e) => e.code === ERROR_CODES.TASK_BUSY && /任务A/.test(e.message),
   );
   await Promise.resolve();
+  assert.ok(release);
   release();
   await finished;
   // 结束后可以再启动
@@ -71,7 +72,7 @@ test("TaskRunner：stop 触发钩子，结束状态为 stopped；无任务时返
   const { runner, finished } = recorder();
   assert.equal(runner.stop(), false);
   let hookCalls = 0;
-  let release;
+  /** @type {(value?: unknown) => void} */ let release;
   runner.start("login", "批量登录", (api) => {
     api.onStop(() => {
       hookCalls++;
@@ -81,7 +82,7 @@ test("TaskRunner：stop 触发钩子，结束状态为 stopped；无任务时返
   });
   await Promise.resolve();
   await Promise.resolve();
-  assert.equal(runner.current().stopRequested, false);
+  assert.equal(/** @type {any} */ (runner.current()).stopRequested, false);
   assert.equal(runner.stop(), true);
   assert.equal(runner.stop(), true); // 重复停止不重复触发钩子
   assert.equal(hookCalls, 1);
@@ -92,9 +93,9 @@ test("TaskRunner：stop 触发钩子，结束状态为 stopped；无任务时返
 test("TaskRunner：已请求停止后注册的钩子立即执行", async () => {
   const { runner, finished } = recorder();
   let called = false;
-  let release;
+  /** @type {((value?: unknown) => void) | undefined} */ let release;
   runner.start("x", "X", (api) => {
-    return new Promise((r) => {
+    return new Promise((/** @type {(value?: void) => void} */ r) => {
       release = () => {
         api.onStop(() => (called = true));
         r();
@@ -104,6 +105,7 @@ test("TaskRunner：已请求停止后注册的钩子立即执行", async () => {
   await Promise.resolve();
   await Promise.resolve();
   runner.stop();
+  assert.ok(release);
   release();
   await finished;
   assert.equal(called, true);
@@ -111,7 +113,7 @@ test("TaskRunner：已请求停止后注册的钩子立即执行", async () => {
 
 test("TaskRunner：item() 推送条目状态事件；任务结束后的迟到调用被丢弃", async () => {
   const { runner, events, finished } = recorder();
-  let late;
+  /** @type {any} */ let late;
   runner.start("ai_task", "替换手机号", async (api) => {
     api.item("a@x.com", "处理中", "");
     api.item("a@x.com", "成功", "已替换");
@@ -215,7 +217,7 @@ test("initDb：建出 7 张表与 accounts 全部迁移列，可重复执行", (
 
 test("initDb：列已存在以外的错误照常抛出", () => {
   const db = new DatabaseSync(":memory:");
-  const fake = {
+  /** @type {any} */ const fake = {
     exec(sql) {
       if (sql.startsWith("ALTER")) throw new Error("attempt to write a readonly database");
       db.exec(sql);

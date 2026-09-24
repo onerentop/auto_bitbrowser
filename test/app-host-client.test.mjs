@@ -164,7 +164,7 @@ test("spawn 抛错 → crashed，并带上原因", async () => {
   await client.start();
   const s = client.getStatus();
   assert.equal(s.state, "crashed");
-  assert.match(s.detail, /找不到 host\.js/);
+  assert.match(s.detail ?? "", /找不到 host\.js/);
 });
 
 test("进程意外退出 → crashed，detail 含退出码", async () => {
@@ -443,7 +443,7 @@ test("postMessage 抛错时请求返回 HOST_UNAVAILABLE", async () => {
   };
   const env = await ctx.client.request("abb/a", []);
   assert.equal(!env.ok && env.error.code, ERROR_CODES.HOST_UNAVAILABLE);
-  assert.match(!env.ok && env.error.message, /channel closed/);
+  assert.match((!env.ok && env.error.message) || "", /channel closed/);
   assert.equal(ctx.client.pendingCount, 0);
 });
 

@@ -26,7 +26,11 @@ import {
 
 // ==================== 替身 ====================
 
-/** 假 ConfigManager（只实现 ConfigManagerLike 的 3 个方法） */
+/**
+ * 假 ConfigManager（只实现 ConfigManagerLike 的 3 个方法）
+ * @param {{ concurrency?: number, maxRetries?: number, retryDelay?: number }} [overrides]
+ * @returns {import("../src/automation/batch-account-processor.ts").ConfigManagerLike}
+ */
 function fakeConfig(overrides = {}) {
   return {
     getLoginConcurrency: () => overrides.concurrency ?? 3,
@@ -53,7 +57,12 @@ function fakeSleep() {
   return { calls, fn: async (ms) => void calls.push(ms) };
 }
 
-/** 默认 deps：一切都是替身，绝不触碰真实实现 */
+/**
+ * 默认 deps：一切都是替身，绝不触碰真实实现。
+ * 按生产接口标注（BatchProcessorDeps），这样键名写错、少了必填项都会被 tsc 抓到。
+ * @param {Partial<import("../src/automation/batch-account-processor.ts").BatchProcessorDeps>} [extra]
+ * @returns {import("../src/automation/batch-account-processor.ts").BatchProcessorDeps}
+ */
 function makeDeps(extra = {}) {
   return {
     config: fakeConfig(),
@@ -65,6 +74,11 @@ function makeDeps(extra = {}) {
 
 const acct = (email) => ({ email, password: "pw", secret_key: "", recovery_email: "" });
 const ok = (extra = {}) => ({ success: true, message: "成功", ...extra });
+/**
+ * 失败结果
+ * @param {string} message
+ * @param {string | null} [errorType]
+ */
 const fail = (message, errorType = null) => ({ success: false, message, errorType });
 
 /** 让出事件循环若干轮 */
@@ -119,8 +133,10 @@ test("batchLogin: 全部成功，结果记录 browser_id / attempts", async () =
   assert.equal(result.success_count, 2);
   assert.equal(result.failed_count, 0);
   assert.equal(result.skipped_count, 0);
-  assert.equal(result.results[0].status, "success");
-  assert.deepEqual(result.results[0].data, { browser_id: "11", total_steps: 9, attempts: 1 });
+  const first = result.results[0];
+  assert.ok(first);
+  assert.equal(first.status, "success");
+  assert.deepEqual(first.data, { browser_id: "11", total_steps: 9, attempts: 1 });
   assert.deepEqual(seen, [
     { browserId: "11", email: "a@x.com" },
     { browserId: "22", email: "b@x.com" },
@@ -147,7 +163,10 @@ test("batchLogin: 首次失败、第二次成功，期间按 retryDelay 秒睡�
 
   assert.equal(result.success_count, 1);
   assert.equal(calls, 2);
-  assert.equal(result.results[0].data.attempts, 2);
+  const first = result.results[0];
+  assert.ok(first);
+  assert.ok(first.data);
+  assert.equal(first.data.attempts, 2);
   assert.deepEqual(sleep.calls, [3000], "retryDelay(3 秒) → sleepImpl(3000 毫秒)");
 });
 
@@ -203,7 +222,9 @@ test("batchLogin: 不可重试的错误类型立即 break，不再尝试（含�
 
     const result = await p.batchLogin([acct("a@x.com")], ["11"]);
     assert.equal(calls, 1, `${errorType} 应该只尝试一次`);
-    assert.equal(result.results[0].error_type, errorType);
+    const first = result.results[0];
+    assert.ok(first);
+    assert.equal(first.error_type, errorType);
     // 失败日志报告实际尝试次数，而不是配置的最大次数
     assert.ok(logs.some((m) => m.includes("❌ 登录失败（已尝试 1 次）")), `${errorType} 日志应为实际次数`);
   }
@@ -238,8 +259,10 @@ test("batchLogin: loginFn 抛异常时记为 exception 失败", async () => {
 
   const result = await p.batchLogin([acct("a@x.com")], ["11"]);
   assert.equal(result.failed_count, 1);
-  assert.equal(result.results[0].error, "引擎崩了");
-  assert.equal(result.results[0].error_type, "exception");
+  const first = result.results[0];
+  assert.ok(first);
+  assert.equal(first.error, "引擎崩了");
+  assert.equal(first.error_type, "exception");
 });
 
 test("batchLogin: stop() 之后未开始的账号全部记为跳过", async () => {
@@ -363,10 +386,12 @@ test("batchLogin: 先失败再抛异常时报告的是较早那次的 message �
 
   assert.equal(calls, 2);
   assert.equal(result.failed_count, 1);
-  assert.equal(result.results[0].error, "第一次：验证码错误");
-  assert.equal(result.results[0].error_type, "captcha");
+  const first = result.results[0];
+  assert.ok(first);
+  assert.equal(first.error, "第一次：验证码错误");
+  assert.equal(first.error_type, "captcha");
   assert.ok(
-    !String(result.results[0].error).includes("引擎崩了"),
+    !String(first.error).includes("引擎崩了"),
     "后发生的异常文本不会出现在结果里",
   );
 });

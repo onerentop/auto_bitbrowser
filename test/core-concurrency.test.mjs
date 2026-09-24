@@ -134,16 +134,18 @@ test("Semaphore: permits=2 时 5 个任务的同时在跑峰值恰为 2", async 
 
 test("gatherSettled: 混合成功/失败，顺序与入参一致且形状正确", async () => {
   const err = new Error("bad");
-  const results = await gatherSettled([
+  const results = await gatherSettled(/** @type {any[]} */ ([
     Promise.resolve(1),
     Promise.reject(err),
     Promise.resolve("three"),
-  ]);
+  ]));
 
   assert.equal(results.length, 3);
   assert.deepEqual(results[0], { ok: true, value: 1 });
-  assert.equal(results[1].ok, false);
-  assert.equal(results[1].error, err);
+  const failed = results[1];
+  assert.ok(failed !== undefined && "error" in failed);
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, err);
   assert.deepEqual(results[2], { ok: true, value: "three" });
 });
 
@@ -300,7 +302,7 @@ test("errorMessage: Error / 字符串 / null 的取值", () => {
 
 test("withRetry: 包装后成功返回结果值", async () => {
   const sleep = fakeSleep();
-  const wrapped = withRetry(async (n) => n * 2, { sleepImpl: sleep.fn });
+  const wrapped = withRetry(async (/** @type {number} */ n) => n * 2, { sleepImpl: sleep.fn });
   assert.equal(await wrapped(21), 42);
   assert.deepEqual(sleep.calls, []);
 });

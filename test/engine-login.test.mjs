@@ -17,7 +17,17 @@ const NOW = 1_700_000_010_000;
 
 const SIGNIN_TEXT = "Sign in\nUse your Google Account\nEmail or phone\nForgot email?\nNot your computer?\nCreate account";
 
-/** 页面定义：url / 可见元素 / 文本 */
+/**
+ * 页面定义：url / 可见元素 / 文本
+ *
+ * @typedef {object} FakePage
+ * @property {string} url
+ * @property {string[]} visible
+ * @property {string} text
+ * @property {string} [html]
+ * @property {string[]} [clickTexts]
+ * @returns {FakePage}
+ */
 function pageDef(g, name) {
   const acc = "https://accounts.google.com";
   switch (name) {
@@ -128,7 +138,7 @@ function pageDef(g, name) {
 
 class FakeGoogle {
   constructor(opts = {}) {
-    this.opts = {
+    this.opts = /** @type {any} */ ({
       accountExists: true,
       secondFactor: "totp",
       captchaAt: null,
@@ -146,7 +156,7 @@ class FakeGoogle {
       /** 「选择验证方式」页点了验证器但页面没变（真机：Google 的 Material 列表项对 DOM click 不响应） */
       selectionDomClickNoop: false,
       ...opts,
-    };
+    });
     this.signedInAs = opts.signedInAs ?? null;
     this.page = "blank";
     this.error = null;
@@ -514,7 +524,7 @@ test("过渡态一直不结束时，报「提交密码后没跳转」而不是�
 
 // ==================== 失败路径 ====================
 
-async function expectFail(opts, runOpts, { state, type, message }) {
+async function expectFail(opts, runOpts, /** @type {{ state: any, type: any, message?: any }} */ { state, type, message }) {
   const g = new FakeGoogle(opts);
   const { result, logs } = await run(g, runOpts);
   assert.equal(result.success, false, JSON.stringify(result));

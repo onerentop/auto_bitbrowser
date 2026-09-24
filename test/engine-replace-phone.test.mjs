@@ -30,6 +30,7 @@ const SECRET = "JBSWY3DPEHPK3PXP";
 
 /** 假引擎：state 由 navigate / fill 驱动，记录所有原语调用 */
 function fakeEngine({ needsReauth = false, signedOut = false } = {}) {
+  /** @type {{ navigate: string[], fill: { selector: string, value: string }[], act: string[] }} */
   const calls = { navigate: [], fill: [], act: [] };
   const urls = {
     signin: SIGNIN_URL,
@@ -48,7 +49,7 @@ function fakeEngine({ needsReauth = false, signedOut = false } = {}) {
 
   return {
     calls,
-    engine: {
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         state = signedOut ? "signin" : needsReauth ? "reauth_password" : "settings";
@@ -91,7 +92,7 @@ function fakeEngine({ needsReauth = false, signedOut = false } = {}) {
           ? { success: true, data: { has_recovery_phone: true, has_edit_button: true } }
           : { success: true, data: { recovery_phone_shown: `***${NEW_PHONE.slice(-4)}` } };
       },
-    },
+    }),
   };
 }
 
@@ -119,11 +120,15 @@ test("缺陷 2 回归：验证页要求重新验证身份时，填密码 + 验�
   // 每次导航到该页都会重新要求验证（真机行为）→ 第一次导航与核对时的第二次导航都要处理
   const passwordFills = calls.fill.filter((f) => f.selector === PASSWORD_SELECTOR);
   assert.equal(passwordFills.length, 2);
-  assert.equal(passwordFills[0].value, PASSWORD);
+  const firstPasswordFill = passwordFills[0];
+  assert.ok(firstPasswordFill);
+  assert.equal(firstPasswordFill.value, PASSWORD);
 
   const totpFills = calls.fill.filter((f) => f.selector === TOTP_SELECTOR);
   assert.equal(totpFills.length, 2);
-  assert.match(totpFills[0].value, /^\d{6}$/);
+  const firstTotpFill = totpFills[0];
+  assert.ok(firstTotpFill);
+  assert.match(firstTotpFill.value, /^\d{6}$/);
 
   // 凭据只经 fill 写入：AI 指令里不能出现密码
   for (const instruction of calls.act) {

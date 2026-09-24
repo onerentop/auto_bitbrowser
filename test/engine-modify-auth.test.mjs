@@ -40,8 +40,10 @@ const SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 /**
  * 假引擎：状态机 + 只读记录。
  *   reauthShape: "password"（真机形态）| "password_then_totp" | null
+ * @param {{ reauthShape?: string | null, signedOut?: boolean }} [options]
  */
 function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
+  /** @type {{ navigate: any[], fill: any[], act: any[], actResult: any[] }} */
   const calls = { navigate: [], fill: [], act: [], actResult: [] };
   const initialState = signedOut ? "signin" : reauthShape ? "reauth_pwd" : "settings";
   const urls = {
@@ -71,7 +73,8 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
 
   return {
     calls,
-    engine: {
+    // 假引擎只实现被用到的门面方法，用 any 局部标注避免与真引擎门面形状对拍
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         state = initialState;
@@ -136,7 +139,7 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
         data: { status: state === "done" ? "身份验证器应用已更改\n添加时间：刚刚" : "您的身份验证器 添加时间：244 天前" },
         };
       },
-    },
+    }),
   };
 }
 

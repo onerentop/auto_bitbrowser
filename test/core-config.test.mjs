@@ -109,7 +109,7 @@ test("isSensitiveKeyPath: 固定清单命中 + providers.*.api_key 通配 + 不�
 test("mergeConfig: 保留用户已有值，补齐默认字段（递归）", () => {
   const defaults = { a: 1, b: { c: 2, d: 3, nested: { x: 1 } }, keepMe: "def" };
   const current = { b: { c: 99, nested: { y: 2 } }, extra: true };
-  const merged = ConfigManager.mergeConfig(defaults, current);
+  const merged = /** @type {Record<string, any>} */ (ConfigManager.mergeConfig(defaults, current));
 
   assert.equal(merged.a, 1, "默认字段被补上");
   assert.equal(merged.keepMe, "def");
@@ -127,10 +127,10 @@ test("mergeConfig: 标量覆盖对象、对象覆盖标量都按用户值走", (
 });
 
 test("createDefaultConfig: 深拷贝，改动不影响 DEFAULT_CONFIG", () => {
-  const c = createDefaultConfig();
+  const c = /** @type {Record<string, any>} */ (createDefaultConfig());
   c.timeouts.page_load = 999;
-  assert.equal(DEFAULT_CONFIG.timeouts.page_load, 30);
-  assert.equal(createDefaultConfig().timeouts.page_load, 30);
+  assert.equal(/** @type {Record<string, any>} */ (DEFAULT_CONFIG.timeouts).page_load, 30);
+  assert.equal(/** @type {Record<string, any>} */ (createDefaultConfig().timeouts).page_load, 30);
 });
 
 // ==================== load / save ====================

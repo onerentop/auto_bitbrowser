@@ -36,8 +36,10 @@ const CREDS = { password: PASSWORD, totpSecret: SECRET };
 /**
  * 假引擎：按真机页面序列做状态机。
  * `signOutText` 用来制造「详情页上没有退出按钮」的场景（钉住「点不到必须如实失败」）。
+ * @param {{ needsReauth?: string | null, signOutText?: string }} [options]
  */
 function fakeEngine({ needsReauth = null, signOutText = "退出账号" } = {}) {
+  /** @type {{ navigate: any[], act: any[], click: any[], jsClick: any[], clickByText: any[], fill: any[] }} */
   const calls = { navigate: [], act: [], click: [], jsClick: [], clickByText: [], fill: [] };
   const sessions = [
     { text: "Windows 美国加利福尼亚拉蓬特 Google Chrome 新 您的当前会话", signedOut: false },
@@ -73,7 +75,8 @@ function fakeEngine({ needsReauth = null, signOutText = "退出账号" } = {}) {
     sessionsLeft: () => sessions.length,
     /** 还没退出的非当前会话数（真机判据：已退出的条目仍留在列表里，数量不会减少） */
     pendingSessions: () => sessions.filter((s) => !s.signedOut && !s.text.includes("您的当前会话")).length,
-    engine: {
+    // 假引擎只实现被用到的门面方法，用 any 局部标注避免与真引擎门面形状对拍
+    engine: /** @type {any} */ ({
       async navigate(url) {
         calls.navigate.push(url);
         // 导航到设备页后可能被 Google 拦到「重新验证身份」或登录页
@@ -134,7 +137,11 @@ function fakeEngine({ needsReauth = null, signOutText = "退出账号" } = {}) {
             dialogOpen = true;
             return { tag: "BUTTON", href: null };
           }
-          if (openedIndex !== null) sessions[openedIndex].signedOut = true;
+          if (openedIndex !== null) {
+            const target = sessions[openedIndex];
+            assert.ok(target);
+            target.signedOut = true;
+          }
           dialogOpen = false;
           openedIndex = null;
           detailSignedOut = true; // 真机：退出后仍停在详情页，只是文案变成「已退出」
@@ -175,7 +182,7 @@ function fakeEngine({ needsReauth = null, signOutText = "退出账号" } = {}) {
         }
         return [];
       },
-    },
+    }),
   };
 }
 
@@ -193,7 +200,8 @@ test("回归（真机 2026-09-24）：中文设备页必须列出会话并真的
   const openedIndexes = calls.click
     .map((s) => /:nth-of-type\((\d+)\)/.exec(String(s)))
     .filter(Boolean)
-    .map((m) => Number(m[1]));
+    // filter(Boolean) 已剔除 null，这里的断言只是把收窄结果告诉类型检查器
+    .map((m) => Number(/** @type {RegExpExecArray} */ (m)[1]));
   // 真机：已退出的会话仍占位在列表里，所以第二个目标会落在下标 3：
   //   [当前, A, B] --点第 2 个--> A 退出 --> [当前, A(已退出), B] --点第 3 个--> B 退出
   assert.deepEqual(openedIndexes, [2, 3], `应依次点开第 2、3 个条目: ${JSON.stringify(calls.click)}`);

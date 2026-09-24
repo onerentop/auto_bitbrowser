@@ -20,6 +20,10 @@ import { initDb } from "../src/db/schema.ts";
 
 // ==================== 密码生成 ====================
 
+/**
+ * 四类字符：[标签, 检测正则]；标注类型以免解构出的 re 被推断成 `RegExp | undefined`
+ * @type {Array<[string, RegExp]>}
+ */
 const CLASSES = [
   ["大写", /[A-Z]/],
   ["小写", /[a-z]/],
@@ -92,21 +96,23 @@ test("saveNewPassword：数据库与窗口 password 字段都写成功，且绝�
   let readCount = 0;
   // 备注里是用户手写的内容（真机实测用户会在这里记历史密码）——写回不得读它、更不得写它
   const USER_NOTE = `${email}----用户手写的旧密码----b@y.com----SECRET`;
+  // 假 ixClient 故意多带一个 getProfileInfo：实现只允许调 updateProfile，连读备注都不需要
+  const ixClient = {
+    getProfileInfo: async () => {
+      readCount += 1;
+      return { profile_id: 7, note: USER_NOTE };
+    },
+    updateProfile: async (id, fields) => {
+      updated.push([id, fields]);
+      return true;
+    },
+  };
   const result = await saveNewPassword({
     email,
     newPassword: "NEWPASS",
     browserId: "7",
     accountRepo: repo,
-    ixClient: {
-      getProfileInfo: async () => {
-        readCount += 1;
-        return { profile_id: 7, note: USER_NOTE };
-      },
-      updateProfile: async (id, fields) => {
-        updated.push([id, fields]);
-        return true;
-      },
-    },
+    ixClient,
   });
 
   assert.deepEqual(result, { db: true, windowPassword: true });
@@ -115,6 +121,7 @@ test("saveNewPassword：数据库与窗口 password 字段都写成功，且绝�
   assert.equal(readCount, 0, "连读备注都不需要");
   // 数据库只换了密码，其它列没被动
   const row = repo.getAccountByEmail(email);
+  assert.ok(row, "写库后应能按邮箱读到账号");
   assert.equal(row.password, "NEWPASS");
   assert.equal(row.secret_key, "SECRETKEEP");
   assert.equal(row.recovery_email, "keep@y.com");
@@ -133,7 +140,9 @@ test("saveNewPassword：某一处失败只影响那一处，其余照写（并�
     },
   });
   assert.deepEqual(result, { db: true, windowPassword: false });
-  assert.equal(repo.getAccountByEmail(email).password, "NEWPASS", "数据库仍应写成功");
+  const row = repo.getAccountByEmail(email);
+  assert.ok(row, "写库后应能按邮箱读到账号");
+  assert.equal(row.password, "NEWPASS", "数据库仍应写成功");
 });
 
 test("saveNewPassword：ixBrowser 抛错不把异常抛给调用方", async () => {

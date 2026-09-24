@@ -175,6 +175,10 @@ test("resolveProviderRuntimeConfig：界面输入优先，空白回退已保存�
 
 // ==================== 测试连接 ====================
 
+/**
+ * 假 fetch：记录请求与请求体，按构造的 body 返回响应
+ * @param {{ status?: number, body?: unknown }} [response]
+ */
 function fakeFetch(response = { status: 200, body: { model: "m-actual", choices: [{ message: { content: " OK " } }] } }) {
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -290,7 +294,9 @@ test("parseImportText：跳过空行与 # 注释，序号连续，计数正确",
     ],
   );
   assert.deepEqual(countImportRows(rows), { valid: 2, invalid: 1 });
-  assert.deepEqual(formatAccountPreviewRow(rows[2].result.data), ["c@d.com", "******", "r@e.com", "ABCDEFGH..."]);
+  const third = rows[2];
+  assert.ok(third && third.result.ok);
+  assert.deepEqual(formatAccountPreviewRow(third.result.data), ["c@d.com", "******", "r@e.com", "ABCDEFGH..."]);
   assert.deepEqual(formatAccountPreviewRow({ email: "e", password: "p", recovery_email: "", secret_key: "12345678" }), [
     "e",
     "******",
@@ -349,7 +355,9 @@ test("ProxyRepository / ProxyAllocator.getProxyBindingDetails：返回绑定整�
   initDb(db);
   const repo = new ProxyRepository(db);
   repo.addProxy({ proxy_type: "socks5", host: "h", port: "1", username: "", password: "" });
-  const id = repo.getAllProxies()[0].id;
+  const added = repo.getAllProxies()[0];
+  assert.ok(added);
+  const id = added.id;
   assert.equal(repo.bindProxyToWindow(id, "101", "a@b.com"), true);
   assert.equal(repo.bindProxyToWindow(id, "102", null), true);
 
@@ -384,12 +392,16 @@ function makeHandlers(options = {}) {
     ixClient: options.ixClient,
   });
   const handlers = createSettingsHandlers(ctx, { fetchImpl: options.fetchImpl, sleep: async () => {} });
-  const call = (channel, ...args) => handlers[channel](...args);
+  // handlers 只登记了白名单里的通道；返回值形状由各用例自行断言
+  const call = (channel, ...args) => /** @type {(...a: any[]) => any} */ (handlers[channel])(...args);
   return { ctx, handlers, call, events, finished, dataRoot };
 }
 
 async function rejectsInvalid(fn) {
-  await assert.rejects(async () => fn(), (e) => e.code === ERROR_CODES.INVALID_ARGUMENT);
+  await assert.rejects(
+    async () => fn(),
+    (/** @type {{ code?: string }} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+  );
 }
 
 test("settings handler：登记了 SETTINGS_INVOKE 的全部通道", () => {
@@ -499,23 +511,27 @@ test("settings handler：账号 添加 / 编辑 / 导入（已存在只更新非
   const I = SETTINGS_INVOKE;
   assert.equal(await call(I.settingsAccountsAdd, { email: " a@b.com ", password: " pw ", recovery_email: "r@x.com", secret_key: "S" }), true);
   let a = ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
   assert.equal(a.status, "pending");
   assert.equal(a.password, " pw ");
 
   ctx.accountRepo().upsertAccount({ email: "a@b.com", status: "subscribed" });
   await call(I.settingsAccountsUpdate, { email: "a@b.com", password: "pw2", recovery_email: "", secret_key: "S" });
   a = ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
   assert.equal(a.status, "subscribed", "编辑不改状态");
   assert.equal(a.password, "pw2");
 
   const r = await call(I.settingsAccountsImport, "a@b.com----pw3----new@r.com\nbad\nn@m.com----p----rr@x.com----K");
   assert.deepEqual(r, { success_count: 2, fail_count: 0 });
   a = ctx.accountRepo().getAccountByEmail("a@b.com");
+  assert.ok(a);
   assert.equal(a.password, "pw3");
   assert.equal(a.recovery_email, "new@r.com");
   assert.equal(a.secret_key, "S", "空 2FA 不覆盖");
   assert.equal(a.status, "subscribed");
   const n = ctx.accountRepo().getAccountByEmail("n@m.com");
+  assert.ok(n);
   assert.equal(n.status, "pending");
   assert.equal(n.secret_key, "K");
 
@@ -524,7 +540,10 @@ test("settings handler：账号 添加 / 编辑 / 导入（已存在只更新非
   assert.deepEqual(Object.keys(list[0]).sort(), ["email", "password", "recovery_email", "secret_key", "status"]);
 });
 
-/** 记录调用的假 ixBrowser 客户端；getProfileList 被调到说明又在按邮箱找窗口 */
+/**
+ * 记录调用的假 ixBrowser 客户端；getProfileList 被调到说明又在按邮箱找窗口
+ * @param {(id?: string) => void} [onDelete]
+ */
 function recordingIx(onDelete = () => {}) {
   const calls = [];
   const ixClient = {
@@ -561,7 +580,7 @@ test("settings handler：删除账号作为后台任务，窗口取数据库绑�
   await rejectsInvalid(() => call(SETTINGS_INVOKE.settingsAccountsDelete, []));
   await assert.rejects(
     async () => call(SETTINGS_INVOKE.settingsAccountsDelete, ["c@d.com"]),
-    (e) => e.code === ERROR_CODES.TASK_BUSY,
+    (/** @type {{ code?: string }} */ e) => e.code === ERROR_CODES.TASK_BUSY,
   );
 
   const done = await finished;
@@ -732,6 +751,7 @@ test("settings handler：删除代理只回写一次，并级联删除被删代�
 
   let saves = 0;
   const orig = ProxyRepository.prototype.saveAllProxies;
+  /** @param {Parameters<typeof orig>} args */
   ProxyRepository.prototype.saveAllProxies = function (...args) {
     saves += 1;
     return orig.apply(this, args);

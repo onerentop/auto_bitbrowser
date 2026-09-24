@@ -52,6 +52,7 @@ pnpm run dev                        # 启动应用（需 ixBrowser 已运行在 
 # 校验
 pnpm run typecheck                  # 业务库类型检查
 pnpm run typecheck:app              # 主进程 + 渲染层类型检查
+pnpm run typecheck:test             # 测试代码类型检查（tsconfig.test.json）
 pnpm test                           # 单元测试（node:test）
 pnpm run build:app                  # 构建到 out/（本项目没有打包配置）
 ```
@@ -167,6 +168,7 @@ pnpm test                   # 全量单测（当前基线 558 通过 / 0 失败�
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
 pnpm run check:deps         # 分层依赖规则（ARCHITECTURE.md §3），0 个 error
+pnpm run typecheck:test     # 测试代码类型检查（tsconfig.test.json），零错误
 ```
 
 > **已移除**：`verify:prompts` 与 `verify:selectors` —— 它们的比对基准是 Python 源码（提示词逐条对拍、
@@ -186,7 +188,7 @@ pnpm run check:deps         # 分层依赖规则（ARCHITECTURE.md §3），0 �
 4. **配置读写**一律经 `src/core/config-manager.ts`（敏感字段依赖它的加解密）。
 5. **易失败操作**用 `src/core/retry-helper.ts`。
 6. **不要碰窗口备注**（见上文约定）。
-7. **改动后必须跑门禁**：见上文「测试与门禁」（`typecheck` + `typecheck:app` + `pnpm test` + `build:app` + `check:deps`），全部通过再提交。
+7. **改动后必须跑门禁**：见上文「测试与门禁」（`typecheck` + `typecheck:app` + `typecheck:test` + `pnpm test` + `build:app` + `check:deps`），全部通过再提交。
 8. **真机验证的规矩**（本项目一直在用）：
    - 先只读探针确认真实页面形态，再写代码；
    - **先红后绿**：先写能复现缺陷的测试，再修；

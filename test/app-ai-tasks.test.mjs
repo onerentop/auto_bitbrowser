@@ -21,6 +21,10 @@ import { HistoryRepository } from "../src/db/history-repository.ts";
 
 // ==================== 工具 ====================
 
+/**
+ * @param {{ groups?: any[], windows?: any[] }} [opts]
+ * @returns {any}
+ */
 function fakeIx({ groups = [], windows = [] } = {}) {
   return {
     async getGroupList() {
@@ -35,7 +39,12 @@ function fakeIx({ groups = [], windows = [] } = {}) {
   };
 }
 
-/** 假 automation：记录调用参数；behavior[email] 决定结果（默认成功） */
+/**
+ * 假 automation：记录调用参数；behavior[email] 决定结果（默认成功）
+ * @param {Record<string, any>} [behavior]
+ * @param {Record<string, any>} [hooks]
+ * @returns {{ calls: any[], automation: any }}
+ */
 function fakeAutomation(behavior = {}, hooks = {}) {
   const calls = [];
   const pick = (name, args) => {
@@ -75,6 +84,9 @@ function fakeAutomation(behavior = {}, hooks = {}) {
   };
 }
 
+/**
+ * @param {{ groups?: any[], windows?: any[], behavior?: Record<string, any>, hooks?: Record<string, any>, ctxOverrides?: Record<string, any>, windowNames?: Record<string, string | null> }} [options]
+ */
 function setup({ groups = [], windows = [], behavior = {}, hooks = {}, ctxOverrides = {}, windowNames } = {}) {
   const dataRoot = mkdtempSync(join(tmpdir(), "abb-ai-tasks-"));
   const events = [];
@@ -109,6 +121,7 @@ function setup({ groups = [], windows = [], behavior = {}, hooks = {}, ctxOverri
     }
     const env = await dispatch(channel, args);
     if (!env.ok) {
+      /** @type {any} */
       const e = new Error(env.error.message);
       e.code = env.error.code;
       throw e;
@@ -261,6 +274,7 @@ test("分派：modify_auth 注入 accountRepo / historyRepo / ixClient / project
 test("分派：kick_devices 只传 browserId 与 accountInfo", async () => {
   const s = setup();
   try {
+    /** @type {any} */
     const info = await s.call(START, "kick_devices", [{ email: "a@x.com", profileId: 9 }], {}, 3);
     assert.equal(info.type, "ai_kick_devices");
     const fin = await s.finished();
@@ -304,6 +318,7 @@ test("accountInfo 以数据库为准；无记录时为 {email}", async () => {
 test("item 事件顺序：处理中 → 成功 / 失败 / 错误；日志 `[email] status: message`；结果形状", async () => {
   const s = setup({ behavior: { "b@x.com": "fail", "c@x.com": "throw" } });
   try {
+    /** @type {any} */
     const info = await s.call(
       START,
       "replace_email",
@@ -428,6 +443,7 @@ test("数据安全（生产路径）：未注入 getWindowName 时按 profileId 
   const dataRoot = mkdtempSync(join(tmpdir(), "abb-ai-tasks-"));
   const waiters = [];
   const queries = [];
+  /** @type {any} */
   const ix = {
     async getProfileList(q) {
       queries.push(q);
@@ -510,6 +526,7 @@ test("describeOutcome：与 Python 一致，直接使用 message（adapter 总�
 });
 
 test("全局单任务：已有任务时再启动 → TASK_BUSY", async () => {
+  /** @type {any} */
   let release;
   const gate = new Promise((r) => (release = r));
   const s = setup();
@@ -518,7 +535,7 @@ test("全局单任务：已有任务时再启动 → TASK_BUSY", async () => {
   try {
     await assert.rejects(
       s.call(START, "kick_devices", [{ email: "a@x.com", profileId: 1 }], {}, 1),
-      (e) => e.code === ERROR_CODES.TASK_BUSY,
+      (e) => /** @type {any} */ (e).code === ERROR_CODES.TASK_BUSY,
     );
   } finally {
     release();
@@ -545,6 +562,7 @@ test("load：窗口名匹配账号状态，未匹配为 pending；未分组 / �
   });
   try {
     seed(s.ctx, [{ email: "a@x.com", status: "verified" }]);
+    /** @type {any} */
     const res = await s.call(LOAD);
     assert.equal(res.error, null);
     assert.equal(res.totalBrowsers, 4);
@@ -586,7 +604,7 @@ test("load：读取失败时返回 error 字段而不抛异常", async () => {
 test("load：带参数 → INVALID_ARGUMENT", async () => {
   const s = setup();
   try {
-    await assert.rejects(s.call(LOAD, 1), (e) => e.code === ERROR_CODES.INVALID_ARGUMENT);
+    await assert.rejects(s.call(LOAD, 1), (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT);
   } finally {
     s.cleanup();
   }
@@ -598,8 +616,10 @@ test("buildAiTaskTree：非法窗口 ID 为 null，重复 ID 退回序号 key", 
     { profile_id: 1, name: "b" },
     { profile_id: 1, name: "c" },
   ]);
+  const group = t.groups[0];
+  assert.ok(group);
   assert.deepEqual(
-    t.groups[0].browsers.map((b) => [b.key, b.profileId]),
+    group.browsers.map((b) => [b.key, b.profileId]),
     [
       ["b:0:0", null],
       ["b:1", 1],
@@ -639,7 +659,7 @@ test("参数校验：各类非法输入 → INVALID_ARGUMENT", async () => {
     for (const args of bad) {
       await assert.rejects(
         s.call(START, ...args),
-        (e) => e.code === ERROR_CODES.INVALID_ARGUMENT,
+        (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
         `应拒绝: ${JSON.stringify(args)}`,
       );
     }
@@ -664,6 +684,8 @@ test("parseStartArgs：去重保序，参数长度 200 可接受", () => {
     { email: "a@x.com", profileId: 2 },
     { email: "b@x.com", profileId: 1 },
   ]);
-  assert.equal(r.params.newPhone.length, 200);
+  const newPhone = r.params.newPhone;
+  assert.ok(newPhone);
+  assert.equal(newPhone.length, 200);
   assert.equal(r.concurrency, 10);
 });

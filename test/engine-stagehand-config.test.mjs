@@ -27,7 +27,9 @@ test("getConfigFromManager：provider 映射、缺 model 用该 provider 默认�
     apiKey: "k-mgr",
     baseUrl: null,
   });
-  assert.equal(getConfigFromManager(source({ provider: "anthropic", model: "" })).modelName, "anthropic/claude-3-5-sonnet");
+  const mgr = getConfigFromManager(source({ provider: "anthropic", model: "" }));
+  assert.ok(mgr);
+  assert.equal(mgr.modelName, "anthropic/claude-3-5-sonnet");
 });
 
 test("getConfigFromManager：无 provider / 无 key / 读取异常 / 未注册 → null", () => {

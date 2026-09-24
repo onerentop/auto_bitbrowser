@@ -34,7 +34,9 @@ import { createIpcRegistrar, senderFrameUrl } from "../app/main/ipc/registrar.ts
 import { registerAppHandlers } from "../app/main/ipc/app-handlers.ts";
 import { isAppUrl } from "../app/main/navigation.ts";
 
+/** @type {string[]} */
 const invokeNames = Object.values(IPC.invoke);
+/** @type {string[]} */
 const eventNames = Object.values(IPC.event);
 
 // ==================== 通道表 ====================
@@ -256,9 +258,9 @@ test("ixbrowser/ping：服务不可达时不抛错，返回 reachable=false 与�
   );
   const env = await dispatch(IPC.invoke.ixbrowserPing, []);
   assert.equal(env.ok, true);
-  assert.equal(env.ok && env.data.reachable, false);
-  assert.equal(env.ok && env.data.error, "exception desc:fetch failed");
-  assert.equal(env.ok && env.data.sampleCount, null);
+  assert.equal(env.ok && /** @type {any} */ (env.data).reachable, false);
+  assert.equal(env.ok && /** @type {any} */ (env.data).error, "exception desc:fetch failed");
+  assert.equal(env.ok && /** @type {any} */ (env.data).sampleCount, null);
 });
 
 // ==================== 路由 + 注册器 ====================
@@ -340,15 +342,15 @@ test("注册器：不允许为已路由到后端的通道登记本地 handler", 
 
 test("registerAppHandlers：三个本地通道全部接上", async () => {
   const registrar = createIpcRegistrar(fakeIpcMain(), createBackendRouter(fakeHost()));
-  const status = { state: "ready", pid: 9, since: 1, seq: 3, detail: null };
+  /** @type {any} */ const status = { state: "ready", pid: 9, since: 1, seq: 3, detail: null };
   registerAppHandlers(registrar, {
-    getVersionInfo: () => ({ appName: "a", appVersion: "1", electron: "e", chrome: "c", node: "n", platform: "win32", arch: "x64" }),
+    getVersionInfo: () => /** @type {any} */ ({ appName: "a", appVersion: "1", electron: "e", chrome: "c", node: "n", platform: "win32", arch: "x64" }),
     host: { getStatus: () => status, restart: async () => ({ ...status, state: "starting" }) },
   });
   assert.equal((await registrar.invoke(IPC.invoke.appGetVersion, [])).ok, true);
   assert.deepEqual(await registrar.invoke(IPC.invoke.hostGetStatus, []), okEnvelope(status));
   const restarted = await registrar.invoke(IPC.invoke.hostRestart, []);
-  assert.equal(restarted.ok && restarted.data.state, "starting");
+  assert.equal(restarted.ok && /** @type {any} */ (restarted.data).state, "starting");
 });
 
 // ==================== 审查修正：来源校验 / 事件通道 / 导航 ====================
