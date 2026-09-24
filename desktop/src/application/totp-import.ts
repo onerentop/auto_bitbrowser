@@ -195,8 +195,8 @@ export interface TotpImportDeps {
   upsertAccount: (fields: { email: string; secret_key?: string; password?: string; browser_profile_id?: string }) => boolean;
   /** 全量窗口列表（对标 :86-102 的分页 get_profile_list(limit=100)） */
   listWindows: () => Promise<ReadonlyArray<{ name?: string | null; profile_id?: number | string | null; id?: number | string | null }>>;
-  /** 对标 services.ix_api.update_profile(profile_id, note=...)，返回是否成功 */
-  updateProfileNote: (profileId: number, note: string) => Promise<boolean>;
+  /** 对标 services.ix_api.update_profile(profile_id, note=..., tfa_secret=...)，返回是否成功 */
+  updateProfile: (profileId: number, fields: { note: string; tfa_secret: string }) => Promise<boolean>;
   log: (message: string) => void;
   progress: (current: number, total: number) => void;
   item?: (key: string, status: string, message: string) => void;
@@ -299,10 +299,11 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
         }
       }
 
-      // 更新 ixBrowser 窗口备注（:156-175）
+      // 更新 ixBrowser 窗口备注与 tfa_secret（:156-175）
       // 注意：这里整条覆盖备注 `email----password----recovery_email----secret`，
       // 与「修改验证器」只替换备注第 4 段的做法不一致 —— 照搬 Python，不做统一。
-      // 也不写 tfa_secret 字段（Python 只传 note=）。
+      // 但 tfa_secret 必须一起写：真机验证（2026-09-24）发现只写 note 时窗口的 tfa_secret 一直为空，
+      // 与「修改验证器」「批量绑定窗口」两处落点不一致（那两处都会写 tfa_secret）。
       if (profileId) {
         try {
           // 获取最新的密码（:160）
@@ -312,7 +313,8 @@ export async function runTotpImport(items: readonly TotpImportItem[], deps: Totp
 
           log("  [窗口] 正在更新备注...");
           const pid = typeof profileId === "number" ? profileId : pyInt(profileId);
-          if (await deps.updateProfileNote(pid, note)) {
+          // 备注与窗口的 tfa_secret 一起写：只写备注会让 ixBrowser 侧的 2FA 密钥一直为空
+          if (await deps.updateProfile(pid, { note, tfa_secret: secret })) {
             log("  [窗口] 备注更新成功");
             ixUpdateCount += 1;
           } else {

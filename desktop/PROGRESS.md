@@ -460,6 +460,19 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 
 - 回归用例 `desktop/test/engine-kick-devices.test.mjs`（10 条；假引擎按真机页面序列建模）+ 引擎新增 `evaluateScript()`
 - 6 条改写后的 `kick_devices` 提示词登记进 `verify-prompts` 的 `REMOVED_PROMPTS`（附真机理由）
+### 导入 TOTP 密钥的修复（2026-09-24）
+
+这个功能不驱动 Google 页面（解析密钥 → 匹配数据库 → 写库 + 更新 ixBrowser 窗口信息），所以验证方式是
+「真实数据库 + 真机 ixBrowser API 上跑一次，核对密钥的三处落点」。为不破坏账号，用 profile 7 的
+**当前密钥**做幂等导入。完整证据见 `.trellis/tasks/09-24-import-totp-real-run/real-run-log.md`。
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| **导入只写窗口备注、不写窗口 `tfa_secret`** → ixBrowser 侧的 2FA 密钥一直为空，与「修改验证器」「批量绑定窗口」两处落点不一致 | 导入成功（备注更新成功、`ix_update_count=1`）后 `窗口 tfa_secret = (空)`，而 DB 与备注里都有密钥 | `runTotpImport` 的 `updateProfileNote(id, note)` 改为 `updateProfile(id, { note, tfa_secret })`；handler 装配同步改。真机复跑：`tfa_secret` 由空 → `len=32 前4=R2TQ…`，`窗口 tfa_secret == DB 密钥: true` |
+
+- 回归用例 `desktop/test/app-totp.test.mjs`：修前 4 红 → 修后 **15/15 绿**
+- 本轮**未**改动（记在任务待办）：窗口备注整条覆盖（`recovery_email` 为空会把备注第 3 段写空）、
+  覆盖已有密钥不写 `authenticator_modification_history`、导入密钥无格式校验、前端 UI 层未做真机操作
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）

@@ -101,7 +101,7 @@ function requireImportItems(value: unknown): TotpImportItem[] {
 export interface TotpHandlerDeps {
   /** 测试注入：替换窗口列表 / 备注更新 */
   listWindows?: TotpImportDeps["listWindows"];
-  updateProfileNote?: TotpImportDeps["updateProfileNote"];
+  updateProfile?: TotpImportDeps["updateProfile"];
 }
 
 export function createTotpHandlers(ctx: HostContext, deps: TotpHandlerDeps = {}): HostHandlerTable {
@@ -109,9 +109,12 @@ export function createTotpHandlers(ctx: HostContext, deps: TotpHandlerDeps = {})
   // 对标 :86-102 的分页 get_profile_list(page, limit=100)；getBrowserList 失败时返回已取到的部分
   const listWindows =
     deps.listWindows ?? (() => getBrowserList({ client: ctx.ix(), log: ctx.log }, { fetchAll: true, limit: 100 }));
-  // 对标 update_profile(int(profile_id), note=note)；只传 note，不写 tfa_secret（以 Python 为准）。
+  // 对标 update_profile(int(profile_id), note=note, tfa_secret=secret)。
+  // 真机验证（2026-09-24）：只传 note 会让窗口的 tfa_secret 一直为空 → 这里连密钥一起写。
   // 有意偏差：Python 的 update_profile 对网络类错误有重试，客户端 updateProfile 没有，失败即计为警告。
-  const updateProfileNote = deps.updateProfileNote ?? ((id: number, note: string) => ctx.ix().updateProfile(id, { note }));
+  const updateProfile =
+    deps.updateProfile ??
+    ((id: number, fields: { note: string; tfa_secret: string }) => ctx.ix().updateProfile(id, fields));
 
   return {
     [TOTP_INVOKE.totpParseUris]: (items: unknown): TotpParseUrisResult => entriesFromUris(requireUriItems(items)),
@@ -129,7 +132,7 @@ export function createTotpHandlers(ctx: HostContext, deps: TotpHandlerDeps = {})
           getAllAccounts: () => repo().getAllAccounts(),
           upsertAccount: (fields) => repo().upsertAccount(fields),
           listWindows,
-          updateProfileNote,
+          updateProfile,
           log: api.log,
           progress: api.progress,
           item: api.item,

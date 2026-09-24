@@ -129,8 +129,8 @@ function importDeps(repo, { windows = [], noteOk = true, stopAfter = Infinity, l
         if (listThrows) throw new Error("ix 不可达");
         return windows;
       },
-      updateProfileNote: async (id, note) => {
-        notes.push([id, note]);
+      updateProfile: async (id, fields) => {
+        notes.push([id, fields.note, fields.tfa_secret ?? null]);
         if (noteOk === "throw") throw new Error("网络错误");
         return noteOk;
       },
@@ -160,9 +160,11 @@ test("runTotpImport：写入密钥；文本导入带密码时更新密码；二�
   assert.equal(repo.getAccountByEmail("q@x.com").password, "keep");
   assert.equal(r.password_count, 1);
   // 整条覆盖备注：email----password----recovery_email----secret（密码取本次新密码）
+  // 整条覆盖备注：email----password----recovery_email----secret（密码取本次新密码）；
+  // 同时把密钥写进窗口的 tfa_secret（与「修改验证器」「批量绑定窗口」保持一致）
   assert.deepEqual(h.notes, [
-    [11, "t@x.com----newpw----r@x.com----SECRET1"],
-    [12, "q@x.com----keep--------SECRET2"],
+    [11, "t@x.com----newpw----r@x.com----SECRET1", "SECRET1"],
+    [12, "q@x.com----keep--------SECRET2", "SECRET2"],
   ]);
   assert.deepEqual(r, {
     success_count: 2,
@@ -288,8 +290,8 @@ function makeHandlers(rows = [], opts = {}) {
   const dispatch = createDispatcher(
     createTotpHandlers(ctx, {
       listWindows: async () => opts.windows ?? [],
-      updateProfileNote: async (id, note) => {
-        notes.push([id, note]);
+      updateProfile: async (id, fields) => {
+        notes.push([id, fields.note, fields.tfa_secret ?? null]);
         return true;
       },
     }),
@@ -328,7 +330,7 @@ test("handler：import 返回 TaskInfo，任务完成后写库并更新备注", 
   assert.equal(done.result.bind_count, 1);
   const acc = h.ctx.accountRepo().getAccountByEmail("a@x.com");
   assert.deepEqual([acc.secret_key, acc.password, acc.browser_profile_id], ["NEW", "p2", "5"]);
-  assert.deepEqual(h.notes, [[5, "a@x.com----p2--------NEW"]]);
+  assert.deepEqual(h.notes, [[5, "a@x.com----p2--------NEW", "NEW"]]);
 });
 
 test("handler：二维码条目带密码时丢弃密码", async () => {
