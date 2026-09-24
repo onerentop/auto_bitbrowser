@@ -97,7 +97,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 468/468 通过
+pnpm test               # 478/478 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 覆盖率 95.5%：6 条 modify_2sv 改写提示词已登记「有意不比对」，
@@ -439,6 +439,27 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
   → 端到端验证只能塞进单进程；另外 Google 对频繁登录做风控后，登录页会先要求「选择验证方式」
   （`/v3/signin/challenge/selection`），而 `LoginOperation` 只认「直接出现的验证器输入框」→ 报 `need_2fa`
 - 账号状态：2SV 电话号码 = 旧号 `****4348` + 新号 `****4886`（仍是「添加」，未删旧号）
+
+### 踢出设备的真机缺陷与修复（2026-09-24）
+
+在 profile 7 上验证「踢出设备」；真机复现了**假成功**（任务报成功、其实一个设备都没踢），修完后真机端到端跑通，
+账号的 2 个历史会话被真正退出（设备页显示「已退出账号」）。完整证据见
+`.trellis/tasks/09-24-kick-devices-real-run/real-run-log.md`。
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| 设备页要求「重新验证身份」被误判为「需要先登录账号」 | navigate 后落在 `/v3/signin/challenge/totp`（中文页）→ 假失败 | 新增 `passReauthIfRequired` / `completeReauth`（与其它 operation 同一套写法） |
+| **假成功**：设备列表按 observe 描述里的英文 `"device"` 过滤 | 中文页面 → observe 描述不含 `device` → 列表恒为空 → `success=true, "未找到其他设备"`，实际 0 操作 | 改为在页面内按**结构**读会话条目（`li.K6ZZTd`），与界面语言无关；读不到就如实报「没找到设备列表」 |
+| **假成功**：`kickSingleDevice` 无条件 `return true` | 三次 act 全都没生效也照样计入「已踢出」 | 点条目 → 复核已进入详情页 → 点「退出账号」→ 复核显示「已退出」；任一步没做到如实返回 false |
+| 结果判据错 + 重复踢已退出的会话 | 真机：退出后会话**条数不减少**（变成「已退出账号」）；第二轮会重复点开已退出的会话 | 判据改为「还没退出的非当前会话是否清零」；`signedOut` 的条目不再重复踢 |
+| 缺确认框处理 | 点「退出账号」只弹确认框（「要在"Windows"上退出账号吗？ 取消 / 退出账号」），需**再点一次**同名按钮 | 确定性再点一次「退出账号」，AI act 仅作兜底 |
+
+真机设备页结构（实测）：`/myaccount.google.com/device-activity` → 会话条目 `li.K6ZZTd`（当前会话的条目文本含
+「您的当前会话」）→ **坐标点击**条目进入 `/device-activity/id/XXX` → 详情页「退出账号」→ 确认框 → 退出后条目变
+「已退出账号」。点条目必须用坐标点击（页面内 `el.click()` 在该页面上无效）。
+
+- 回归用例 `desktop/test/engine-kick-devices.test.mjs`（10 条；假引擎按真机页面序列建模）+ 引擎新增 `evaluateScript()`
+- 6 条改写后的 `kick_devices` 提示词登记进 `verify-prompts` 的 `REMOVED_PROMPTS`（附真机理由）
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -481,7 +502,7 @@ pnpm verify:selectors
    - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机** 四个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机 / 踢出设备** 五个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
 
 ## 六、Python 侧现状（勿动）
 

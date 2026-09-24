@@ -599,8 +599,25 @@ export class StagehandGoogleEngine {
     return new LoginOperation(this).execute(options);
   }
 
+  /**
+   * 在页面内执行脚本并返回结果（operation 需要按 DOM 结构读数据时用，例如设备页的会话条目）。
+   * 拿不到 evaluate 能力或脚本抛错时返回 null，由调用方如实处理。
+   */
+  async evaluateScript<R = unknown>(script: string): Promise<R | null> {
+    const { page } = this.ensureReady();
+    if (typeof page.evaluate !== "function") return null;
+    try {
+      return (await page.evaluate<R>(script)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async kickDevices(
-    options: { keepCurrent?: boolean } = {},
+    options: {
+      keepCurrent?: boolean;
+      credentials?: import("./operations/kick-devices.ts").ReauthCredentials;
+    } = {},
   ): Promise<import("./types.ts").KickDevicesResult> {
     const { KickDevicesOperation } = await import("./operations/kick-devices.ts");
     return new KickDevicesOperation(this).execute(options);

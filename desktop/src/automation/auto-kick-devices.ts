@@ -17,7 +17,14 @@ export async function autoKickDevices(
     browserId,
     { ...options, closeAfter: options.closeAfter ?? false },
     async (engine) => {
-      const result = await engine.kickDevices({ keepCurrent: true });
+      // 真机：设备页会要求 Google 的「重新验证身份」，凭据从数据库账号取（只经 fill 写入）
+      const result = await engine.kickDevices({
+        keepCurrent: true,
+        credentials: {
+          password: String(accountInfo["password"] ?? ""),
+          totpSecret: String(accountInfo["secret_key"] ?? ""),
+        },
+      });
       kickedCount = result.devices_kicked || 0;
 
       if (result.success) {
