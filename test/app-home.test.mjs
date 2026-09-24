@@ -17,15 +17,11 @@ import { createHomeHandlers } from "../app/host/handlers/home.ts";
 import { runBrowserBatch } from "../src/application/browser-batch.ts";
 import { getGroupList } from "../src/ixbrowser/groups.ts";
 import {
-  buildBrowserTree,
+  buildBrowserList,
   buildGroupOptions,
   cleanText,
-  filterBrowserTree,
-  groupLabel,
-  refreshSummary,
-  selectAllVisible,
   selectedProfileIds,
-} from "../app/shared/logic/home-tree.ts";
+} from "../app/shared/logic/home-list.ts";
 import { ConfigManager } from "../src/core/config-manager.ts";
 
 // ==================== 工具 ====================
@@ -170,114 +166,6 @@ test("cleanText：去掉控制字符 / 格式字符 / 非 ASCII 空白，保留�
   assert.equal(cleanText("a\tb\nc d\u00a0e\u2028f"), "abc def");
   assert.equal(cleanText(null), "");
   assert.equal(cleanText(undefined), "");
-});
-
-// ==================== 纯函数：构树 ====================
-
-test("buildBrowserTree：分组名优先 group-list，其次 profile.group_name；gid=0/缺失归「未分组」；计数与排序", () => {
-  const groups = [
-    { id: 2, title: "列表名" },
-    { id: 9, title: "空分组" },
-    { id: 0, title: "不会用到" },
-  ];
-  const browsers = [
-    { profile_id: 11, name: "a@x.com", note: "N1", group_id: 2, group_name: "窗口里的名字" },
-    { profile_id: 12, name: "b@x.com", note: "", group_id: 3, group_name: "来自窗口" },
-    { profile_id: 13, name: "c@x.com", note: "", group_id: 0 },
-    { profile_id: 14, name: "d@x.com", note: "" },
-    { profile_id: 15, name: "e@x.com", note: "", group_id: 4, group_name: "\ufffd" },
-  ];
-  const { groups: tree, totalBrowsers } = buildBrowserTree(groups, browsers);
-  assert.equal(totalBrowsers, 5);
-  assert.deepEqual(
-    tree.map((g) => [g.groupId, g.groupName, g.browsers.length]),
-    [
-      [0, "未分组", 2],
-      [2, "列表名", 1],
-      [3, "来自窗口", 1],
-      [4, "分组 4", 1],
-      [9, "空分组", 0],
-    ],
-  );
-  const g1 = tree[1];
-  assert.ok(g1);
-  assert.equal(groupLabel(g1), "📁 列表名 (1)");
-  const b = g1.browsers[0];
-  assert.ok(b);
-  assert.equal(b.profileId, 11);
-  assert.equal(b.name, "a@x.com");
-  assert.equal(b.note, "N1");
-  assert.equal(b.tfaCode, "");
-  assert.equal(refreshSummary(tree), "列表刷新完成，共 5 个分组，5 个窗口");
-  // key 全局唯一
-  const keys = tree.flatMap((g) => [g.key, ...g.browsers.map((x) => x.key)]);
-  assert.equal(new Set(keys).size, keys.length);
-});
-
-test("buildBrowserTree：没有任何数据时仍有「未分组」", () => {
-  const { groups, totalBrowsers } = buildBrowserTree([], []);
-  assert.equal(totalBrowsers, 0);
-  assert.deepEqual(groups.map((g) => g.groupName), ["未分组"]);
-});
-
-// ==================== 纯函数：过滤 / 全选 / 取选中 ====================
-
-function sampleTree() {
-  return buildBrowserTree(
-    [{ id: 1, title: "默认" }, { id: 2, title: "二组" }, { id: 3, title: "空" }],
-    [
-      { profile_id: 1, name: "Alice@X.com", note: "", group_id: 1 },
-      { profile_id: 2, name: "bob", note: "VIP 客户", group_id: 1 },
-      { profile_id: 3, name: "carol", note: "", group_id: 2 },
-      // group_name 含 alice，但只匹配名称和备注
-      { profile_id: 4, name: "dave", note: "", group_id: 2, group_name: "alice" },
-    ],
-  ).groups;
-}
-
-test("filterBrowserTree：只匹配名称和备注（不区分大小写、strip）；全被过滤的分组隐藏；隐藏项取消勾选", () => {
-  const tree = sampleTree();
-  const all = tree.flatMap((g) => g.browsers.map((b) => b.key));
-
-  const r = filterBrowserTree(tree, "  ALICE ", all);
-  assert.deepEqual(r.groups.map((g) => g.groupName), ["默认"]);
-  const g0 = r.groups[0];
-  assert.ok(g0);
-  assert.deepEqual(g0.browsers.map((b) => b.profileId), [1]);
-  const g1 = tree.find((g) => g.groupId === 1);
-  assert.ok(g1);
-  const b0 = g1.browsers[0];
-  assert.ok(b0);
-  assert.deepEqual(r.checkedKeys, [b0.key]);
-
-  const byNote = filterBrowserTree(tree, "vip", []);
-  assert.deepEqual(byNote.groups.flatMap((g) => g.browsers.map((b) => b.profileId)), [2]);
-
-  const none = filterBrowserTree(tree, "zzz", all);
-  assert.deepEqual(none.groups, []);
-  assert.deepEqual(none.checkedKeys, []);
-
-  // 空搜索：全部可见（含空分组），勾选保持
-  const empty = filterBrowserTree(tree, "   ", all);
-  assert.equal(empty.groups.length, tree.length);
-  assert.deepEqual(empty.checkedKeys, all);
-});
-
-test("selectAllVisible / selectedProfileIds：只作用于可见项", () => {
-  const tree = sampleTree();
-  const visible = filterBrowserTree(tree, "o", []).groups; // Alice@X.com（.com 含 o）、bob、carol
-  const keys = selectAllVisible(visible, [], true);
-  assert.deepEqual(selectedProfileIds(visible, keys), [1, 2, 3]);
-  // 取消全选只去掉可见项
-  const g2 = tree.find((g) => g.groupId === 2);
-  assert.ok(g2);
-  const b1 = g2.browsers[1];
-  assert.ok(b1);
-  const hiddenKey = b1.key; // dave，不含 o
-  const kept = selectAllVisible(visible, [...keys, hiddenKey], false);
-  assert.deepEqual(kept, [hiddenKey]);
-  // 不可见的勾选不计入选中
-  assert.deepEqual(selectedProfileIds(visible, [hiddenKey]), []);
 });
 
 // ==================== 批量任务体 ====================
@@ -432,7 +320,7 @@ test("listBrowsers：自动翻页取全量 + 分组树；listGroups 出错时只
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null);
   assert.equal(env.data.totalBrowsers, 1001);
-  assert.deepEqual(env.data.groups.map((g) => [g.groupName, g.browsers.length]), [
+  assert.deepEqual(env.data.groups.map((g) => [g.groupName, g.count]), [
     ["未分组", 1],
     ["业务", 1000],
   ]);
@@ -504,7 +392,7 @@ test("listBrowsers：分组与窗口列表并发请求，窗口列表按大页�
   assert.ok(queries[0].limit >= 1000, `limit 应 ≥ 1000，实际 ${queries[0].limit}`);
 });
 
-test("listBrowsers：第一页就失败 → 空树（只剩「未分组」），error 仍为 null", async (t) => {
+test("listBrowsers：第一页就失败 → 空列表，error 仍为 null", async (t) => {
   const s = setup({
     async getGroupList() {
       return { not: "array" }; // groups.ts 容错为 []
@@ -519,7 +407,57 @@ test("listBrowsers：第一页就失败 → 空树（只剩「未分组」），
   assert.equal(env.ok, true);
   assert.equal(env.data.error, null);
   assert.equal(env.data.totalBrowsers, 0);
-  assert.deepEqual(env.data.groups.map((g) => g.groupName), ["未分组"]);
+  assert.deepEqual(env.data.browsers, []);
+  assert.deepEqual(env.data.groups, []);
+});
+
+test("tfaCodes：用最近一次刷新缓存的密钥算验证码；列表与验证码返回值都不含密钥", async (t) => {
+  const SECRET = "JBSWY3DPEHPK3PXP";
+  /** @type {any[]} */
+  let rows = [
+    { profile_id: 1, name: "a", group_id: 0, tfa_secret: SECRET },
+    { profile_id: 2, name: "b", group_id: 0, tfa_secret: "not-base32!" },
+    { profile_id: 3, name: "c", group_id: 0 },
+  ];
+  const s = setup({
+    async getProfileList(q) {
+      return q.page === 1 ? rows : [];
+    },
+  });
+  t.after(s.cleanup);
+
+  // 还没刷新过列表：没有任何密钥
+  /** @type {any} */
+  const before = await s.dispatch(HOME_INVOKE.homeTfaCodes, [[1]]);
+  assert.equal(before.ok, true);
+  assert.deepEqual(before.data.codes, {});
+
+  /** @type {any} */
+  const list = await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
+  assert.deepEqual(list.data.browsers.map((b) => b.hasTfa), [true, true, false]);
+  assert.ok(!JSON.stringify(list).includes(SECRET), "列表返回值不含密钥");
+
+  /** @type {any} */
+  const env = await s.dispatch(HOME_INVOKE.homeTfaCodes, [[1, 2, 3]]);
+  assert.equal(env.ok, true);
+  assert.deepEqual(Object.keys(env.data.codes), ["1"]);
+  assert.match(env.data.codes[1], /^\d{6}$/);
+  assert.deepEqual(env.data.invalid, [2]);
+  assert.ok(env.data.periodEndsAt > Date.now() - 1000);
+  assert.ok(!JSON.stringify(env).includes(SECRET), "验证码返回值不含密钥");
+
+  // 再次刷新后窗口 1 的密钥被删掉 → 不再出码
+  rows = [{ profile_id: 1, name: "a", group_id: 0 }];
+  await s.dispatch(HOME_INVOKE.homeListBrowsers, []);
+  /** @type {any} */
+  const after = await s.dispatch(HOME_INVOKE.homeTfaCodes, [[1]]);
+  assert.deepEqual(after.data.codes, {});
+
+  // 参数校验：超过上限拒绝
+  /** @type {any} */
+  const tooMany = await s.dispatch(HOME_INVOKE.homeTfaCodes, [Array.from({ length: 1001 }, (_, i) => i + 1)]);
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.error.code, ERROR_CODES.INVALID_ARGUMENT);
 });
 
 test("buildGroupOptions：跳过非整数 id（字符串 / 小数 / 缺失 / 非对象）", () => {
@@ -532,8 +470,8 @@ test("buildGroupOptions：跳过非整数 id（字符串 / 小数 / 缺失 / 非
   );
 });
 
-test("buildBrowserTree：有 profileId 时 key 为 b:{id}，重复 / 无效 id 退回序号 key，且全局唯一", () => {
-  const { groups } = buildBrowserTree(
+test("listBrowsers：刷新后同一窗口 key 稳定；勾选重复 id 的两行只取一次", () => {
+  const { browsers } = buildBrowserList(
     [{ id: 2, title: "二" }],
     [
       { profile_id: 11, name: "a", group_id: 2 },
@@ -542,23 +480,14 @@ test("buildBrowserTree：有 profileId 时 key 为 b:{id}，重复 / 无效 id �
       { profile_id: null, name: "none", group_id: 2 },
     ],
   );
-  const byName = Object.fromEntries(groups.flatMap((g) => g.browsers.map((b) => [b.name, b.key])));
+  const byName = Object.fromEntries(browsers.map((b) => [b.name, b.key]));
   assert.equal(byName.a, "b:11");
   assert.equal(byName.b, "b:12");
   assert.equal(byName.dup, "b:2:2");
   assert.equal(byName.none, "b:2:3");
-  const keys = groups.flatMap((g) => [g.key, ...g.browsers.map((b) => b.key)]);
-  assert.equal(new Set(keys).size, keys.length);
-  // 刷新（同一数据重建）后 key 稳定
-  const again = buildBrowserTree([{ id: 2, title: "二" }], [{ profile_id: 11, name: "a", group_id: 2 }]).groups;
-  const g2 = again.find((g) => g.groupId === 2);
-  assert.ok(g2);
-  const b0 = g2.browsers[0];
-  assert.ok(b0);
-  assert.equal(b0.key, "b:11");
-  // 勾选重复 id 的两行只取一次
-  const all = groups.flatMap((g) => g.browsers.map((b) => b.key));
-  assert.deepEqual(selectedProfileIds(groups, all), [12, 11]);
+  const again = buildBrowserList([{ id: 2, title: "二" }], [{ profile_id: 11, name: "a", group_id: 2 }]).browsers;
+  assert.equal(again[0]?.key, "b:11");
+  assert.deepEqual(selectedProfileIds(browsers, browsers.map((b) => b.key)), [11, 12]);
 });
 
 // ==================== handler：配置读写 ====================

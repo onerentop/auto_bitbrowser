@@ -21,7 +21,7 @@ import {
   type AiTaskRunResult,
   type AiTaskStartItem,
 } from "../../app/shared/channels/ai-tasks.ts";
-import { cleanText, UNGROUPED_NAME } from "../../app/shared/logic/home-tree.ts";
+import { cleanText, UNGROUPED_NAME } from "../../app/shared/logic/home-list.ts";
 import type { AccountRepository } from "../db/account-repository.ts";
 import type { HistoryRepository } from "../db/history-repository.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
@@ -106,7 +106,7 @@ export function buildAiTaskTree(
     const email = String(b["name"] ?? "");
     const profileId = asProfileId(b["profile_id"]);
     const index = seq++;
-    // 行 key 规则与首页一致（app/shared/logic/home-tree.ts 的 buildBrowserTree）
+    // 行 key 规则与首页一致（app/shared/logic/home-list.ts 的 buildBrowserList）
     let key: string;
     if (profileId !== null && !usedProfileIds.has(profileId)) {
       usedProfileIds.add(profileId);

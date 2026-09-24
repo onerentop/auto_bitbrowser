@@ -372,8 +372,8 @@ test("handler：已有的「前缀_1」会被跳过，新窗口接着编号（�
     ],
   );
   // 新窗口真的进了窗口列表（界面上刷新就能看到）
-  const tree = await s.call(HOME_INVOKE.homeListBrowsers);
-  const names = tree.groups.flatMap((g) => g.browsers.map((b) => b.name));
+  const list = await s.call(HOME_INVOKE.homeListBrowsers);
+  const names = list.browsers.map((b) => b.name);
   assert.ok(names.includes("F3T_2") && names.includes("F3T_3"), `列表里应有新窗口，实际=${names}`);
 });
 

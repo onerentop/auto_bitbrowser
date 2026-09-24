@@ -18,8 +18,10 @@ export const HOME_INVOKE = {
   homeSaveConfig: "abb/home/saveConfig",
   /** 目标分组下拉选项 */
   homeListGroups: "abb/home/listGroups",
-  /** 分组 + 窗口两级树 */
+  /** 平铺窗口列表 + 分组统计（不含 2FA 密钥） */
   homeListBrowsers: "abb/home/listBrowsers",
+  /** 按窗口 ID 取当前 2FA 验证码（密钥只在后端，界面只拿验证码） */
+  homeTfaCodes: "abb/home/tfaCodes",
   /** 批量打开选中窗口（后台任务；原版 :446 为 TODO 桩） */
   homeOpenBrowsers: "abb/home/openBrowsers",
   /** 批量删除选中窗口（后台任务；原版 :456 为 TODO 桩） */
@@ -51,31 +53,47 @@ export interface HomeGroupListResult {
   error: string | null;
 }
 
-/** 窗口树的二级节点 */
+/** 平铺列表的一行（窗口） */
 export interface HomeBrowserNode {
-  /** 树内唯一键 */
+  /** 行键：有效且不重复的窗口 ID 为 `b:{id}`，否则 `b:{gid}:{序号}` */
   key: string;
   /** 窗口 ID；原始数据缺失或非法时为 null（无法打开 / 删除） */
   profileId: number | null;
   name: string;
-  /** 2FA 验证码：恒为空 */
-  tfaCode: string;
   note: string;
-}
-
-/** 窗口树的一级节点（分组） */
-export interface HomeGroupNode {
-  key: string;
   groupId: number;
   groupName: string;
-  browsers: HomeBrowserNode[];
+  /** 最近打开时间（秒级时间戳）；从未打开为 null */
+  lastOpenTime: number | null;
+  /** 窗口是否配置了 2FA 密钥（密钥本身不下发） */
+  hasTfa: boolean;
 }
 
-export interface HomeBrowserTree {
-  groups: HomeGroupNode[];
+/** 分组筛选标签的一项：只列有窗口的分组 */
+export interface HomeGroupCount {
+  groupId: number;
+  groupName: string;
+  count: number;
+}
+
+export interface HomeBrowserList {
+  browsers: HomeBrowserNode[];
+  /** 按分组 ID 升序 */
+  groups: HomeGroupCount[];
   totalBrowsers: number;
   /** 加载过程中的错误 */
   error: string | null;
+}
+
+/** 一次最多取多少个窗口的验证码 */
+export const MAX_TFA_CODE_IDS = 1000;
+
+/** 2FA 验证码：codes 只含能算出码的窗口；invalid 为密钥非法的窗口；其余视为没有密钥 */
+export interface HomeTfaCodes {
+  codes: Record<number, string>;
+  invalid: number[];
+  /** 本 30 秒周期结束的时间（毫秒时间戳），届时验证码会变 */
+  periodEndsAt: number;
 }
 
 /** 打开 / 删除任务的返回值 */
@@ -123,7 +141,8 @@ export interface HomeInvokeMap {
   "abb/home/getConfig": { args: []; result: HomeConfig };
   "abb/home/saveConfig": { args: [patch: HomeConfigPatch]; result: HomeConfig };
   "abb/home/listGroups": { args: []; result: HomeGroupListResult };
-  "abb/home/listBrowsers": { args: []; result: HomeBrowserTree };
+  "abb/home/listBrowsers": { args: []; result: HomeBrowserList };
+  "abb/home/tfaCodes": { args: [profileIds: number[]]; result: HomeTfaCodes };
   "abb/home/openBrowsers": { args: [profileIds: number[]]; result: TaskInfo };
   "abb/home/deleteBrowsers": { args: [profileIds: number[]]; result: TaskInfo };
   "abb/home/createBrowsers": { args: [spec: HomeCreateSpec]; result: TaskInfo };

@@ -12,13 +12,13 @@ import {
   HOME_TASK_TYPES,
   MAX_CREATE_COUNT,
   type HomeConfig,
-  type HomeGroupNode,
+  type HomeBrowserList,
   type HomeGroupOption,
 } from "../../../shared/channels/home.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
-import { defaultGroupOptions, refreshSummary } from "../../../shared/logic/home-tree.ts";
+import { defaultGroupOptions, refreshSummary } from "../../../shared/logic/home-list.ts";
 import { ConfigCard } from "./home/ConfigCard.tsx";
 import { BrowserListCard } from "./home/BrowserListCard.tsx";
 
@@ -32,7 +32,9 @@ export function HomePage(): ReactElement {
   const [groupId, setGroupId] = useState<number | null>(null);
   const [groupsLoading, setGroupsLoading] = useState(false);
 
-  const [tree, setTree] = useState<HomeGroupNode[]>([]);
+  const [list, setList] = useState<HomeBrowserList | null>(null);
+  // 每次刷新完成 +1：让 2FA 验证码跟着重新取（密钥可能在 ixBrowser 里改过）
+  const [listVersion, setListVersion] = useState(0);
   const [listLoading, setListLoading] = useState(false);
 
   // 「创建参数配置」卡片自己持有模板 ID / 前缀的输入状态；这里只保留一份最新值，
@@ -73,12 +75,13 @@ export function HomePage(): ReactElement {
       const res = await invoke(IPC.invoke.homeListBrowsers);
       if (seq !== listSeq.current) return;
       if (res.error) logLocal(`⚠️ 加载数据时发生错误: ${res.error}`);
-      setTree(res.groups);
-      logLocal(refreshSummary(res.groups));
+      setList(res);
+      setListVersion((v) => v + 1);
+      logLocal(refreshSummary(res));
     } catch (e) {
       if (seq !== listSeq.current) return;
       logLocal(`[错误] 加载窗口列表失败: ${describeError(e)}`);
-      setTree([]);
+      setList(null);
     } finally {
       if (seq === listSeq.current) setListLoading(false);
     }
@@ -126,15 +129,18 @@ export function HomePage(): ReactElement {
     void startTask("open", ids);
   };
 
-  /** 删除窗口（真实实现） */
-  const onDelete = (ids: number[]): void => {
+  /** 删除窗口（真实实现）；hidden 为勾选中不在当前视图的数量，确认框里单独提示，避免误删看不见的窗口 */
+  const onDelete = (ids: number[], hidden: number): void => {
     if (ids.length === 0) {
       void message.warning("请先勾选要删除的窗口");
       return;
     }
+    const hiddenLine = hidden > 0 ? `\n其中 ${hidden} 个被筛选隐藏，当前列表里看不到。` : "";
     modal.confirm({
       title: "确认删除",
-      content: <div style={{ whiteSpace: "pre-line" }}>{`确定要删除选中的 ${ids.length} 个窗口吗？\n此操作不可恢复！`}</div>,
+      content: (
+        <div style={{ whiteSpace: "pre-line" }}>{`确定要删除选中的 ${ids.length} 个窗口吗？${hiddenLine}\n此操作不可恢复！`}</div>
+      ),
       okText: "删除",
       okButtonProps: { danger: true },
       cancelText: "取消",
@@ -180,7 +186,8 @@ export function HomePage(): ReactElement {
   };
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+    // 纵向铺满：窗口列表卡片占剩余高度，表格随窗口大小伸缩
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 560 }}>
       <ConfigCard
         groupOptions={groupOptions}
         groupId={groupId}
@@ -228,13 +235,14 @@ export function HomePage(): ReactElement {
       </Space>
 
       <BrowserListCard
-        groups={tree}
+        list={list}
+        version={listVersion}
         loading={listLoading}
         busy={running !== null}
         onRefresh={() => void refreshList()}
         onOpen={onOpen}
         onDelete={onDelete}
       />
-    </Space>
+    </div>
   );
 }

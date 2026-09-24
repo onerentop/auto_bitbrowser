@@ -12,12 +12,14 @@ import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
   HOME_TASK_TYPES,
   MAX_CREATE_COUNT,
-  type HomeBrowserTree,
+  type HomeBrowserList,
   type HomeConfig,
   type HomeConfigPatch,
   type HomeCreateResult,
   type HomeCreateSpec,
   type HomeGroupListResult,
+  type HomeTfaCodes,
+  MAX_TFA_CODE_IDS,
 } from "../../shared/channels/home.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
 import { deleteBrowserById, getBrowserList, getNextWindowName, openBrowserById } from "../../../src/ixbrowser/window.ts";
@@ -28,7 +30,8 @@ import {
   type CreateWindowsDeps,
 } from "../../../src/application/create-windows.ts";
 import { runBrowserBatch } from "../../../src/application/browser-batch.ts";
-import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../shared/logic/home-tree.ts";
+import { buildBrowserList, buildGroupOptions, defaultGroupOptions } from "../../shared/logic/home-list.ts";
+import { computeTfaCodes, extractTfaSecrets } from "../../../src/application/tfa-codes.ts";
 
 /** 配置键 */
 export const HOME_CONFIG_KEYS = {
@@ -135,6 +138,8 @@ function readConfig(ctx: HostContext): HomeConfig {
 
 export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
   const deps = () => ({ client: ctx.ix(), log: ctx.log });
+  /** 窗口 ID → 2FA 密钥：只在后端内存里，随每次 listBrowsers 刷新 */
+  let tfaSecrets = new Map<number, string>();
 
   return {
     "abb/home/getConfig": (...args: unknown[]): HomeConfig => {
@@ -167,12 +172,12 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
     },
 
     /**
-     * 加载窗口列表并组装树。
+     * 加载平铺窗口列表 + 分组统计。
      * 真机实测（374 个窗口）：ixBrowser 每次 profile-list 固定约 3.3s，与 limit 几乎无关，
      * 原先「先分组、再每页 100 条串行翻页」要 ~12s；改为分组与窗口并发 + 大页，约 3.5s。
      * 超过一页时仍按 getBrowserList 的规则继续翻页，不会漏数据。
      */
-    "abb/home/listBrowsers": async (...args: unknown[]): Promise<HomeBrowserTree> => {
+    "abb/home/listBrowsers": async (...args: unknown[]): Promise<HomeBrowserList> => {
       expectNoArgs(args);
       let groups: unknown[] = [];
       let browsers: unknown[] = [];
@@ -185,8 +190,16 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       } catch (e) {
         error = errText(e);
       }
-      const tree = buildBrowserTree(groups, browsers);
-      return { ...tree, error };
+      // 密钥只留在后端：每次刷新整体替换缓存，界面拿到的列表里只有 hasTfa
+      tfaSecrets = extractTfaSecrets(browsers);
+      return { ...buildBrowserList(groups, browsers), error };
+    },
+
+    /** 按窗口 ID 取当前 2FA 验证码（基于最近一次刷新列表时缓存的密钥；返回值不含密钥） */
+    "abb/home/tfaCodes": (...args: unknown[]): HomeTfaCodes => {
+      const ids = parseProfileIds(args);
+      if (ids.length > MAX_TFA_CODE_IDS) throw invalid(`一次最多查询 ${MAX_TFA_CODE_IDS} 个窗口的验证码`);
+      return computeTfaCodes(tfaSecrets, ids, Date.now());
     },
 
     // 任务内把 window.ts 的重试日志也转到任务日志（底部任务坞可见）
