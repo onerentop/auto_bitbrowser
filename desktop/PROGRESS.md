@@ -1,6 +1,12 @@
 # Node/TypeScript 重写进度
 
-> 最后更新：2026-09-24（三个 AI 任务真机跑通并修掉同源缺陷：「替换手机号」「替换辅助邮箱」「修改验证器」——失效的恢复手机页地址、Google「重新验证身份」被误判为未登录、不点最终保存、把可选的邮箱验证码当成失败、缺「下一页」导致输码失败、成功文案「已更改」不在词表） ｜ 分支 `dev_ai`
+> 最后更新：2026-09-24 ｜ 分支 `dev_ai`
+
+> **Python 侧已于 2026-09-24 整体移除**：`core/` `services/` `automation/` `application/` `gui/`
+> `web_admin/` `tests/`、`main.py`、`pytest.ini`、`requirements*.txt`、`.venv/`、`dist/`，
+> 以及以 Python 源码为基准的 `verify:prompts` / `verify:selectors` 两个校验脚本都已删除。
+> 本文件下方历史章节里凡出现「Python / 对标 xxx.py」字样的，都是移植期的工程记录。
+> **当前架构与协作准则以 `CLAUDE.md` 为准。**
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -9,102 +15,62 @@
 把下面这段直接粘给新会话：
 
 ```
-读 desktop/PROGRESS.md 与 desktop/ENGINE_SLICE_REPORT.md 恢复上下文。
+读 CLAUDE.md 与 desktop/PROGRESS.md 恢复上下文。
 
-本项目正在把 Python 的 ixBrowser 自动化工具重写成 Node/TypeScript，
-代码在 desktop/ 目录。Python 侧保持原样作为对拍基准与回退方案。
-
-当前进度：后端与全部界面已移植；账号管理的 OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API 以及
-BrowserUse 引擎已按用户要求删除（见第二章第 8 节）。当前阶段：真实账号逐项测试。
+这是 Electron + TypeScript 的 ixBrowser 自动化工具（Google 账号批量管理），代码在 desktop/。
+当前状态：业务后端与全部界面已完成，真实账号逐项验证进行中。
 
 注意事项：
-- Stagehand 必须锁 3.7.3，不可升级（原因见 PROGRESS.md 第三章）
-- 改动提示词或选择器后必须跑 pnpm verify:prompts 与 pnpm verify:selectors
-- 所有移植以「与 Python 逐字对齐」为准，不要"优化"提示词或判定顺序
+- Stagehand 必须锁 3.7.3，不可升级（原因见第三章）
+- 窗口备注（note）字段由用户自己维护，自动化任务一律不读写它
+- 引擎判定必须锚定真实页面文本 / DOM / URL，不要相信 act() 的成功返回
+- 改动后必须跑：npm run typecheck + npm test + npm run typecheck:app
 ```
 
 ### 第二步：验证环境没坏
 
 ```powershell
 cd D:\workspace\projects\auto_bitbrowser2\desktop
-pnpm install            # 若 node_modules 丢失
-pnpm typecheck          # 应无输出
-pnpm test               # 应 394/394 通过
-pnpm typecheck:app      # Electron 骨架，应无输出
-pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"   # 应 100%（49/49）
-pnpm verify:selectors   # 应 0 缺失
+pnpm install           # 若 node_modules 丢失
+pnpm run typecheck     # 应无输出
+pnpm test              # 应 563/563 通过
+pnpm run typecheck:app # 应无输出
 ```
 
-四项全绿说明代码与文档一致，可以放心继续。
-
-> ⚠️ 已知环境坑：本机某些 shell 会话里，`pnpm typecheck` / `pnpm test` 会拉起一个
-> cmd.exe 横幅并吞掉脚本输出、掩盖非零退出码。拿不准时直接跑底层命令：
-> `npx tsc -p tsconfig.json --noEmit` 与
-> `node --test --experimental-strip-types --experimental-sqlite test/*.test.mjs`。
-
-### 第三步：确认 Python 侧基线
-
-```powershell
-cd D:\workspace\projects\auto_bitbrowser2
-.\.venv\Scripts\python.exe -m pytest -q
-# 基线：70 passed, 5 failed（那 5 个是 HEAD 上既有的，不是回归）
-```
-
-### 若 scratch 已被清理
-
-`pnpm verify:prompts` 需要一个 `ops_spec.json` 路径参数。该文件随 scratch 清理会消失，
-用仓库内的脚本重建：
-
-```powershell
-# 在项目根目录执行
-.\.venv\Scripts\python.exe desktop\scripts\extract-ops-spec.py "$env:PI_SCRATCH_DIR\ops_spec.json"
-cd desktop
-node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
-```
-
-产出的 JSON 含 `stagehand` 段（Python 侧全部 op 的提示词）；校验脚本用 `REMOVED_STAGEHAND_OPS`
-剔除已删除的 6 个 op（oauth / pro_status / unlock_403 / enable_sharing / join_family / family），剩 49 条。
-（BrowserUse 引擎已删除，不再比对其提示词、常量与 md 文件。）
+三条全绿说明代码与文档一致，可以放心继续。
 
 ### 工作目录速查
 
 | 位置 | 内容 |
 |---|---|
-| `desktop/PROGRESS.md` | 本文件——进度、决策、坑 |
-| `desktop/ENGINE_SLICE_REPORT.md` | 引擎切片验证报告（Stagehand 版本约束的原始依据） |
-| `desktop/src/services/` `src/db/` | services 层（已完成） |
-| `desktop/src/engine/` | Stagehand 引擎层（已完成） |
-| `desktop/src/automation/` | 业务流程层（进行中） |
-| `desktop/scripts/` | 三个校验/提取脚本 |
-| `desktop/app/` | Electron 骨架（主进程 / 后端进程 / preload / 渲染层） |
-| `desktop/test/` | 394 个单测（含 `app-*.test.mjs`） |
-| Python 侧（`core/` `services/` `automation/`） | **勿动**，对拍基准 |
+| `CLAUDE.md` | 项目架构、通道约定、协作准则（**权威指引**） |
+| `desktop/PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
+| `desktop/src/` | 业务库（不依赖 Electron，可单独单测） |
+| `desktop/app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
+| `desktop/test/` | 单测（563 个，含 `app-*.test.mjs`） |
+| `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
 
 ## 一、当前状态速览
 
-| 层 | 进度 | 文件 | 行数 |
-|---|---|---|---|
-| `core`（配置 / 重试 / 并发 / 解析） | ✅ 完成 | 5 | ~1500 |
-| `services`（数据与服务） | ✅ 完成 | 13 | ~3400 |
-| `engine`（Stagehand 引擎） | ✅ 完成 | 17 | ~4300 |
-| `browseruse`（BrowserUse 引擎） | 🗑️ 已删除（用户要求） | — | — |
-| `automation`（业务流程） | ✅ 保留登录 + 5 个 AI 任务 | 12 | ~2350 |
-| 前端界面 | ✅ 骨架 + 全部页面（首页 / 5 个 AI 任务页 / 账号管理 / 导入 TOTP / 设置） | — | — |
+| 层 | 进度 | 职责 |
+|---|---|---|
+| `src/core` | ✅ 完成 | 配置（敏感字段加解密）/ 重试与失败队列 / 强随机密码 |
+| `src/db` | ✅ 完成 | SQLite schema、连接、各 repository（账号 / 任务历史等） |
+| `src/engine` | ✅ 完成 | Stagehand 引擎门面 + `operations/`（登录 / 换号 / 改 2SV / 改验证器 / 踢设备 / 改密码） |
+| `src/automation` | ✅ 完成 | 各 `auto-*` 业务流程 |
+| `src/application` | ✅ 完成 | AI 任务编排 / 批量账号任务 / 健康巡检 / 导入 TOTP / 从模板建窗口 |
+| `app/` | ✅ 完成 | Electron 三层（main / host / renderer）+ 全部页面 |
 
 **质量门（全绿）**：
+
 ```powershell
 cd desktop
-pnpm typecheck          # tsc strict 零错误
+pnpm run typecheck      # tsc strict 零错误
 pnpm test               # 563/563 通过
-pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
-pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
-                        # 覆盖率 94.7%：12 条（6 modify_2sv + 6 kick_devices）改写提示词已登记「有意不比对」，
-                        # 余 2 条缺失是 login.py 的既有偏差
-pnpm verify:selectors   # 选择器缺失 0（197/197）
+pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 ```
-
 ## 二、已完成部分
 
 ### 1. services 层（全部）
@@ -237,7 +203,7 @@ ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → 
 
 - 新增事件 `abb/task/event/item`（`TaskApi.item()`），对标 Python AI Worker 的 `progress(email, status, message)`，逐行更新「状态 / 消息」列
 - 新增模块：`src/application/{ai-task-runner,totp-import}.ts`、`src/core/totp-extractor/*`（migration protobuf 手写解析，零依赖）；渲染层二维码识别用 `jsqr`（canvas 取像素）
-- **与 Python 对拍**：`test/fixtures/totp-python-parity.json` 由 Python 生成（migration 4 组覆盖多账号 / SHA256·512 / 8 位 / HOTP / 中文名 / 未知字段号 / 去填充 base64，标准 URI 6 组），另 6 组异常输入逐条比对，全部一致
+- **与 Python 对拍**：`test/fixtures/totp-parity-vectors.json` 由 Python 生成（migration 4 组覆盖多账号 / SHA256·512 / 8 位 / HOTP / 中文名 / 未知字段号 / 去填充 base64，标准 URI 6 组），另 6 组异常输入逐条比对，全部一致
 
 **与 Python 的有意偏差**：
 - AI 任务**执行前按 profileId 重新读取窗口名，必须等于 email 才执行**，否则跳过记失败（Python 的 email 就是窗口名，二者天然绑定；这里防止界面数据过期时用 A 的密码操作 B 的窗口）
@@ -682,60 +648,35 @@ grep 复核，未真机跑（验证它要真的改一次验证器）。
 | 渲染层 CSP | 含 `script-src 'unsafe-inline'` | 移除，补 `object-src/base-uri/form-action 'none'`；仅 dev 由 `devRelaxCsp()` 放宽 |
 | `renderer/stores/host-status.ts` | 按 `since` 墙钟去重，时钟回拨会丢状态 | 改按 `seq` |
 
-## 四、自动化校验工具（务必使用）
+## 四、已移除的校验工具
 
-改动提示词或选择器后必须跑：
+原来的 `verify:prompts` / `verify:selectors` 两个脚本以 **Python 源码为基准**（提示词逐条对拍、选择器提取）。
+Python 侧删除后，前者再也生成不出 `ops_spec.json`、后者会退化成「0 个选择器」的**假绿**，因此一并删除
+（`desktop/scripts/` 整个目录已移除）。
 
-```powershell
-cd desktop
-pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
-pnpm verify:selectors
-```
-
-`verify:prompts` 逐条比对 Stagehand 提示词（保留的 op 共 **49 条**），已删除的 op 由 `REMOVED_STAGEHAND_OPS` 排除。
-
-`ops_spec.json` 由 `scripts/extract-ops-spec.py` 从 Python 侧生成（重建命令见第零章）。
-
+现在新增或修改 `src/engine/operations/` 里的选择器与提示词时，靠 `test/engine-*.test.mjs` 的真机回归用例兜底。
 ## 五、下一步
 
-1. **`auto-join-family.ts`** —— ❌ 用户确认不需要，不移植（Python 侧保留原样）
-2. **`batch_account_processor.ts`** —— ✅ 已完成（本轮），见「三、batch 移植的审查修正」
-3. **前端界面** —— 骨架 ✅、第一批（首页 / 账号管理 / 设置）✅、第二批（5 个 AI 任务页 / 导入 TOTP）✅，Python GUI 的全部页面已移植。后续：
-   - 5 个 AI 页接入 SMS-Bus / IMAP 验证码：**用户确认不需要**，与 Python GUI 保持一致（触发验证码即判失败）
-   - 家庭组加入：**用户确认不需要，不移植**（界面入口与后端代码均已删除）
-   - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
-   - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
-   - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机 / 踢出设备** 五个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
-   - **任务历史（F4）**：新增 `task_run_history` / `task_run_items` 两表 + 设置页「任务历史」页签 + CSV 导出；真机跑首页批量打开窗口时发现「任务成功但历史 `total=0`」（任务体从不调 `api.item`），修掉后同一路径复跑 `total=2 / 成功 1 / 失败 1 / 逐条目 2 条`，详见 `.trellis/tasks/09-24-task-history-real-run/real-run-log.md`
-   - **账号健康巡检（F2）**：账号管理页新增「健康巡检」按钮，只读判定 `ok / need_login / suspended / window_error`
-     并写回 `login_status` / `last_error`；真机（窗口 7）真实邮箱 → `ok`、不匹配邮箱 → `need_login`，
-     只读审计证明没有调用任何写操作。顺带修掉登录卡在「选择验证方式」页的既存缺陷（验证码一直没被填），
-     详见 `.trellis/tasks/09-24-health-check-real-run/real-run-log.md`
-   - **从模板创建窗口（F3）**：首页「根据模板创建窗口」接上真实实现（官方 `profile-copy` + 「前缀_序号」命名 +
-     目标分组，界面带个数输入与确认框）；真机创建 → 12 项配置与模板一致 → 列表可见 → 删除 → 窗口列表恢复原状。
-     真机暴露并修掉「新窗口 ID 丢失」（`profile-copy` 的 `data` 是裸数字，不是 `{profile_id:N}`），
-     详见 `.trellis/tasks/09-24-create-windows-real-run/real-run-log.md`
-   - **修改密码（F1）**：勾账号后系统自动生成强随机密码，**确认 Google 侧改成功**才写回数据库与窗口
-     `password` 字段（**窗口备注一律不碰** —— 备注是用户手工维护的笔记区）。真机第一轮「改成功却判定失败」
-     把新密码弄丢了（根因：真机确认文案是「已成功更改」，而成功词表只有「已更改」），恢复后复跑端到端通过。
-     已修：词表缺口、提交后记页面文本、兜底判据取正例、静态提示词不再当拒绝、op 日志接通任务日志，
-     详见 `.trellis/tasks/09-24-change-password-real-run/real-run-log.md`
+1. **`auto-join-family.ts`** —— ❌ 用户确认不需要（界面入口与后端代码均已删除）
+2. **`batch-account-processor.ts`** —— ✅ 已完成
+3. **前端界面** —— ✅ 全部页面已完成（首页 / 账号管理 / AI 任务页 / 导入 TOTP / 设置 / 状态）
+   - AI 页接入 SMS-Bus / IMAP 验证码：**用户确认不需要**（触发验证码即判失败）
+   - 家庭组加入：**用户确认不需要**
+   - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除
+   - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess 中直接使用
+   - **真机回归已完成**：打开窗口 / 批量绑定 / 批量登录 / 替换手机号 / 替换辅助邮箱 / 修改验证器 /
+     修改 2SV 手机 / 踢出设备 / 导入 TOTP / 任务历史（F4）/ 健康巡检（F2）/ 从模板创建窗口（F3）/
+     修改密码（F1）—— 各自独立复跑成功，并与账号真实状态只读核对一致。
+     详见 `.trellis/tasks/09-24-*-real-run/real-run-log.md`
+   - **仍欠真机验证**：设置页的账号与代理导入导出、批量登录的多账号边界、各页 GUI 按钮的真点击
 
-## 六、Python 侧现状（勿动）
-
-Python 代码**保持原样可用**，是当前的对拍基准与回退方案：
-- `core/` `services/` `automation/` `application/` `gui/` 全部未修改
-- `pytest -q` 基线：70 passed / 5 failed（5 个失败是 HEAD 上既有的）
-- ixBrowser 依赖服务端口 53200
-
-## 七、环境备忘
+## 六、环境备忘
 
 | 项 | 值 |
 |---|---|
 | Node | 22.19（需 `--experimental-sqlite`、`--experimental-strip-types`） |
-| 包管理 | pnpm 10.28 |
+| 包管理 | pnpm 10.28（见 `desktop/pnpm-lock.yaml`） |
 | 运行探针 | `pnpm probe:ix`（ixBrowser 只读）、`pnpm probe:db`（数据库只读） |
-| Python 对照 | `.\.venv\Scripts\python.exe` |
 
 **已知告警（可忽略）**：
 - `node:sqlite` 与类型剥离都还是 experimental，会打警告

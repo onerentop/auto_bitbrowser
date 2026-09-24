@@ -12,8 +12,6 @@
     "test": "node --test --experimental-strip-types --experimental-sqlite test/*.test.mjs",
     "probe:ix": "node --experimental-strip-types src/ixbrowser/probe.ts",
     "probe:db": "node --experimental-strip-types --experimental-sqlite src/db/probe.ts",
-    "verify:prompts": "node scripts/verify-prompts.mjs",
-    "verify:selectors": "node scripts/verify-selectors.mjs",
     "dev": "electron-vite dev",
     "build:app": "electron-vite build",
     "preview:app": "electron-vite preview",

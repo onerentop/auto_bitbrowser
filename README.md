@@ -1,8 +1,9 @@
 # ixBrowser Automation Tool (ixBrowser 自动化管理工具)
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg) ![Electron](https://img.shields.io/badge/Electron-44-blue.svg) ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)
 
-这是一个基于 Python/PyQt6 开发的 ixBrowser 自动化管理工具，支持批量创建窗口、自动分配代理、自动化提取 SheerID 验证链接以及账号资格检测等功能。
+批量管理 Google 账号的桌面工具：驱动 ixBrowser 指纹浏览器批量完成登录、账号信息修改与状态检测。
+基于 **Electron + TypeScript + React** 重写（旧的 Python/PyQt6 实现已移除）。
 
 使用教程文档：https://docs.qq.com/doc/DSEVnZHprV0xMR05j?no_promotion=1&is_blank_or_template=blank
 
@@ -20,151 +21,85 @@
 
 ## ✨ 功能特性 (Features)
 
-* **批量窗口创建**:
-  * **模板克隆**: 支持通过输入模板窗口 ID 进行克隆。
-  * **默认模板**: 内置通用配置模板，一键快速创建。
-* **智能命名**:
-  * **自定义前缀**: 支持输入窗口名前缀 (如 "店铺A")，自动生成 "店铺A_1", "店铺A_2"。
-  * **自动序号**: 若不指定前缀，自动使用模板名称或 "默认模板" 加序号。
-* **数据库配置管理**: 通过配置管理界面添加账号和代理，数据存储在 SQLite 数据库中。
-* **2FA 验证码管理**: 自动从浏览器备注或配置中提取密钥，批量生成并保存 2FA 验证码。
-* **SheerID 链接提取**:
-  * 全自动打开浏览器 -> 登录 Google -> 跳转活动页 -> 提取验证链接。
-  * **精准状态识别**: 自动区分 5 种账号状态：
-    1. 🔗 **有资格待验证**: 获取到 SheerID 验证链接。
-    2. ✅ **已验证未绑卡**: 有资格且已验证（显示 "Get student offer"）。
-    3. 💳 **已绑卡订阅**: 已订阅/已绑卡状态。
-    4. ❌ **无资格**: 检测到 "此优惠目前不可用"。
-    5. ⏳ **超时/错误**: 检测超时 (10s) 或其他提取异常。
-  * **多语言支持**: 内置多语言关键词库及自动翻译兜底，支持全球各种语言界面的账号检测。
-* **🎯 自动绑卡功能** (NEW!):
-  * **智能 iframe 识别**: 自动处理 Google Payments 的复杂嵌套 iframe 结构。
-  * **一键绑卡**: 自动填写卡号、过期日期、CVV 并提交。
-  * **订阅激活**: 自动点击订阅按钮完成整个流程。
-  * **容错机制**: 支持多种页面结构，适配不同账号状态。
-* **📊 Web 管理界面** (NEW!):
-  * **数据库管理**: SQLite 数据库作为单一数据源，自动同步文本文件。
-  * **实时查看**: 浏览器访问 `http://localhost:8080` 查看所有账号状态。
-  * **筛选搜索**: 支持按状态筛选、关键词搜索。
-  * **批量导出**: 一键导出符合条件的账号数据。
-  * **点击复制**: 所有字段一键点击复制，提升操作效率。
-  * **自动启动**: GUI 启动时自动在后台启动 Web 服务。
-* **批量操作**: 支持批量打开、关闭、删除窗口。
-
-## 🧭 架构改造计划
-
-架构改造执行计划已保存至：`docs/architecture_refactor_plan.md`
-
-当前已进入 Phase 4，正在逐步统一自动化适配层并持续收敛 GUI 业务逻辑到应用服务层（`application/`）。
+* **窗口管理（首页）**:
+  * 列出 / 打开 / 关闭 / 删除 ixBrowser 窗口，支持批量操作。
+  * **根据模板创建窗口**: 用官方 `profile-copy` 克隆（不是手工映射字段，避免漏字段变成默认值），
+    支持自定义前缀自动编号（`店铺A_1`、`店铺A_2`…），空前缀则沿用模板窗口名。
+* **账号管理**:
+  * 账号增删改查、状态与 Pro / 家庭组信息一览。
+  * **批量登录**: 自动填邮箱、密码、TOTP 验证码；遇「选择验证方式」页会自动选验证器。
+  * **批量绑定 / 解绑窗口**: 按窗口名（= 邮箱）匹配并校验，防止用 A 的密码操作 B 的窗口。
+  * **健康巡检**: 批量只读判定每个账号在窗口里的会话状态（已登录 / 需要登录 / 已停用 / 窗口异常），
+    并把结论写回数据库。判定过程不调用任何写操作。
+* **AI 批量任务**（逐账号串行执行，每个都会留下可复盘的任务日志）:
+  * **替换手机号**、**替换辅助邮箱**（辅助邮箱可留空表示移除）
+  * **修改验证器**: 生成新 TOTP 密钥并写回数据库、历史表、`已修改密钥.txt` 与窗口的 `tfa_secret`
+  * **修改 2SV 手机**、**踢出设备**
+  * **修改密码**: 自动生成 20 位强随机密码；**确认 Google 侧改成功之后**才写回数据库与窗口 password 字段
+* **导入 TOTP 密钥**:
+  * 文本模式（`邮箱----密钥`、URI 等）与二维码模式（截图 / Google Authenticator 导出）。
+  * 写入数据库 `secret_key` 与窗口 `tfa_secret`。**不碰窗口备注**（备注是用户自己的笔记区）。
+* **设置**:
+  * 账号（含批量导入 / 导出）、代理（增删改 + 绑定窗口）、配置（AI provider / 密钥、并发数）。
+  * **任务历史**: 批量任务的结果会落库（含逐条目），可在界面查看并**导出 CSV**。
 
 ## 🛠️ 安装与使用 (Installation & Usage)
 
-### 方式一：直接运行 (推荐)
+### 前置条件
 
-无需安装 Python 环境，直接下载 Release 中的 `.exe` 文件运行即可。
+1. **ixBrowser 必须已启动**：所有窗口操作都依赖本地服务 `127.0.0.1:53200`。
+2. **AI API Key**：登录与全部 AI 任务都需要，在「设置 → 配置」里填写（敏感字段加密存储）。
 
-1. 下载 `ixBrowserAutoManager.exe`。
-2. 在同级目录下准备好配置文件 (见下文)。
-3. 双击运行程序。
-
-### 方式二：源码运行
-
-1. 克隆仓库:
-   ```bash
-   git clone https://github.com/yourusername/ixbrowser-auto-manager.git
-   ```
-2. 安装依赖:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. 安装 Playwright 浏览器驱动:
-   ```bash
-   playwright install chromium
-   ```
-4. 运行:
-   ```bash
-   python main.py
-   ```
-
-### 安全回归测试（配置敏感字段）
-
-用于验证 `ConfigManager` 的敏感字段加密、明文迁移与安全读取逻辑：
+### 开发运行
 
 ```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/test_config_manager_security.py -q
+cd desktop
+npm install
+npm run dev
 ```
 
-若本机暂未安装 `pytest`，可使用下面的一键最小验证命令：
+### 校验命令
 
 ```bash
-python -c "import pathlib,tempfile; from tests.test_config_manager_security import test_set_api_key_encrypts_on_disk_and_decrypts_on_read,test_plaintext_sensitive_fields_are_migrated_on_load,test_generic_set_on_sensitive_key_is_auto_encrypted; td=tempfile.TemporaryDirectory(); p=pathlib.Path(td.name); test_set_api_key_encrypts_on_disk_and_decrypts_on_read(p); test_plaintext_sensitive_fields_are_migrated_on_load(p); test_generic_set_on_sensitive_key_is_auto_encrypted(p); print('config security tests: PASS')"
+cd desktop
+npm run typecheck        # 类型检查
+npm test                 # 单元测试
+npm run typecheck:app    # Electron 骨架（主进程 + 渲染层）类型检查
+npm run build:app        # 打包
 ```
 
 ## ⚙️ 配置说明 (Configuration)
 
-### 1. 配置管理界面（推荐）
+### 1. 数据目录
 
-程序采用 **数据库驱动** 架构，账号和代理数据统一存储在 SQLite 数据库中。
+程序采用 **数据库驱动** 架构：账号、代理、历史记录统一存在 SQLite 数据库里，界面直接读写数据库。
 
-**使用方法**：
-1. 启动程序后，点击 **「工具箱」** 按钮展开左侧面板
-2. 在 **「配置管理」** 分区中点击 **「打开配置管理」**
-3. 在配置管理界面中：
-   - **账号管理**：添加、编辑、删除账号信息
-   - **代理管理**：添加、编辑、删除代理配置
-   - **卡片管理**：管理绑卡用的虚拟卡信息
-   - **全局设置**：配置 AI API 密钥、并发数等
+数据根目录（`accounts.db` / `config.json` 所在处）由启动时决定；开发时默认是仓库根目录。
 
 **账号字段说明**：
 | 字段 | 说明 |
 |------|------|
-| 邮箱 | Google 账号邮箱（必填） |
+| 邮箱 | Google 账号邮箱（必填，AI 任务执行前会校验「窗口名 == 邮箱」） |
 | 密码 | 账号密码（必填） |
 | 辅助邮箱 | 备用恢复邮箱（可选） |
 | 2FA 密钥 | TOTP 密钥（可选） |
-| 状态 | pending/link_ready/verified/subscribed/error |
+| 状态 | pending / link_ready / verified / subscribed / error |
 
 **代理格式支持**：
 - Socks5: `socks5://user:pass@host:port`
 - HTTP: `http://user:pass@host:port`
 - 简化格式: `host:port:user:pass`
 
-### 2. 卡片管理
+配置模板见 `data/config.example.json`。
 
-在配置管理界面的「卡片管理」标签页中添加虚拟卡信息。
+### 2. 程序生成的文件
 
-**卡片字段说明**：
-| 字段 | 说明 |
-|------|------|
-| 卡号 | 13-19位数字 |
-| 月份 | 01-12（两位数） |
-| 年份 | 年份后两位，如2032年填32 |
-| CVV | 3-4位安全码 |
-| 姓名 | 持卡人姓名（默认 John Smith） |
-| 邮编 | 账单邮编（默认 10001） |
+* **accounts.db**: SQLite 数据库（账号、代理、任务历史的唯一存储）。
+* **config.json**: 配置（敏感字段加密；已被 `.gitignore` 忽略，不要提交）。
+* **已修改密钥.txt**: 「修改验证器」写入的新密钥备份。
+* **failed_tasks.json**: 失败任务队列（用于断点重试）。
 
-💳 **虚拟卡推荐**：[HolyCard](https://www.holy-card.com/) - 支持Gemini订阅、GPT Team、0刀Plus，一张低至2R
-
-### 3. 输出文件 (程序自动生成)
-
-* **accounts.db**: SQLite 数据库文件（所有账号信息的核心存储）。
-* **sheerIDlink.txt**: 成功提取的验证链接 (有资格待验证已提取链接)。
-* **有资格待验证号.txt**: 有资格但还未提取验证链接的账号。
-* **已验证未绑卡.txt**: 已通过学生验证但未绑卡的账号。
-* **已绑卡号.txt**: 已完成绑卡订阅的账号。
-* **无资格号.txt**: 检测到无资格 (不可用) 的账号。
-* **超时或其他错误.txt**: 提取超时或发生错误的账号。
-* **sheerID_verified_success.txt**: 验证成功的 SheerID 链接。
-* **sheerID_verified_failed.txt**: 验证失败的链接及原因。
-* **2fa_codes.txt**: 生成的 2FA 验证码。
-
-### 5. Web 管理界面
-
-程序启动后，自动在后台启动 Web 服务器（端口 8080）。
-
-1. 打开浏览器访问: `http://localhost:8080`
-2. 即可查看所有账号状态、搜索筛选、批量导出等。
+> 窗口**备注（note）字段由用户自己维护**，所有自动化任务都不会读写它。
 
 ## 🤝 联系与交流 (Community)
 

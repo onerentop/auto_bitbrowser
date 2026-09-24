@@ -1,59 +1,66 @@
 # CLAUDE.md
 
-> **Last Updated**: 2026-09-23
+> **Last Updated**: 2026-09-24
 
 本文件为 Claude Code (claude.ai/code) 在本仓库工作时提供指引。
 
 ## Changelog
 
 | Date | Changes |
-| ------ | --------- |
-| 2026-09-23 | **移除 5 个功能**：SheerID 验证、绑卡订阅、获取 SheerLink、综合查询、全自动订阅占位页，连同卡片管理标签页与底层引擎操作一并删除；同步删除失效的 `gui/config_ui.py` |
-| 2026-09-23 | **全面重写**：修正已失效的架构描述（`core/ai_browser_agent/` 早已删除）；补充双 AI 引擎、`application/` 应用服务层、`services/repositories/` 仓储层、Fluent GUI 实际界面清单；新增 `pytest.ini` 与测试基线说明 |
-| 2026-02-02 | AI context 初始化（**此版本描述的架构已失效**） |
-| 2026-01-23 | 目录结构优化，重构为模块化组织 |
+| ---- | --------- |
+| 2026-09-24 | **移除 Python 侧**：`core/` `services/` `automation/` `application/` `gui/` `web_admin/` `tests/`、`main.py`、`pytest.ini`、`requirements*.txt`、`.venv/`、`dist/` 全部删除；随之删掉 `verify:prompts` / `verify:selectors` 两个以 Python 源码为基准的校验脚本；本文件重写为桌面端（Electron + TypeScript）架构 |
+| 2026-09-24 | 桌面端承接全部功能：窗口管理、账号管理（批量登录 / 绑定 / 健康巡检）、6 个 AI 批量任务、导入 TOTP、设置与任务历史 |
+| 2026-02-02 | AI context 初始化（**此版本描述的架构已不存在**） |
 
 ---
 
 ## 项目概述
 
-**ixBrowser 自动化管理工具** —— 基于 Python + PyQt6-Fluent-Widgets 的桌面应用，
-驱动 ixBrowser 指纹浏览器批量完成 Google 账号自动化：家庭组邀请/加入、
-家庭组邀请/加入、2SV 手机与辅助邮箱/验证器修改、设备踢出、Pro 会员状态检测。
+**ixBrowser 自动化管理工具** —— 基于 **Electron + TypeScript + React** 的桌面应用，
+驱动 ixBrowser 指纹浏览器批量管理 Google 账号：批量登录、账号信息修改（手机号 / 辅助邮箱 /
+2SV 手机 / 验证器 / 密码）、踢出设备、会话状态巡检、TOTP 密钥导入、任务结果持久化与导出。
 
-- 规模：**131 个 Python 文件 / 约 33,700 行**
-- 入口：`main.py` → `gui/main_window_fluent.py::run_fluent_app()`
+- 入口：`desktop/app/main/index.ts`（Electron 主进程）
+- 界面：`desktop/app/renderer/src/App.tsx`
+- 业务后端：`desktop/app/host/`（跑在 `utilityProcess` 里）
+- 业务库：`desktop/src/`（不依赖 Electron，可单独测试）
+
+> 旧版本（Python 3.13 + PyQt6）已于 2026-09-24 整体移除，不再是本项目的对拍基准或回退方案。
 
 ### 技术栈
 
 | 分类 | 技术 |
 | ------ | ------ |
-| 语言 | Python 3.13（`.venv`） |
-| GUI | PyQt6 + PyQt6-Fluent-Widgets（`FluentWindow` 左导航布局） |
-| 浏览器自动化 | Playwright（CDP 连接 ixBrowser）、Selenium（备用） |
-| AI 引擎 | **Stagehand SDK**（主力）+ **BrowserUse 自研引擎**（新，迁移中） |
-| LLM | OpenAI / Anthropic / Google Gemini（通过统一适配层） |
-| 数据库 | SQLite（`accounts.db`） |
-| 浏览器 SDK | `ixbrowser-local-api`（本地服务端口 **53200**） |
+| 运行时 | Node.js ≥ 22.19 |
+| 桌面框架 | Electron 44（薄主进程 + `utilityProcess` 后端） |
+| 界面 | React 19 + Ant Design 5 + Vite（electron-vite） |
+| 浏览器自动化 | Stagehand SDK 3.7.3（`@browserbasehq/stagehand`）+ playwright-core（CDP 连接 ixBrowser） |
+| LLM | OpenAI / Anthropic / Google Gemini（`ai` SDK，经统一适配层） |
+| 数据库 | SQLite（`node:sqlite`） |
+| 浏览器服务 | ixBrowser 本地 API（`127.0.0.1:53200`） |
 
 ---
 
 ## 快速开始
 
 ```powershell
-# 依赖（运行时 + 开发）
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m playwright install chromium
+cd desktop
+pnpm install
+pnpm run dev                        # 启动应用（需 ixBrowser 已运行在 :53200）
 
-# 启动 GUI（长驻进程，需在用户终端手动运行）
-.\.venv\Scripts\python.exe main.py
+# 校验
+pnpm run typecheck                  # 业务库类型检查
+pnpm run typecheck:app              # 主进程 + 渲染层类型检查
+pnpm test                           # 单元测试（node:test）
+pnpm run build:app                  # 打包
+```
 
-# 跑测试
-.\.venv\Scripts\python.exe -m pytest -q
+真机诊断（需 ixBrowser 已启动）：
 
-# 手动诊断 ixBrowser 连接（需 ixBrowser 已启动）
-.\.venv\Scripts\python.exe tests\test_ixbrowser_api.py
+```powershell
+cd desktop
+pnpm run probe:ix                   # ixBrowser 连接探针
+pnpm run probe:db                   # 数据库探针
 ```
 
 ---
@@ -62,92 +69,66 @@
 
 ```mermaid
 graph TB
-    subgraph L1["gui/ — 界面层 (20 文件 / 6.0k 行)"]
-        MWF["main_window_fluent.py<br/>MainFluentWindow"]
-        AMI["account_manager_interface.py<br/>1811 行 ⚠"]
-        SET["setting_interface.py<br/>设置页（账号/代理/配置）"]
-        FEAT["*_interface.py<br/>各功能页"]
+    subgraph R["app/renderer/ — React 界面"]
+        PAGES["pages/ — 首页 / 账号管理 / AI 任务 ×6 / 导入TOTP / 设置 / 状态"]
+        STORES["stores/ — 后端状态、任务坞"]
     end
 
-    subgraph L2["application/ — 应用服务层 (6 文件 / 1.2k 行)"]
-        ATO["account_task_orchestrator.py<br/>异步任务编排"]
-        AEA["automation_engine_adapter.py<br/>统一调用入口"]
-        AMS["account_manager_service.py"]
-        SS["settings_service.py"]
+    subgraph M["app/main/ — Electron 主进程（薄壳）"]
+        WIN["window.ts / navigation.ts"]
+        HOSTC["host/host-client.ts — 后端生命周期"]
+        IPC["ipc/registrar.ts — 来源校验"]
     end
 
-    subgraph L3["automation/ — 业务流程层 (15 文件 / 6.1k 行)"]
-        BAP["batch_account_processor.py<br/>1942 行 ⚠"]
-        PSD["pro_status_detector.py"]
-        AUTO["auto_*.py × 13"]
+    subgraph H["app/host/ — 业务后端（utilityProcess）"]
+        DISP["dispatch.ts — 通道分发"]
+        TR["task-runner.ts — 任务坞（进度 / 停止 / 逐条目）"]
+        HANDLERS["handlers/ — 各通道处理逻辑"]
     end
 
-    subgraph L4A["core/stagehand_engine/ — 主力引擎"]
-        SE["engine.py 1446 行"]
-        OPS["operations/ × 12"]
+    subgraph LIB["src/ — 业务库（不依赖 Electron）"]
+        ENG["engine/ — StagehandGoogleEngine + operations/"]
+        AUTO["automation/ — auto-* 业务流程"]
+        APP["application/ — 用例编排"]
+        DB["db/ — SQLite + repository"]
+        IX["ixbrowser/ — ixBrowser 客户端"]
+        CORE["core/ — 配置 / 重试 / 随机密码"]
     end
 
-    subgraph L4B["core/browseruse_engine/ — 新引擎"]
-        BE["engine.py"]
-        AG["agent/ · dom/ · llm/ · tools/"]
-        BOPS["operations/join_family"]
-    end
+    IXB[("ixBrowser :53200")]
+    LLM[("OpenAI / Anthropic / Gemini")]
+    SQL[("accounts.db")]
 
-    subgraph L5["services/ — 服务层 (20 文件 / 6.7k 行)"]
-        DB["database.py<br/>DBManager Facade"]
-        REPO["repositories/ × 6"]
-        IXA["ix_api.py / ix_window.py"]
-        EXT["sub2api · sms_bus · imap"]
-    end
-
-    subgraph EXTSVC["外部服务"]
-        IXB[("ixBrowser :53200")]
-        LLM[("OpenAI / Anthropic / Gemini")]
-        SID[("SMS-Bus 接码")]
-        GOOG[("Google One / Accounts")]
-    end
-
-    MWF --> AMI & SET & FEAT
-    AMI --> ATO --> AEA --> BAP & AUTO
-    FEAT --> AEA
-    SET --> SS
-    BAP --> SE & BE
-    PSD --> SE & BE
-    AUTO --> SE
-    SE --> OPS --> GOOG
-    BE --> AG --> BOPS
-    SE & BE -.CDP.-> IXA --> IXB
-    SE & BE --> LLM
-    DB --> REPO
-    EXT --> SID
-    ATO --> DB
+    PAGES --> STORES -->|IPC| WIN
+    WIN --> IPC --> HOSTC
+    HOSTC -->|postMessage| DISP
+    DISP --> HANDLERS --> TR
+    HANDLERS --> APP --> AUTO --> ENG
+    APP --> DB --> SQL
+    ENG -.CDP.-> IX --> IXB
+    ENG --> LLM
 ```
 
 ### 分层约定
 
 ```text
-gui/  →  application/  →  automation/  →  core/ 引擎
-                      ↘                 ↘
-                        services/  ←────┘（仅 ix_api，延迟 import）
+app/renderer/  ──IPC──▶  app/main/  ──▶  app/host/handlers/  ──▶  src/application/  ──▶  src/automation/  ──▶  src/engine/
+                                                                        │
+                                                                        └──▶  src/db/ · src/ixbrowser/ · src/core/
 ```
 
-- **GUI 不直接调 `automation/` 或 `services/`**，一律经 `application/` 层
-- `application/automation_engine_adapter.py` 是 application → 底层的**唯一入口**
+- **主进程是薄壳**：不 import `desktop/src/` 任何模块（`pnpm run build:app` 后 `out/main/index.js` 里不应出现
+  IxBrowserClient / stagehand / playwright）。
+- **业务后端跑在 `utilityProcess`**：崩溃只影响后端，窗口不受影响。
+- **界面不直连底层**：一律经 `app/shared/channels/` 定义的通道 → `app/host/handlers/`。
+- **`src/` 不依赖 Electron**：因此可以用 `node --test` 直接单测。
 
----
+### 通道与 IPC 约定
 
-## 模块索引
-
-| 模块 | 路径 | 职责 | 子文档 |
-| ------ | ------ | ------ | -------- |
-| **入口** | `main.py` | 启动 Fluent GUI | - |
-| **gui** | `gui/` | PyQt6-Fluent 界面（8 个导航页） | [gui/CLAUDE.md](gui/CLAUDE.md) |
-| **application** | `application/` | 跨模块业务编排，隔离 GUI 与底层 | - |
-| **automation** | `automation/` | 具体自动化业务流程 | [automation/CLAUDE.md](automation/CLAUDE.md) |
-| **core** | `core/` | 双 AI 引擎、配置、重试、解析 | [core/CLAUDE.md](core/CLAUDE.md) |
-| **services** | `services/` | 数据库、ixBrowser API、外部服务 | [services/CLAUDE.md](services/CLAUDE.md) |
-| **web_admin** | `web_admin/` | Web 管理界面（仅 116 行，基本未启用） | [web_admin/CLAUDE.md](web_admin/CLAUDE.md) |
-| **tests** | `tests/` | pytest 用例 + 手动诊断脚本 | - |
+- 通道名形如 `abb/<域>/<动作>`，**第二段必须小写**（否则渲染层订阅收不到，F4 踩过）。
+- 信封：`{ok, data} | {ok:false, error:{code,message}}`；错误码
+  `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`。
+- 通道定义在 `app/shared/channels/*.ts`，**主进程 / 后端 / 渲染层共用同一份**。
 
 ---
 
@@ -155,275 +136,116 @@ gui/  →  application/  →  automation/  →  core/ 引擎
 
 ```text
 auto_bitbrowser2/
-├── main.py                          # 入口 → gui.main_window_fluent.run_fluent_app()
-├── pytest.ini                       # 测试配置（排除手动诊断脚本）
-├── config.json                      # 本地配置（gitignore，敏感字段加密）
-├── accounts.db                      # SQLite 主库（gitignore）
-│
-├── gui/                             # 界面层
-│   ├── main_window_fluent.py        # MainFluentWindow，左导航 13 项
-│   ├── base_interface.py            # BaseInterface / BaseDialogInterface
-│   ├── ai_task_interface.py         # AI 任务页基类
-│   ├── fluent_utils.py              # 主题、图标、消息框
-│   ├── home_interface.py            # 首页（窗口管理）
-│   ├── account_manager_interface.py # 账号管理 ⚠ 1811 行
-│   ├── setting_interface.py         # 设置页（账号/代理/配置 3 个标签页）
-│   ├── import_totp_interface.py     # TOTP 密钥导入（二维码识别）
-│   ├── replacephone_interface.py    # 替换手机号
-│   ├── replaceemail_interface.py    # 替换辅助邮箱
-│   ├── modify2sv_interface.py       # 修改 2SV 手机
-│   ├── modifyauth_interface.py      # 修改验证器
-│   ├── kickdevices_interface.py     # 踢出设备
-│   ├── placeholder_interface.py     # 占位页基类
-│   └── data_management/             # 账号/代理标签页与批量导入对话框
-│
-├── application/                     # 应用服务层
-│   ├── automation_engine_adapter.py # ★ application → 底层的唯一入口
-│   ├── account_task_orchestrator.py # 异步批量任务编排
-│   ├── account_manager_service.py   # 账号查询与批量参数准备
-│   ├── settings_service.py          # 设置页编排
-│   └── sub2api_settings_service.py  # Sub2API / SMS-Bus 配置
-│
-├── automation/                      # 业务流程层
-│   ├── batch_account_processor.py   # ⚠ 1942 行，批量调度核心
-│   ├── pro_status_detector.py       # Pro / 家庭组状态检测
-│   ├── auto_google_login.py         # Google 登录（含 TOTP）
-│   ├── auto_join_family.py          # 加入家庭组 → 已迁 BrowserUseEngine
-│   ├── auto_enable_family_sharing.py
-│   ├── auto_replace_email.py        # 换辅助邮箱（920 行）
-│   ├── auto_replace_phone.py        # 换手机号（849 行）
-│   ├── auto_replace_recovery_email.py / auto_replace_recovery_phone.py
-│   ├── auto_modify_2sv_phone.py / auto_modify_authenticator.py
-│   ├── auto_kick_devices.py         # 踢出设备
-│   ├── auto_unlock_403.py           # 解封 403
-│   └── auto_antigravity_oauth.py    # OAuth 授权
-│
-├── core/                            # 核心层
-│   ├── config_manager.py            # ConfigManager，含敏感字段加解密
-│   ├── retry_helper.py              # RetryHelper / FailedTaskQueue / with_retry
-│   ├── data_parser.py               # parse_account_line / build_account_line
-│   ├── totp_extractor/              # 二维码 → TOTP 密钥
-│   ├── stagehand_engine/            # ★ 主力引擎
-│   │   ├── engine.py                # StagehandGoogleEngine（1446 行）
-│   │   ├── config.py types.py constants.py
-│   │   └── operations/              # 12 个 Operation 类
-│   └── browseruse_engine/           # ★ 新引擎（自研 browser-use 架构）
-│       ├── engine.py protocol.py types.py
-│       ├── agent/                   # service / message_manager / prompts / views
-│       ├── dom/                     # service / serializer / views
-│       ├── llm/                     # base + adapters（OpenAI/Anthropic/Google）
-│       ├── tools/                   # registry / executor / actions
-│       └── operations/join_family.py
-│
-├── services/                        # 服务层
-│   ├── database.py                  # DBManager，1124 行，Facade
-│   ├── repositories/                # 从 database.py 下沉的仓储（6 个）
-│   │   ├── account_repository.py    account_io_repository.py
-│   │   ├── account_refresh_repository.py
-│   │   ├── proxy_repository.py      history_repository.py
-│   │   └── recovery_email_repository.py
-│   ├── ix_api.py / ix_window.py     # ixBrowser 底层 API / 窗口高层封装
-│   ├── sub2api_client.py            # Sub2API（aiohttp 异步）
-│   ├── sms_bus_client.py            # SMS-Bus 接码平台
-│   ├── email_code_reader.py         # Gmail IMAP 验证码
-│   ├── recovery_email_manager.py    # 辅助邮箱池
-│   ├── proxy_allocator.py / proxy_smart_allocator.py
-│   ├── invite_lock.py               # 防止重复邀请的线程安全锁
-│   ├── data_store.py                # proxies 内存数据
-│   └── account_manager.py
-│
-├── tests/                           # 20 文件 / 2039 行
-├── docs/                            # 设计与实施计划文档
-├── data/                            # 示例配置与数据
-└── web_admin/                       # Web 管理界面（:8080，基本未启用）
+├── desktop/                          # 应用主体
+│   ├── app/
+│   │   ├── main/                     # Electron 主进程（薄壳、生命周期、IPC 注册）
+│   │   ├── host/
+│   │   │   ├── index.ts              # utilityProcess 入口
+│   │   │   ├── context.ts            # 数据根 / 数据库 / 配置 / ixBrowser 客户端
+│   │   │   ├── dispatch.ts           # 通道分发
+│   │   │   ├── task-runner.ts        # 任务坞：进度、停止、逐条目、任务历史落库
+│   │   │   └── handlers/             # accounts / ai-tasks / home / settings / totp …
+│   │   ├── renderer/src/
+│   │   │   ├── App.tsx               # 导航与页面注册
+│   │   │   ├── pages/                # HomePage / AccountsPage / AiTaskPage / TotpImportPage / SettingsPage / StatusPage
+│   │   │   └── stores/               # 后端状态、任务坞
+│   │   └── shared/                   # channels（通道 + 类型）、ipc（通道常量）
+│   ├── src/
+│   │   ├── engine/
+│   │   │   ├── stagehand-engine.ts   # StagehandGoogleEngine（引擎门面）
+│   │   │   ├── operations/           # login / replace-* / modify-* / kick-devices / change-password …
+│   │   │   ├── constants.ts types.ts totp.ts
+│   │   ├── automation/               # auto-*.ts（各业务流程）+ shared.ts（引擎连接包装）
+│   │   ├── application/              # ai-task-runner / account-task-orchestrator / health-check / totp-import / create-windows
+│   │   ├── db/
+│   │   │   ├── schema.ts connection.ts
+│   │   │   ├── account-repository.ts task-history-repository.ts …
+│   │   ├── ixbrowser/client.ts       # ixBrowser 本地 API 客户端
+│   │   └── core/                     # config-manager / retry-helper / random-password
+│   ├── test/                         # node:test 用例（*.test.mjs）
+│   └── PROGRESS.md                   # 开发进度 + 真机验证记录
+├── data/config.example.json          # 配置模板
+├── accounts.db                       # 运行时数据（gitignore）
+├── config.json                       # 配置，敏感字段加密（gitignore）
+├── CLAUDE.md  README.md  LICENSE
+└── .trellis/  .pi/                   # AI 协作工具目录（gitignore）
 ```
 
 ---
 
-## 双 AI 引擎（重要）
+## 引擎（src/engine/）
 
-项目正处于引擎迁移中途，**两套引擎并存**，实现同一套 `EngineProtocol`，可互换。
+`StagehandGoogleEngine` 封装 Stagehand SDK，通过 CDP 连上 ixBrowser 窗口，对外提供：
 
-| | **StagehandGoogleEngine** | **BrowserUseEngine** |
-| --- | --- | --- |
-| 路径 | `core/stagehand_engine/` | `core/browseruse_engine/` |
-| 定位 | 主力，覆盖全部业务 | 新引擎，迁移目标 |
-| 实现 | 封装 Stagehand SDK，自然语言指令 | 自研 browser-use 架构，Agent 循环 + DOM 索引 + 动作注册 |
-| 覆盖操作 | **15 个** operations（登录/绑卡/2SV/换邮箱换号/踢设备/OAuth/订阅/解封/Pro/家庭组…） | **1 个**（`join_family`） |
-| 使用方 | 全部 14 个 `auto_*.py` | `auto_join_family.py`、`batch_account_processor.py`、`pro_status_detector.py` |
-| 版本 | `__version__ = "1.1.0"` | `__version__ = "1.0.0"` |
+- 基础动作：`navigate` / `wait` / `getCurrentUrl` / `getPageContent` / `getPageHtml` / `isVisible` /
+  `fill` / `click` / `clickByText` / `jsClick` / `pressKey` / `act` / `evaluateScript`
+- 业务操作（`operations/`）：`login` / `replace-phone` / `replace-email` / `replace-recovery-*` /
+  `modify-2sv` / `modify-auth` / `kick-devices` / `change-password`
 
-```python
-# 两者接口一致
-async with await StagehandGoogleEngine.connect_to_ixbrowser(browser_id) as engine:
-    result = await engine.login(email, password, totp_secret)
+**易踩的坑（都踩过）**：
 
-engine = await BrowserUseEngine.connect_to_ixbrowser(browser_id)
-try:
-    result = await engine.run("搜索并订阅 Google One")
-finally:
-    await engine.stop()
-```
-
-> **新增功能时**：除非明确要求迁移，默认沿用 `stagehand_engine`（生态完整）。
-> 涉及家庭组加入相关改动时注意它已在 `browseruse_engine` 上。
+- `act()` 是自然语言指令，**它的成功返回不代表页面真的如你所愿** —— 判定必须锚定真实页面文本 / DOM / URL。
+- Stagehand 的 `isVisible` 会把 `display:none` 容器里的 0×0 元素判成可见（真机在 Google 密码页
+  被 `#captchaimg` 误导过），因此引擎额外做了「渲染可见性复核」。
+- `clickByText` 的 `contains` 模式 + `data-abb-text-hit` 标记是为 Google 的 Material 列表项准备的
+  （它们的文本不以关键词开头，且对 DOM `click()` 不响应，需要坐标点击兜底）。
 
 ---
 
-## 核心类
+## 数据与文件
 
-### DBManager (`services/database.py`)
+- **数据库优先**：账号状态改动走 `src/db/` 的 repository，不要直接写文本文件。
+- **运行时数据**（`accounts.db` / `config.json` / `已修改密钥.txt` / `failed_tasks.json`）都在数据根目录，
+  开发时是仓库根目录；均已在 `.gitignore` 中，**不要提交**。
+- 工作目录里的 `accounts.db`、`已修改密钥.txt` 是**明文真实数据**，不要外泄到日志或输出。
 
-SQLite 数据层 Facade。逻辑正在逐步下沉到 `services/repositories/`，**新代码优先写 repository**。
+### ⚠️ 窗口备注（note）字段的约定
 
-**数据表**（17 张，来自实际库）：
+**窗口备注由用户自己维护，所有自动化任务都不读写它。**
 
-| 表 | 说明 |
-| --- | --- |
-| `accounts` | 账号主表 |
-| `cards` | 支付卡（遗留表，卡片管理功能已移除） |
-| `proxies` / `proxy_window_bindings` | 代理及窗口绑定 |
-| `account_refresh_tasks` / `account_refresh_task_items` | 批量刷新任务与明细 |
-| `phone_modification_history` | 手机号修改记录 |
-| `email_modification_history` | 邮箱修改记录 |
-| `sv2_phone_modification_history` | 2SV 手机修改记录 |
-| `authenticator_modification_history` | 验证器修改记录 |
-| `sheerid_verification_history` | SheerID 验证记录（遗留表，仅供综合数据 JOIN） |
-| `bind_card_history` | 绑卡记录（遗留表，仅供综合数据 JOIN） |
-| `recovery_email_pool` / `recovery_email_daily_usage` / `account_recovery_binding` | 辅助邮箱池、日用量、绑定关系 |
-| `learned_rules` | 学习到的规则 |
-
-**账号状态流转**（字段与文件映射保留，SheerID/绑卡界面已移除）：
-```text
-pending → link_ready → verified → subscribed
-      ↘ ineligible / error
-```
-
-### ConfigManager (`core/config_manager.py`)
-
-全局配置读写，**敏感字段自动加解密**（API key 等），支持点号路径。
-
-```python
-ConfigManager.get("ai_agent.model", "gemini-2.0-flash")
-ConfigManager.set("theme", "dark")
-ConfigManager.get_ai_provider_config("openai")   # 多 provider 配置
-ConfigManager.get_enabled_ai_providers()
-```
-
-配置文件：`config.json`（gitignore），模板见 `data/config.example.json`。
-
-### ixBrowser API (`services/ix_api.py` / `ix_window.py`)
-
-| 函数 | 说明 |
-| --- | --- |
-| `openBrowser(profile_id)` | 打开窗口，返回 CDP WebSocket 端点 |
-| `closeBrowser(profile_id)` | 关闭窗口 |
-| `createBrowser(name, proxy_config)` / `deleteBrowser(profile_id)` | 增删窗口 |
-| `get_profile_list(page, limit)` | 窗口列表 |
-| `update_profile_proxy(...)` | 更新代理 |
+真机教训（2026-09-24）：用户会在备注里手写历史密码等笔记，而当时有三条路径会写备注
+（改密替换第 2 段、导入 TOTP 整条重建、修改验证器按段数插密钥），互相覆盖，吃掉过用户手写的内容。
+现在：改密只写数据库 + 窗口 `password` 字段；导入 TOTP / 修改验证器只写 `tfa_secret`。
+**新增功能时不要碰 `note`。**
 
 ---
 
-## 导入约定
-
-```python
-# 应用服务层（GUI 应只依赖这一层）
-from application.automation_engine_adapter import AutomationEngineAdapter
-from application.account_task_orchestrator import AccountTaskOrchestrator
-
-# 服务层
-from services.database import DBManager
-from services.repositories import AccountRepository, HistoryRepository
-from services.ix_api import openBrowser, closeBrowser
-
-# 引擎
-from core.stagehand_engine import StagehandGoogleEngine, create_engine_from_config
-from core.browseruse_engine import BrowserUseEngine   # 延迟导入，避免循环依赖
-
-# 核心工具
-from core import ConfigManager, RetryHelper, parse_account_line
-```
-
----
-
-## 测试
-
-配置见 `pytest.ini`。当前基线：**70 passed, 5 failed, 1 skipped**。
+## 测试与门禁
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+cd desktop
+pnpm run typecheck          # 业务库 tsc --noEmit，零错误
+pnpm test                   # 全量单测（当前基线 563 通过 / 0 失败）
+pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
+pnpm run build:app          # 构建
 ```
 
-### 已知失败（HEAD 上预先存在，非新引入）
+> **已移除**：`verify:prompts` 与 `verify:selectors` —— 它们的比对基准是 Python 源码（提示词逐条对拍、
+> 选择器提取），Python 侧删除后一个会直接报错、另一个会退化成「0 个选择器」的**假绿**，因此一并删除。
+> 新增/修改 `operations/` 的选择器与提示词时，改为靠 `test/engine-*.test.mjs` 的真机回归用例兜底。
 
-```text
-tests/test_account_repository.py::test_account_repository_unlock_and_available_pro_filters
-tests/test_account_task_orchestrator.py::test_execute_single_join_family_success
-tests/test_browseruse_engine.py::TestBrowserState::test_browser_state
-tests/test_pro_status_family_detection.py::test_should_skip_secondary_family_check_when_payment_options_exist
-tests/test_stagehand_engine.py::TestStagehandGoogleEngine::test_navigate
-```
-
-> 修改相关模块时不要误把这些当成自己引入的回归；有余力应顺手修掉。
-
-### 手动诊断脚本（已在 pytest.ini 中排除）
-
-`tests/test.py` 与 `tests/test_ixbrowser_api.py` 需要真实 ixBrowser 服务，
-且后者在模块层替换 `sys.stdout`（会破坏 pytest 捕获）。只能手动单独运行。
-
----
-
-## 开发注意事项
-
-### 前置条件
-
-1. **ixBrowser 必须已启动**：所有窗口操作依赖本地服务 `:53200`
-2. **Playwright CDP**：`openBrowser()` 拿 WebSocket 端点 → `connect_over_cdp()`
-3. **LLM API Key**：AI 引擎必需，经 `ConfigManager` 配置（加密存储）
-
-### 已知技术债
-
-| 项 | 说明 |
-| --- | --- |
-| 双引擎并存 | 迁移策略未定，两套错误处理/重试语义 |
-| 超大文件 | `batch_account_processor.py` 1942、`account_manager_interface.py` 1811、`stagehand_engine/engine.py` 1446 |
-| `core → services` 反向依赖 | `stagehand_engine/engine.py:89`、`browseruse_engine/engine.py:52` 用函数内延迟 import 规避循环，方向上仍是倒置 |
-| `database.py` 未随仓储拆分瘦身 | 已拆出 6 个 repository，主文件仍 1124 行 |
-| 遗留数据表 | `cards`、`bind_card_history`、`sheerid_verification_history` 已无写入方，仅 `account_io_repository` 的综合查询仍 JOIN 后两者 |
-
-### 数据与文件
-
-- **数据库优先**：账号状态改动走 `DBManager` / repository，自动同步到文件，**不要直接写 txt**
-- **线程安全**：文件写入与 DB 操作使用 `threading.Lock`
-- **账号文件分隔符**：`----`
-  ```text
-  email----password----backup_email----2fa_secret
-  ```
-
-**状态 → 文件映射**：
-
-| 状态 | 文件 |
-| --- | --- |
-| link_ready | `sheerIDlink.txt` |
-| verified | `已验证未绑卡.txt` |
-| subscribed | `已绑卡号.txt` |
-| ineligible | `无资格号.txt` |
-| error | `超时或其他错误.txt` |
-| pending (eligible) | `有资格待验证号.txt` |
-
-### 安全
-
-- `config.json`、`*.db`、各类账号 txt 均已在 `.gitignore` 中，**不要提交**
-- 工作目录内的 `accounts.db`、`已修改密钥.txt`、`已绑卡号.txt` 是明文真实数据，处理时注意不要外泄到日志或输出
+单测用 `node:test` + 假引擎（`test/engine-*.test.mjs` 里有现成的状态机式 fake engine 写法），
+**不需要真实浏览器**；需要真机的验证走 `.trellis/tasks/*/real-run-log.md` 记录的流程。
 
 ---
 
 ## AI 协作准则
 
-1. **遵循分层**：GUI → application → automation → core/services，不要跨层直连
-2. **新增底层调用**走 `application/automation_engine_adapter.py`，别在 GUI 里直接 import `automation/`
-3. **数据访问**优先写 `services/repositories/`，而不是继续给 `database.py` 加方法
-4. **引擎选择**：默认 `stagehand_engine`；家庭组加入相关走 `browseruse_engine`
-5. **配置读写**一律经 `ConfigManager`（敏感字段依赖它的加解密）
-6. **易失败操作**用 `core/retry_helper.py` 的 `RetryHelper` / `with_retry`
-7. **改完跑测试**：`pytest -q`，对照上面 5 个已知失败判断是否引入回归
+1. **遵循分层**：renderer → main(IPC) → host/handlers → application → automation/engine，不要跨层直连。
+2. **新增通道**走 `app/shared/channels/`，动作名第二段小写；handler 里不要塞业务逻辑，放 `src/application/`。
+3. **数据访问**写 `src/db/` 的 repository，不要绕过它直接写 SQL 或写文本文件。
+4. **配置读写**一律经 `src/core/config-manager.ts`（敏感字段依赖它的加解密）。
+5. **易失败操作**用 `src/core/retry-helper.ts`。
+6. **不要碰窗口备注**（见上文约定）。
+7. **改动后必须跑门禁**：`typecheck` + `pnpm test` + `typecheck:app`，三者全绿再提交。
+8. **真机验证的规矩**（本项目一直在用）：
+   - 先只读探针确认真实页面形态，再写代码；
+   - **先红后绿**：先写能复现缺陷的测试，再修；
+   - 判定标准锚定真实页面文本 / DOM / URL，**绝不相信 `act()` 或 AI 抽取的成功返回**；
+   - 凭据（密码 / 密钥）不进日志、不进任务历史、不进提交；记录里一律掩码；
+   - 只操作用户指定的测试账号与窗口，跑完关窗，跑前备份 `accounts.db`。
+
+## 安全
+
+- `config.json`、`*.db`、`已修改密钥.txt`、`failed_tasks.json` 均已 gitignore，**不要提交**。
+- 新密码 / TOTP 密钥只在必要时经 `fill()` 写入页面，不打印、不放进返回值（任务历史会落库并可导出 CSV）。
