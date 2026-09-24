@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 539/539 通过
+pnpm test              # 应 558/558 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
@@ -46,7 +46,7 @@ pnpm run check:deps    # 应 0 个 error
 | `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `src/` | 业务库（不依赖 Electron，可单独单测） |
 | `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `test/` | 单测（539 个，含 `app-*.test.mjs`） |
+| `test/` | 单测（558 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -66,7 +66,7 @@ pnpm run check:deps    # 应 0 个 error
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 539/539 通过
+pnpm test               # 558/558 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
@@ -155,6 +155,10 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 
 各功能在真实 ixBrowser 窗口 + 真实 Google 账号上的验证结论。完整证据在本地
 `.trellis/tasks/09-24-*-real-run/`（该目录不入库）。
+
+> 下面各轮里「新增 `passReauthIfRequired` / `completeReauth`」是当时各 operation 自带的实现；
+> 2026-09-24 架构整改（C4）已把 6 份合并为 `src/engine/operations/reauth.ts` 的 `GoogleReauth`，
+> 各轮真机修复的写法都保留在里面（验证码优先、Enter 先提交、同窗口不重复提交验证码等），分支用例见 `test/engine-reauth.test.mjs`。
 
 ### 替换手机号的真机缺陷与修复（2026-09-24）
 
@@ -447,7 +451,8 @@ grep 复核，未真机跑（验证它要真的改一次验证器）。
 
 ## 四、下一步
 
-- **仍欠真机验证**：设置页的账号与代理导入导出、批量登录的多账号 / 异常账号边界、各页 GUI 按钮的真点击
+- **仍欠真机验证**：设置页的账号与代理导入导出、批量登录的多账号 / 异常账号边界、各页 GUI 按钮的真点击；
+  「重新验证身份」合并（C4）后的真机回归；修改验证器的新验证码改走 `fill`（ARCHITECTURE §9 D10，需先做真机探针）
 - **已真机回归**：打开窗口 / 批量绑定 / 批量登录 / 替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改 2SV 手机 /
   踢出设备 / 导入 TOTP / 任务历史（F4）/ 健康巡检（F2）/ 从模板创建窗口（F3）/ 修改密码（F1）——
   各自独立复跑成功，并与账号真实状态只读核对一致

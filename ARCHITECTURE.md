@@ -200,7 +200,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 
 | # | 偏差 | 违反 | 负责子任务 |
 |---|---|---|---|
-| D8 | 6 个 engine operation 各写一份「重新验证身份」：`src/engine/operations/{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices,change-password}.ts`，已分叉 | 可维护性 | C4 |
+| D10 | 修改验证器时，新密钥生成的 6 位验证码经 `act()` 指令写入页面（`src/engine/operations/modify-auth.ts`「在验证码输入框中输入」），违反凭据只经 `fill()` 的约定；改成 `fill` 前需要真机探针确认输入框选择器 | §6、§7 | 后续任务（随真机验证一起做） |
 | D9 | 测试代码不做类型检查（`tsconfig.json` 只 include `test/**/*.ts`，测试全是 `.mjs`） | §8 | C5 |
 
 ## 10. 参考资料

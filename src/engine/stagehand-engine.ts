@@ -632,7 +632,7 @@ export class StagehandGoogleEngine {
   async kickDevices(
     options: {
       keepCurrent?: boolean;
-      credentials?: import("./operations/kick-devices.ts").ReauthCredentials;
+      credentials?: import("./operations/reauth.ts").ReauthCredentials;
     } = {},
   ): Promise<import("./types.ts").KickDevicesResult> {
     const { KickDevicesOperation } = await import("./operations/kick-devices.ts");
@@ -642,14 +642,14 @@ export class StagehandGoogleEngine {
   async modify2svPhone(
     newPhone: string,
     smsService: import("./operations/modify-2sv.ts").SmsCodeService | null = null,
-    credentials: import("./operations/modify-2sv.ts").ReauthCredentials = {},
+    credentials: import("./operations/reauth.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ModifyPhoneResult> {
     const { Modify2SVOperation } = await import("./operations/modify-2sv.ts");
     return new Modify2SVOperation(this).execute(newPhone, smsService, credentials);
   }
 
   async modifyAuthenticator(
-    credentials: import("./operations/modify-auth.ts").ReauthCredentials = {},
+    credentials: import("./operations/reauth.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ModifyAuthenticatorResult> {
     const { ModifyAuthenticatorOperation } = await import("./operations/modify-auth.ts");
     return new ModifyAuthenticatorOperation(this).execute(credentials);
@@ -658,7 +658,7 @@ export class StagehandGoogleEngine {
   async replaceRecoveryEmail(
     newEmail: string,
     emailService: import("./operations/replace-email.ts").EmailCodeService | null = null,
-    credentials: import("./operations/replace-email.ts").ReauthCredentials = {},
+    credentials: import("./operations/reauth.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ReplaceEmailResult> {
     const { ReplaceEmailOperation } = await import("./operations/replace-email.ts");
     return new ReplaceEmailOperation(this).execute(newEmail, emailService, credentials);
@@ -667,7 +667,7 @@ export class StagehandGoogleEngine {
   async replaceRecoveryPhone(
     newPhone: string,
     smsService: import("./operations/replace-phone.ts").SmsCodeService | null = null,
-    credentials: import("./operations/replace-phone.ts").ReauthCredentials = {},
+    credentials: import("./operations/reauth.ts").ReauthCredentials = {},
   ): Promise<import("./types.ts").ModifyPhoneResult> {
     const { ReplacePhoneOperation } = await import("./operations/replace-phone.ts");
     return new ReplacePhoneOperation(this).execute(newPhone, smsService, credentials);

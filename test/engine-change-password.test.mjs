@@ -295,3 +295,154 @@ test("既找不到按钮、回车也无效 → 明确失败，不写本地", asy
   assert.equal(result.success, false);
   assert.match(result.message, /找不到「更改密码」按钮/);
 });
+
+// ==================== 「重新验证身份」接线（C4 合并后补） ====================
+
+/**
+ * 改密的「重新验证身份」夹具：真机顺序是「导航到改密页 → Google 302 到 challenge 页」，
+ * 而改密页自己的 URL 不是 /challenge/，所以只能靠文案「验证身份」认出来（extraTextPattern 接线）。
+ * 页面文案刻意用「请验证身份」（不含「请先验证您的身份」/「输入您的密码」），
+ * 否则公共模块的默认正则就能命中，这条用例就测不到 extraTextPattern 了。
+ */
+function reauthEngine({ stayOnTotp = false } = {}) {
+  const calls = { fill: [], pressKey: [], clickByText: [], waits: [] };
+  let clock = 1_700_000_000_000;
+  let state = stayOnTotp ? "reauth_totp" : "reauth";
+  let filled = false;
+  const onReauth = () => state === "reauth" || state === "reauth_totp";
+  const textOf = () => {
+    switch (state) {
+      case "reauth":
+        return "为了保护您的账号，请验证身份";
+      case "reauth_totp":
+        return "输入身份验证器生成的验证码";
+      case "form":
+        return FORM_TEXT;
+      default:
+        return SUCCESS_TEXT;
+    }
+  };
+  const urlOf = () => {
+    switch (state) {
+      case "reauth":
+      case "form":
+        return PASSWORD_URL;
+      case "reauth_totp":
+        return "https://accounts.google.com/v3/signin/challenge/totp";
+      default:
+        return SUCCESS_URL;
+    }
+  };
+  const submit = () => {
+    if (onReauth() && filled && !stayOnTotp) state = "form";
+    return true;
+  };
+  return {
+    calls,
+    now: () => clock,
+    engine: {
+      async navigate() {
+        return { success: true, error: null };
+      },
+      async getCurrentUrl() {
+        return urlOf();
+      },
+      async getPageContent() {
+        return textOf();
+      },
+      async isVisible(selector) {
+        if (state === "reauth") return selector === 'input[name="Passwd"]';
+        if (state === "reauth_totp") return selector === "#totpPin";
+        if (state === "form")
+          return selector === 'input[name="password"]' || selector === 'input[name="confirmation_password"]';
+        return false;
+      },
+      async fill(selector, value) {
+        calls.fill.push({ selector, value });
+        filled = true;
+        return true;
+      },
+      async pressKey(key) {
+        calls.pressKey.push(key);
+        return key === "Enter" ? submit() : true;
+      },
+      async click() {
+        return true;
+      },
+      async jsClick() {
+        return true;
+      },
+      async clickByText(label) {
+        calls.clickByText.push(label);
+        if (state === "form" && label === "更改密码") {
+          state = "success_text";
+          return true;
+        }
+        return false;
+      },
+      async wait(ms) {
+        calls.waits.push(ms);
+        clock += ms;
+      },
+      async stop() {},
+    },
+  };
+}
+
+/** 假时钟：否则「验证一直不过」要真的等 8 秒 × 轮数 */
+async function withFakeClock(fake, fn) {
+  const real = Date.now;
+  Date.now = fake.now;
+  try {
+    return await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+test("重新验证身份（改密）：只凭文案「验证身份」认出验证页，填当前密码后继续改密；日志只记密码长度", async () => {
+  const fake = reauthEngine();
+  const logs = [];
+  const op = new ChangePasswordOperation(fake.engine);
+  op.setLog((m) => logs.push(m));
+  const CURRENT = "old-must-not-leak";
+  const result = await op.execute({ currentPassword: CURRENT, totpSecret: null, newPassword: NEW_PASSWORD });
+
+  assert.equal(result.success, true, `应走通改密，实际: ${result.message}`);
+  // 第一次填的是当前密码（验证页），后两次是新密码 → 证明验证环节真的跑了
+  assert.deepEqual(fake.calls.fill.map((f) => f.selector), [
+    'input[name="Passwd"]',
+    'input[name="password"]',
+    'input[name="confirmation_password"]',
+  ]);
+  assert.equal(fake.calls.fill[0].value, CURRENT);
+  // log 接线：只有长度，没有内容
+  assert.ok(logs.includes(`重新验证身份（第 1 轮）：输入当前密码（长度 ${CURRENT.length}）`), JSON.stringify(logs));
+  for (const line of logs) assert.ok(!line.includes(CURRENT), `日志里出现了当前密码: ${line}`);
+});
+
+test("重新验证身份（改密）：验证码一直不被接受时按 3 轮尝试（留一轮余量），失败如实上报", async () => {
+  const fake = reauthEngine({ stayOnTotp: true });
+  const op = new ChangePasswordOperation(fake.engine);
+  const logs = [];
+  op.setLog((m) => logs.push(m));
+  const result = await withFakeClock(fake, () =>
+    op.execute({
+      currentPassword: "old",
+      totpSecret: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+      newPassword: NEW_PASSWORD,
+    }),
+  );
+
+  assert.equal(result.success, false);
+  assert.equal(result.error_type, "reauth_failed");
+  assert.equal(fake.calls.fill.length, 3, `改密应尝试 3 轮，实际填写 ${fake.calls.fill.length} 次`);
+  assert.deepEqual(
+    logs.filter((l) => l.startsWith("重新验证身份")),
+    [
+      "重新验证身份（第 1 轮）：输入验证器验证码",
+      "重新验证身份（第 2 轮）：输入验证器验证码",
+      "重新验证身份（第 3 轮）：输入验证器验证码",
+    ],
+  );
+});
