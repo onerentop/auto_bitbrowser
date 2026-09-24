@@ -95,7 +95,7 @@ function workerParams(overrides) {
       shouldStop: () => false,
       onStop: () => {},
       log: (m) => logs.push(m),
-      progressFromLog: () => {},
+      progress: () => {},
       ...overrides,
     },
   };
@@ -170,6 +170,7 @@ test("executeAccountWorkerTask：onStop 钩子触发 processor.stop；结束时�
 test("executeAccountWorkerTask：日志回调里发现停止标志也会调 stop 并只记一次「用户停止任务」", async () => {
   const p = fakeProcessor();
   let cb = null;
+  let logged = 0;
   const progress = [];
   p.batchLogin = async function () {
     cb("[1/2] ✓ a 成功");
@@ -178,8 +179,13 @@ test("executeAccountWorkerTask：日志回调里发现停止标志也会调 stop
   };
   const { params, logs } = workerParams({
     taskType: "login",
-    shouldStop: () => progress.length > 0,
-    progressFromLog: (m) => progress.push(m),
+    // 第二条处理器日志之后才算已请求停止（旧用例里进度是在日志回调末尾累加的，时机等价）
+    shouldStop: () => logged >= 2,
+    log: (m) => {
+      logged += 1;
+      logs.push(m);
+    },
+    progress: (c, t) => progress.push([c, t]),
     createProcessor: (o) => {
       cb = o.callback;
       return p;
@@ -188,7 +194,7 @@ test("executeAccountWorkerTask：日志回调里发现停止标志也会调 stop
   await orch.executeAccountWorkerTask(params);
   assert.equal(p.stopped, 1);
   assert.equal(logs.filter((l) => l === "用户停止任务").length, 1);
-  assert.equal(progress.length, 2, "每条处理器日志都交给进度解析");
+  assert.deepEqual(progress, [], "进度由逐账号回调驱动，不再由日志触发");
 });
 
 test("workerFinishedLogLines：登录 / 停止文案（:1399-1429），未知类型返回空", () => {

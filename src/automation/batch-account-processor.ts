@@ -35,6 +35,15 @@ import type { Db } from "../db/connection.ts";
 /** 进度回调 */
 export type ProgressCallback = (msg: string) => void;
 
+/** 单个账号的处理结果（回调给编排层：成功 / 失败 / 因停止跳过） */
+export type AccountDoneStatus = "success" | "failed" | "skipped";
+
+/**
+ * 单个账号结束时的回调。
+ * 编排层用它同时做三件事：逐条目上报（任务历史）、精确进度、按结果收尾（登录成功后关窗）。
+ */
+export type AccountDoneCallback = (email: string, status: AccountDoneStatus, message: string) => void;
+
 /** 账号字典 */
 export type AccountDict = Record<string, unknown>;
 
@@ -148,6 +157,7 @@ export class BatchAccountProcessor {
   readonly concurrency: number;
   readonly retryHelper: RetryHelper;
   readonly callback: ProgressCallback | null;
+  private readonly onAccountDone: AccountDoneCallback | null;
 
   private semaphore: Semaphore | null = null;
   private stopFlag = false;
@@ -167,6 +177,8 @@ export class BatchAccountProcessor {
       concurrency?: number | null;
       retryTimes?: number;
       callback?: ProgressCallback | null;
+      /** 每个账号结束时回调（成功 / 失败 / 停止跳过）；不传则不做任何额外动作 */
+      onAccountDone?: AccountDoneCallback | null;
     } = {},
     deps: BatchProcessorDeps,
   ) {
@@ -174,6 +186,7 @@ export class BatchAccountProcessor {
     this.concurrency = options.concurrency ? options.concurrency : this.config.getLoginConcurrency();
     this.retryHelper = new RetryHelper({ maxRetries: options.retryTimes ?? 2, baseDelay: 2.0 });
     this.callback = options.callback ?? null;
+    this.onAccountDone = options.onAccountDone ?? null;
 
     // 仓储：显式注入优先，其次由 deps.db 构造。没有时保持 null，
     // 但**不静默** —— 下面会打一条告警，避免 DB 相关分支被无声跳过。
@@ -292,14 +305,18 @@ export class BatchAccountProcessor {
   ): Promise<void> {
     const email = String(account["email"] ?? "unknown");
 
-    if (this.stopFlag) {
-      addSkipped(result, email, "用户停止");
-      return;
-    }
+    // 同一个账号只回调一次：下面多个终止点都可能走到，重复回调会让进度多算、日志重复
+    let reported = false;
+    const report = (status: AccountDoneStatus, message: string): void => {
+      if (reported) return;
+      reported = true;
+      this.onAccountDone?.(email, status, message);
+    };
 
     await this.withSemaphore(async () => {
       if (this.stopFlag) {
         addSkipped(result, email, "用户停止");
+        report("skipped", "用户停止");
         return;
       }
 
@@ -319,6 +336,7 @@ export class BatchAccountProcessor {
         for (let attempt = 1; attempt <= retries; attempt += 1) {
           if (this.stopFlag) {
             addSkipped(result, email, "用户停止");
+            report("skipped", "用户停止");
             return;
           }
 
@@ -346,6 +364,7 @@ export class BatchAccountProcessor {
                 attempts: attempt,
               });
               this.log(`[${email}] ✅ 登录成功（第 ${attempt} 次尝试）`);
+              report("success", "");
               return;
             }
 
@@ -368,13 +387,17 @@ export class BatchAccountProcessor {
         if (loginResult) {
           addFailed(result, email, loginResult.message, loginResult.errorType ?? null);
           this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${loginResult.message}`);
+          report("failed", loginResult.message);
         } else {
-          addFailed(result, email, lastError || "未知错误", "exception");
+          const text = lastError || "未知错误";
+          addFailed(result, email, text, "exception");
           this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${toNoneText(lastError)}`);
+          report("failed", text);
         }
       } catch (e) {
         addFailed(result, email, errorMessage(e), "exception");
         this.log(`[${email}] ❌ 异常: ${errorMessage(e)}`);
+        report("failed", errorMessage(e));
       }
     });
   }

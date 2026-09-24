@@ -55,6 +55,7 @@ import {
   filterAccounts,
   hasSameNameWindows,
   autoBindNotice,
+  applyLoginItem,
   type AccountLoginFilter,
 } from "../../../shared/logic/account-list.ts";
 import {
@@ -64,7 +65,7 @@ import {
   parseAccountImportLine,
 } from "../../../shared/logic/settings-data.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
-import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
+import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { BatchImportModal } from "../components/BatchImportModal.tsx";
 import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
@@ -132,6 +133,8 @@ export function AccountsPage(): ReactElement {
   const [loading, setLoading] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [concurrency, setConcurrency] = useState(3);
+  /** 登录成功后是否关闭该账号的窗口（失败的保留，便于人工查看） */
+  const [closeWindow, setCloseWindow] = useState(true);
   const [bindEmail, setBindEmail] = useState<string | null>(null);
   /** null = 关闭；"" = 添加；邮箱 = 编辑 */
   const [editEmail, setEditEmail] = useState<string | null>(null);
@@ -196,6 +199,16 @@ export function AccountsPage(): ReactElement {
         if (notice) notification.info({ message: notice.title, description: <Multiline text={notice.message} /> });
       }),
     [load, notification],
+  );
+
+  // 批量登录运行中逐行更新：后端每完成一个账号就发一条条目事件，这里立刻改那一行的登录状态
+  useEffect(
+    () =>
+      onTaskItem((e) => {
+        if (e.type !== "login") return;
+        setList((prev) => (prev ? { ...prev, rows: applyLoginItem(prev.rows, e) as AccountListRow[] } : prev));
+      }),
+    [],
   );
 
   // ---------- 筛选与勾选 ----------
@@ -291,7 +304,7 @@ export function AccountsPage(): ReactElement {
         for (const step of pre.confirms) {
           if (!(await confirm(step))) return;
         }
-        const info = await invoke(IPC.invoke.accountsStart, action, targetRows, { concurrency });
+        const info = await invoke(IPC.invoke.accountsStart, action, targetRows, { concurrency, closeWindow });
         markTaskStarted(info);
       } catch (e) {
         logLocal(`错误: ${describeError(e)}`);
@@ -300,7 +313,7 @@ export function AccountsPage(): ReactElement {
         actionPending.current = false;
       }
     },
-    [checkedRows, hiddenChecked, concurrency, notify, confirm],
+    [checkedRows, hiddenChecked, concurrency, closeWindow, notify, confirm],
   );
 
   /** 导出选中（含隐藏的勾选）：后端生成文本，这里只负责下载 */
@@ -582,6 +595,11 @@ export function AccountsPage(): ReactElement {
                     style={{ width: 64 }}
                   />
                 </Space>
+              </Tooltip>
+              <Tooltip title="登录成功的账号完成后自动关窗；失败的保留窗口，方便你查看原因或手动过验证码">
+                <Checkbox checked={closeWindow} onChange={(e) => setCloseWindow(e.target.checked)} disabled={busy}>
+                  登录后关窗
+                </Checkbox>
               </Tooltip>
               {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
             </Space>

@@ -442,3 +442,44 @@ test("构造: 给了 db 之后不再告警", () => {
     0,
   );
 });
+
+// ==================== onAccountDone：逐账号结束回调（进度 / 逐条目 / 关窗都用它） ====================
+
+test("onAccountDone: 每个账号结束都回调一次，成功 / 失败 / 停止跳过各自的状态与消息", async () => {
+  /** @type {Array<[string, string, string]>} */
+  const done = [];
+  const processorRef = {};
+  const p = new BatchAccountProcessor(
+    {
+      concurrency: 1,
+      onAccountDone: (email, status, message) => done.push([email, status, message]),
+    },
+    makeDeps({
+      config: fakeConfig({ maxRetries: 1, retryDelay: 1 }),
+      loginFn: async ({ account }) => {
+        if (account.email === "a@x.com") return ok();
+        if (account.email === "b@x.com") return fail("密码错误", "wrong_password");
+        processorRef.p.stop(); // c 处理期间请求停止 → d、e 跳过
+        return ok();
+      },
+    }),
+  );
+  processorRef.p = p;
+
+  const accounts = ["a", "b", "c", "d", "e"].map((n) => acct(`${n}@x.com`));
+  await p.batchLogin(accounts, ["1", "2", "3", "4", "5"]);
+
+  assert.deepEqual(done, [
+    ["a@x.com", "success", ""],
+    ["b@x.com", "failed", "密码错误"],
+    ["c@x.com", "success", ""],
+    ["d@x.com", "skipped", "用户停止"],
+    ["e@x.com", "skipped", "用户停止"],
+  ]);
+});
+
+test("onAccountDone: 未注入时不报错（其它调用方不受影响）", async () => {
+  const p = new BatchAccountProcessor({ concurrency: 1 }, makeDeps({ loginFn: async () => ok() }));
+  const result = await p.batchLogin([acct("a@x.com")], ["1"]);
+  assert.equal(result.success_count, 1);
+});

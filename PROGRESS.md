@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 580/580 通过
+pnpm test              # 应 583/583 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
@@ -67,7 +67,7 @@ pnpm run typecheck:test # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 580/580 通过
+pnpm test               # 583/583 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
@@ -124,6 +124,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 - 删除 / 登录等批量操作的窗口 ID **以数据库为准**，与界面行不一致时跳过并提示「数据已变化，请刷新后重试」，不误删他人窗口
 - 批量删除先删账号、成功后再删窗口；`deleteAccount` 返回 false 计失败且不删窗口；非数字窗口 ID 不调用 ixBrowser
 - 绑定窗口：导入 / 添加后自动按窗口名绑定，只在「恰好一个未被占用的同名窗口」时绑，同名多个不猜、已绑定不动，取窗口失败不影响导入；「批量绑定窗口」按钮与「解绑」已删除（`window-binding.ts`）
+- 批量登录：批处理器的逐账号回调（`onAccountDone`）同时驱动逐条目、进度与关窗——进度按账号计数（成功+失败，跳过不计）；**登录成功的账号完成即关窗，失败与跳过保留窗口**（账号页「登录后关窗」勾选，默认开，取消则都不关）；任务坞不再靠日志猜进度
 - 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）；开始前有确认框
 - AI 任务界面上的并发数只记录不使用，**串行执行**；`modify_2sv` 任务结束关闭窗口；停止后「开始」要等任务真正结束才可用
 - 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖其它键）；越界数值加载时夹紧；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层

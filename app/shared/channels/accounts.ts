@@ -141,6 +141,11 @@ export interface SelectedRow {
 export interface AccountsRunOptions {
   /** 并发数 1-10 */
   concurrency: number;
+  /**
+   * 登录成功后是否关闭该账号的窗口；不传时后端按 true 处理。
+   * 失败的账号一律保留窗口，便于人工查看原因或手动过验证码。
+   */
+  closeWindow?: boolean;
 }
 
 export interface ConfirmStep {

@@ -150,3 +150,30 @@ export function autoBindNotice(s: AutoBindSummary): { level: "success" | "warnin
   const needsAction = s.ambiguous.length + s.notFound.length + s.failed.length > 0;
   return { level: needsAction ? "warning" : "success", title: "自动绑定窗口", text: lines.join("\n") };
 }
+
+/** 任务逐条目事件里与列表有关的部分 */
+export interface LoginItemEvent {
+  /** 账号邮箱（任务条目以邮箱为 key） */
+  key: string;
+  /** 成功 / 失败 / 跳过 */
+  status: string;
+  message: string;
+}
+
+/**
+ * 批量登录运行中，按逐条目事件就地更新列表行——不用等任务结束就能看到每一行的变化。
+ *   成功 → logged_in；失败 → login_failed + 失败原因；跳过与未知状态 → 原样（没真正处理，状态不该动）。
+ * 邮箱不在列表里、或状态不认识时原样返回同一个数组（调用方据此跳过重渲染）。
+ */
+export function applyLoginItem(rows: readonly AccountListRow[], e: LoginItemEvent): readonly AccountListRow[] {
+  // 成功 / 失败之外（跳过、未知状态）一律不动那一行：这些账号没真正处理，状态不该变
+  const status = e.status === "成功" ? "logged_in" : e.status === "失败" ? "login_failed" : null;
+  if (status === null) return rows;
+  let changed = false;
+  const next = rows.map((r) => {
+    if (r.email !== e.key) return r;
+    changed = true;
+    return { ...r, login_status: status, last_error: status === "login_failed" ? e.message : null };
+  });
+  return changed ? next : rows;
+}

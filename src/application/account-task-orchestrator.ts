@@ -9,12 +9,17 @@
  *   2. 批量处理直接跑在 async 函数里，不额外开线程。
  *   3. 日志回调里保留 should_stop 兜底检查，同时通过 onStop 钩子
  *      在用户点停止的那一刻立即调 processor.stop()。
- *   4. 日志解析进度由调用方传入 progressFromLog（app/host/task-runner.ts 的
- *      createLogProgressTracker 实现了同一规则），避免 src → app 的反向依赖。
+ *   4. 逐条目 / 进度 / 关窗都由批处理器的逐账号回调（onAccountDone）驱动，
+ *      不再从日志文本猜进度；需要收尾动作时由调用方注入 closeBrowser。
  *   5. 结果里的超长字符串（例如页面文本）截断到 MAX_RESULT_STRING，字段名不变。
  */
 import { batchResultToDict, type BatchResult } from "../automation/batch/types.ts";
-import { BatchAccountProcessor, type BatchProcessorDeps } from "../automation/batch-account-processor.ts";
+import {
+  BatchAccountProcessor,
+  type AccountDoneCallback,
+  type AccountDoneStatus,
+  type BatchProcessorDeps,
+} from "../automation/batch-account-processor.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
 import { deleteBrowserById, type IxWindowClient } from "../ixbrowser/window.ts";
 
@@ -195,17 +200,26 @@ export interface WorkerProcessor {
   stop(): void;
 }
 
+/**
+ * 创建批处理器的选项（handler 的默认工厂与单测替身都按这个形状实现）：
+ * callback 收日志，onAccountDone 收逐账号结束事件（进度 / 条目 / 关窗都靠它）。
+ */
+export interface WorkerProcessorOptions {
+  concurrency: number;
+  callback: LogFn;
+  onAccountDone?: AccountDoneCallback;
+}
+
 /** 默认批处理器工厂；必须注入 db，否则批处理器会跳过写库 */
 export function createBatchProcessor(
   deps: Pick<BatchProcessorDeps, "config"> & { db: NonNullable<BatchProcessorDeps["db"]> },
-  options: { concurrency: number; callback: (msg: string) => void },
+  options: WorkerProcessorOptions,
 ): BatchAccountProcessor {
   return new BatchAccountProcessor(
-    { concurrency: options.concurrency, callback: options.callback },
+    { concurrency: options.concurrency, callback: options.callback, onAccountDone: options.onAccountDone ?? null },
     { config: deps.config, db: deps.db },
   );
 }
-
 /** 把 BatchResult 转成普通对象（字段名不变），并截断超长字符串 */
 export function batchResultPayload(result: BatchResult): Record<string, unknown> {
   return truncateLongStrings(batchResultToDict(result)) as Record<string, unknown>;
@@ -242,30 +256,74 @@ export async function runAccountWorkerTask(params: {
   return { type: "unknown" };
 }
 
-/** 执行账号 worker 任务：创建批处理器、注册停止钩子、汇总结果 */
+/** 批处理器回调的状态 → 界面 / 任务历史口径 */
+const ACCOUNT_ITEM_STATUS: Record<AccountDoneStatus, string> = {
+  success: "成功",
+  failed: "失败",
+  skipped: "跳过",
+};
+
+/**
+ * 执行账号 worker 任务：创建批处理器、注册停止钩子、汇总结果。
+ *
+ * 逐条目、进度、关窗三件事都在这里由批处理器的逐账号回调统一驱动：
+ *   - 逐条目：`item(email, 成功|失败|跳过, message)`（任务历史只保留最终一条）
+ *   - 进度：成功 + 失败累加（跳过没真正处理，不计入），所以进度与账号数严格对应
+ *   - 关窗：closeWindow 为真时只关**成功**账号的窗口；失败 / 跳过保留窗口，便于人工排查
+ * 关窗走注入的 closeBrowser（ixBrowser closeProfile），此时登录引擎已关闭，不会互相干扰。
+ */
 export async function executeAccountWorkerTask(params: {
   taskType: string;
   accounts: readonly AccountDict[];
   browserIds: readonly string[];
   concurrency: number;
   llm: LlmParams;
+  /** 登录成功后是否关闭该账号的窗口；失败与跳过一律保留 */
+  closeWindow?: boolean;
+  /** 关窗实现；不传则不关窗 */
+  closeBrowser?: (browserId: string) => Promise<unknown> | unknown;
   shouldStop: () => boolean;
   /** 注册停止钩子（TaskApi.onStop） */
   onStop: (fn: () => void) => void;
   log: LogFn;
-  /** 从日志解析进度（createLogProgressTracker 的返回值） */
-  progressFromLog: LogFn;
-  /** 创建批处理器；callback 即进度回调 */
-  createProcessor: (options: { concurrency: number; callback: LogFn }) => WorkerProcessor;
-  /**
-   * 逐条目结果上报（任务历史用）。批量登录是并发跑的，逐账号结果只有收尾时才成对出现，
-   * 因此统一在这里上报 —— 包括「被停止」的情况。
-   */
+  /** 精确进度回调（成功 + 失败累加） */
+  progress?: (current: number, total: number) => void;
+  /** 创建批处理器；callback 为日志回调，onAccountDone 为逐账号结束回调 */
+  createProcessor: (options: WorkerProcessorOptions) => WorkerProcessor;
+  /** 逐条目结果上报（任务历史用） */
   item?: (key: string, status: string, message: string) => void;
 }): Promise<Record<string, unknown>> {
   const { taskType, shouldStop, log } = params;
   let processor: WorkerProcessor | null = null;
   let stopLogged = false;
+  let done = 0;
+  const total = params.accounts.length;
+
+  // 关窗要按账号找窗口：以数据库下发的 browserIds 与 accounts 一一对应（编排层的既有约定）
+  const browserIdByEmail = new Map<string, string>();
+  params.accounts.forEach((account, index) => {
+    const id = params.browserIds[index];
+    if (id) browserIdByEmail.set(emailOf(account), id);
+  });
+
+  const onAccountDone: AccountDoneCallback = (email, status, message) => {
+    params.item?.(email, ACCOUNT_ITEM_STATUS[status], message);
+    if (status === "skipped") return;
+    done += 1;
+    params.progress?.(Math.min(done, total), total);
+    if (status !== "success" || !params.closeWindow) return;
+    const browserId = browserIdByEmail.get(email);
+    if (!browserId || !params.closeBrowser) return;
+    try {
+      // 关窗失败只记日志，不影响登录结果与进度
+      void Promise.resolve(params.closeBrowser(browserId)).catch((e: unknown) =>
+        log(`关闭窗口失败: ${browserId} ${errorText(e)}`),
+      );
+      log(`已关闭窗口 ${browserId}: ${email}`);
+    } catch (e) {
+      log(`关闭窗口失败: ${browserId} ${errorText(e)}`);
+    }
+  };
 
   // 进度回调：转发日志，并在收到日志时兜底检查停止请求
   const processorProgress = (message: string): void => {
@@ -277,10 +335,13 @@ export async function executeAccountWorkerTask(params: {
         log("用户停止任务");
       }
     }
-    params.progressFromLog(message);
   };
 
-  processor = params.createProcessor({ concurrency: params.concurrency, callback: processorProgress });
+  processor = params.createProcessor({
+    concurrency: params.concurrency,
+    callback: processorProgress,
+    onAccountDone,
+  });
   const p = processor;
   params.onStop(() => p.stop());
 
@@ -292,9 +353,6 @@ export async function executeAccountWorkerTask(params: {
     browserIds: params.browserIds,
     llm: params.llm,
   });
-  // 先上报逐账号结果，再判断是否已停止：停止时已处理完的账号结果同样要落库，
-  // 否则历史会显示 total=0，与实际处理量不符
-  if (params.item) reportAccountResultItems(result, params.item);
   if (shouldStop()) return { ...createStoppedResult(taskType) };
   return result;
 }
@@ -318,38 +376,3 @@ export function workerFinishedLogLines(result: Record<string, unknown>): string[
   return [];
 }
 
-// ==================== 逐条目结果上报（任务历史用） ====================
-
-/** BatchResultItem.status → 界面口径（与 AI_TASK_ITEM_STATUS 一致） */
-const ACCOUNT_ITEM_STATUS: Record<string, string> = {
-  success: "成功",
-  failed: "失败",
-  skipped: "跳过",
-};
-
-function stringOf(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-/**
- * 把批量结果里的逐账号结果上报成条目（任务历史据此统计总数与成功 / 失败）。
- *
- * 入参是 `runAccountWorkerTask` 的原始返回值（形如 `{type:"login", result:{results:[…]}}`），
- * 所以调用点必须在「停止分支」**之前**上报；形状不认识时什么都不做。
- */
-export function reportAccountResultItems(
-  result: Record<string, unknown>,
-  item: (key: string, status: string, message: string) => void,
-): void {
-  const payload = result["result"];
-  if (payload === null || typeof payload !== "object") return;
-  const list = (payload as Record<string, unknown>)["results"];
-  if (!Array.isArray(list)) return;
-  for (const entry of list) {
-    if (entry === null || typeof entry !== "object") continue;
-    const row = entry as Record<string, unknown>;
-    const raw = stringOf(row["status"]);
-    const message = stringOf(row["error"]) || stringOf(row["reason"]);
-    item(stringOf(row["email"]), ACCOUNT_ITEM_STATUS[raw] ?? raw, message);
-  }
-}

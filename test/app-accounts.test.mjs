@@ -20,6 +20,7 @@ import { finishedNotice } from "../app/renderer/src/pages/accounts/finished-noti
 import { createBatchResult } from "../src/automation/batch/types.ts";
 import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
 import {
+  applyLoginItem,
   accountSorter,
   autoBindNotice,
   countLogin,
@@ -420,6 +421,8 @@ function fakeProcessorFactory() {
         state.calls.push(["batchLogin", a.map((x) => x.email), b, o]);
         opts.callback("[1/1] ✓ 成功");
         if (state.gate) await state.gate;
+        // 与真实批处理器一致：每个账号结束时回调（进度 / 条目 / 关窗都靠它）
+        for (const x of a) opts.onAccountDone?.(x.email, "success", "");
         return createBatchResult({
           total: a.length,
           success_count: a.length,
@@ -451,10 +454,88 @@ test("start：批量登录作为后台任务运行，传入并发数，结果形
   const logs = s.logs();
   assert.equal(logs[0], "开始 login 任务，共 1 个账号...");
   assert.ok(logs.includes("登录完成: 成功 1, 失败 0, 跳过 0"));
-  // 进度从日志解析
+  // 进度由逐账号回调驱动（不再解析日志）
   assert.ok(s.events.some(([c, p2]) => c === IPC.event.taskProgress && p2.current === 1 && p2.total === 1));
   // 批量登录按账号上报条目（任务历史的逐条目来源）
   assert.deepEqual(s.items(), [["a", "成功", ""]]);
+});
+
+test("start：批量登录只关成功账号的窗口，失败的保留；closeWindow=false 时一个都不关", async () => {
+  /** 逐账号结果由替身决定：a 成功、b 失败 */
+  const factory = (opts) => ({
+    async batchLogin() {
+      opts.onAccountDone?.("a", "success", "");
+      opts.onAccountDone?.("b", "failed", "需要验证码");
+      return createBatchResult({
+        total: 2,
+        success_count: 1,
+        failed_count: 1,
+        results: [
+          { email: "a", status: "success" },
+          { email: "b", status: "failed", error: "需要验证码" },
+        ],
+      });
+    },
+    stop() {},
+  });
+  const rows = [
+    { email: "a", browserId: "11" },
+    { email: "b", browserId: "22" },
+  ];
+  const seeded = () => [
+    { email: "a", browser_profile_id: "11" },
+    { email: "b", browser_profile_id: "22" },
+  ];
+
+  const s = setup({ deps: { createProcessor: factory } });
+  seed(s.ctx, seeded());
+  const done = s.finished();
+  await s.call(CH.accountsStart, "login", rows, OPTS);
+  await done;
+  // 关窗走 ixBrowser closeProfile（只关成功的那个）
+  assert.deepEqual(s.ix.calls.map((c) => c.slice(0, 2)), [["close", 11]]);
+  assert.deepEqual(s.items(), [
+    ["a", "成功", ""],
+    ["b", "失败", "需要验证码"],
+  ]);
+  const progress = s.events.filter(([c]) => c === IPC.event.taskProgress).map(([, p]) => [p.current, p.total]);
+  assert.deepEqual(progress, [[0, 2], [1, 2], [2, 2]], "进度按账号计数，不按日志行数");
+
+  const s2 = setup({ deps: { createProcessor: factory } });
+  seed(s2.ctx, seeded());
+  const done2 = s2.finished();
+  await s2.call(CH.accountsStart, "login", rows, { concurrency: 2, closeWindow: false });
+  await done2;
+  assert.deepEqual(s2.ix.calls, [], "取消勾选后一个窗口都不关");
+});
+
+test("start：跳过的账号不计进度、不关窗，但仍上报条目", async () => {
+  const factory = (opts) => ({
+    async batchLogin() {
+      opts.onAccountDone?.("a", "success", "");
+      opts.onAccountDone?.("b", "skipped", "用户停止");
+      return createBatchResult({ total: 2, success_count: 1, skipped_count: 1 });
+    },
+    stop() {},
+  });
+  const s = setup({ deps: { createProcessor: factory } });
+  seed(s.ctx, [
+    { email: "a", browser_profile_id: "11" },
+    { email: "b", browser_profile_id: "22" },
+  ]);
+  const done = s.finished();
+  await s.call(CH.accountsStart, "login", [
+    { email: "a", browserId: "11" },
+    { email: "b", browserId: "22" },
+  ], OPTS);
+  await done;
+  const progress = s.events.filter(([c]) => c === IPC.event.taskProgress).map(([, p]) => [p.current, p.total]);
+  assert.deepEqual(progress, [[0, 2], [1, 2]], "跳过只上报条目，不计进度");
+  assert.deepEqual(s.items(), [
+    ["a", "成功", ""],
+    ["b", "跳过", "用户停止"],
+  ]);
+  assert.deepEqual(s.ix.calls.map((c) => c.slice(0, 2)), [["close", 11]]);
 });
 
 
@@ -1068,4 +1149,31 @@ test("autoBindNotice：成功 / 需要处理 / 取窗口失败 / 无事可报", 
   assert.ok(e);
   assert.equal(e.level, "warning");
   assert.match(e.text, /ECONNREFUSED/);
+});
+
+test("applyLoginItem：成功 / 失败 / 跳过就地更新行；未匹配或状态未知时原样返回", () => {
+  const rows = [row({ email: "a@x.com", login_status: "logging_in" }), row({ email: "b@x.com" })];
+  const item = (key, status, message = "") => ({ key, status, message });
+  const ok = applyLoginItem(rows, item("a@x.com", "成功"));
+  assert.notEqual(ok, rows, "内容变化时返回新数组");
+  assert.deepEqual(
+    ok.map((r) => [r.email, r.login_status, r.last_error]),
+    [
+      ["a@x.com", "logged_in", null],
+      ["b@x.com", "not_logged", null],
+    ],
+  );
+
+  const failed = applyLoginItem(rows, item("b@x.com", "失败", "需要验证码"));
+  assert.deepEqual(
+    failed.map((r) => [r.email, r.login_status, r.last_error]),
+    [
+      ["a@x.com", "logging_in", null],
+      ["b@x.com", "login_failed", "需要验证码"],
+    ],
+  );
+
+  assert.equal(applyLoginItem(rows, item("a@x.com", "跳过")), rows, "跳过不动那一行");
+  assert.equal(applyLoginItem(rows, item("ghost@x.com", "成功")), rows, "邮箱不在列表里");
+  assert.equal(applyLoginItem(rows, item("a@x.com", "怪状态")), rows, "状态不认识");
 });

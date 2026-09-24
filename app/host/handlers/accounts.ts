@@ -26,7 +26,7 @@ import {
 import type { TaskInfo } from "../../shared/ipc.ts";
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
-import { createLogProgressTracker, type TaskApi } from "../task-runner.ts";
+import type { TaskApi } from "../task-runner.ts";
 import { planAction, staleLog, toPrecheckResult, type PlanEnv, type TaskSpec } from "../../../src/application/account-plan.ts";
 import type { WindowLike } from "../../../src/application/account-manager-service.ts";
 import {
@@ -37,6 +37,7 @@ import {
   workerFinishedLogLines,
   type LlmParams,
   type WorkerProcessor,
+  type WorkerProcessorOptions,
 } from "../../../src/application/account-task-orchestrator.ts";
 import type { ConfigManager } from "../../../src/core/config-manager.ts";
 import {
@@ -125,9 +126,11 @@ function requireOptions(value: unknown): AccountsRunOptions {
   if (typeof c !== "number" || !Number.isInteger(c) || c < CONCURRENCY_MIN || c > CONCURRENCY_MAX) {
     throw invalid(`concurrency 必须是 ${CONCURRENCY_MIN}-${CONCURRENCY_MAX} 的整数`);
   }
-  return { concurrency: c };
+  // 界面不传时按「登录成功后关窗」处理（失败的账号一律保留窗口，便于人工排查）
+  const w = o["closeWindow"];
+  if (w !== undefined && typeof w !== "boolean") throw invalid("closeWindow 必须是布尔值");
+  return w === undefined ? { concurrency: c } : { concurrency: c, closeWindow: w };
 }
-
 function requireBrowserId(value: unknown): string {
   if (typeof value !== "string" || !/^\d+$/.test(value.trim())) throw invalid("browserId 必须是数字字符串");
   return value.trim();
@@ -199,7 +202,7 @@ export async function listAllWindows(
 /** 默认批处理器工厂；必须注入 db，否则批处理器会跳过写库（导出供单测校验） */
 export function createDefaultProcessor(
   ctx: HostContext,
-  options: { concurrency: number; callback: (msg: string) => void },
+  options: WorkerProcessorOptions,
 ): ReturnType<typeof createBatchProcessor> {
   return createBatchProcessor({ config: ctx.config(), db: ctx.db() }, options);
 }
@@ -238,11 +241,13 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
             accounts: spec.accounts,
             browserIds: spec.browserIds,
             concurrency: options.concurrency,
+            closeWindow: options.closeWindow ?? true,
+            closeBrowser,
             llm: readLlmParams(ctx.config()),
             shouldStop: api.shouldStop,
             onStop: api.onStop,
             log: api.log,
-            progressFromLog: createLogProgressTracker(total, api.progress),
+            progress: api.progress,
             createProcessor,
             item: api.item,
           });

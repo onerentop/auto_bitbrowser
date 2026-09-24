@@ -224,29 +224,3 @@ export function toCloneable(value: unknown): unknown {
   }
 }
 
-// ==================== 进度解析 ====================
-
-/** 进度关键词列表 */
-export const PROGRESS_KEYWORDS: readonly string[] = ["✓", "✗", "成功", "失败", "跳过", "完成:"];
-
-/**
- * 从日志文本推算进度：
- *   命中任一关键词时：有 `[i/n]` 取 i；否则完成数 +1（不超过 total）
- * 注意要用 total（任务账号数），而不是日志里的 n。
- */
-export function createLogProgressTracker(
-  total: number,
-  onProgress: (current: number, total: number) => void,
-): (message: string) => void {
-  let completed = 0;
-  return (message) => {
-    if (!PROGRESS_KEYWORDS.some((k) => message.includes(k))) return;
-    const match = /\[(\d+)\/(\d+)\]/.exec(message);
-    if (match) {
-      onProgress(Number(match[1]), total);
-    } else {
-      completed += 1;
-      onProgress(Math.min(completed, total), total);
-    }
-  };
-}

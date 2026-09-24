@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ERROR_CODES, toEnvelopeError } from "../app/shared/envelope.ts";
 import { InvalidInputError } from "../src/application/errors.ts";
 import { IPC } from "../app/shared/ipc.ts";
-import { TaskRunner, createLogProgressTracker, toCloneable } from "../app/host/task-runner.ts";
+import { TaskRunner, toCloneable } from "../app/host/task-runner.ts";
 import { createHostContext } from "../app/host/context.ts";
 import { mergeHandlers } from "../app/host/handlers/index.ts";
 import { resolveDataRoot } from "../app/main/data-root.ts";
@@ -145,29 +145,6 @@ test("toCloneable：去掉函数与 undefined，保证可跨进程", () => {
   const cyclic = {};
   cyclic.self = cyclic;
   assert.equal(typeof toCloneable(cyclic), "string");
-});
-
-// ==================== 进度解析（对标 orchestrator.py:417-424） ====================
-
-test("进度解析：带 [i/n] 取 i，total 用任务账号数而非日志里的 n", () => {
-  const calls = [];
-  const track = createLogProgressTracker(5, (c, t) => calls.push([c, t]));
-  track("[3/9] ✓ a@x.com 登录成功");
-  assert.deepEqual(calls, [[3, 5]]);
-});
-
-test("进度解析：无关键词不计数；有关键词无 [i/n] 时累加且不超过 total", () => {
-  const calls = [];
-  const track = createLogProgressTracker(2, (c, t) => calls.push([c, t]));
-  track("正在打开浏览器");
-  track("跳过 a");
-  track("b 失败");
-  track("完成: 全部");
-  assert.deepEqual(calls, [
-    [1, 2],
-    [2, 2],
-    [2, 2],
-  ]);
 });
 
 // ==================== 数据根目录 ====================
