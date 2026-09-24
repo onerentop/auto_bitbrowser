@@ -176,11 +176,22 @@ test("batchLogin: 尝试次数用尽后记为失败，保留最后一次的 mess
   });
 });
 
-test("batchLogin: 不可重试的错误类型立即 break，不再尝试", async () => {
-  for (const errorType of ["stagehand_unavailable", "no_api_key", "browser_open_failed"]) {
+test("batchLogin: 不可重试的错误类型立即 break，不再尝试（含有意新增的人机验证 / 密码错误 / 两步验证等）", async () => {
+  for (const errorType of [
+    "stagehand_unavailable",
+    "no_api_key",
+    "browser_open_failed",
+    "captcha_required",
+    "wrong_password",
+    "need_2fa",
+    "security_challenge",
+    "account_not_found",
+    "account_disabled",
+  ]) {
     let calls = 0;
+    const logs = [];
     const p = new BatchAccountProcessor(
-      { concurrency: 1 },
+      { concurrency: 1, callback: (m) => logs.push(m) },
       makeDeps({
         config: fakeConfig({ maxRetries: 5, retryDelay: 1 }),
         loginFn: async () => {
@@ -193,6 +204,8 @@ test("batchLogin: 不可重试的错误类型立即 break，不再尝试", async
     const result = await p.batchLogin([acct("a@x.com")], ["11"]);
     assert.equal(calls, 1, `${errorType} 应该只尝试一次`);
     assert.equal(result.results[0].error_type, errorType);
+    // 失败日志报告实际尝试次数，而不是配置的最大次数
+    assert.ok(logs.some((m) => m.includes("❌ 登录失败（已尝试 1 次）")), `${errorType} 日志应为实际次数`);
   }
 });
 

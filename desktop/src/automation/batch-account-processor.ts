@@ -109,8 +109,22 @@ function pyNone(value: unknown): string {
   return value === null || value === undefined ? "None" : String(value);
 }
 
-/** 登录不可重试的错误类型（L403-407，顺序照搬） */
-const NON_RETRYABLE_ERRORS = ["stagehand_unavailable", "no_api_key", "browser_open_failed"];
+/**
+ * 登录不可重试的错误类型。
+ * Python 原版只有前三个（L403-407，顺序照搬）；有意偏差：人机验证、密码错误、需要两步验证、
+ * 账号不存在 / 停用这几类重试不会有不同结果，反而可能触发 Google 风控或锁号，也不再重试。
+ */
+const NON_RETRYABLE_ERRORS = [
+  "stagehand_unavailable",
+  "no_api_key",
+  "browser_open_failed",
+  "captcha_required",
+  "wrong_password",
+  "need_2fa",
+  "security_challenge",
+  "account_not_found",
+  "account_disabled",
+];
 
 /**
  * 默认登录适配器做成**工厂**：它要把 accountRepo 透传给下游的 auto_google_login。
@@ -307,6 +321,8 @@ export class BatchAccountProcessor {
         // 执行登录（带重试）
         let loginResult: BatchLoginResult | null = null;
         let lastError: string | null = null;
+        // 有意偏差：Python 失败日志固定打印 retries；不可重试时提前结束，这里记录实际尝试次数
+        let attempts = 0;
 
         for (let attempt = 1; attempt <= retries; attempt += 1) {
           if (this.stopFlag) {
@@ -319,6 +335,7 @@ export class BatchAccountProcessor {
             await this.sleepImpl(retryDelay * 1000);
           }
 
+          attempts = attempt;
           try {
             loginResult = await this.loginFn({
               browserId,
@@ -358,10 +375,10 @@ export class BatchAccountProcessor {
         // 所有尝试都失败
         if (loginResult) {
           addFailed(result, email, loginResult.message, loginResult.errorType ?? null);
-          this.log(`[${email}] ❌ 登录失败（已尝试 ${retries} 次）: ${loginResult.message}`);
+          this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${loginResult.message}`);
         } else {
           addFailed(result, email, lastError || "未知错误", "exception");
-          this.log(`[${email}] ❌ 登录失败（已尝试 ${retries} 次）: ${pyNone(lastError)}`);
+          this.log(`[${email}] ❌ 登录失败（已尝试 ${attempts} 次）: ${pyNone(lastError)}`);
         }
       } catch (e) {
         addFailed(result, email, errorMessage(e), "exception");
