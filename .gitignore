@@ -95,3 +95,15 @@ nul
 
 # electron-vite 构建产物
 desktop/out/
+
+# SQLite 运行时文件（*.db 已忽略，但 WAL/SHM 后缀不在其列）
+*.db-shm
+*.db-wal
+
+# AI 协作工具的工作目录（本地会话数据，不入库；与 .pi/ 同类）
+.trellis/
+.thinkrail/
+.agents/
+.cursor/
+.claude-flow/
+desktop/.claude-flow/
