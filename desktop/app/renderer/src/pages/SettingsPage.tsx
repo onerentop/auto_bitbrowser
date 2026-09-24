@@ -9,6 +9,7 @@ import { Tabs, Typography } from "antd";
 import { AccountsTab } from "./settings/AccountsTab.tsx";
 import { ConfigTab } from "./settings/ConfigTab.tsx";
 import { ProxiesTab } from "./settings/ProxiesTab.tsx";
+import { TaskHistoryTab } from "./settings/TaskHistoryTab.tsx";
 
 export function SettingsPage(): ReactElement {
   return (
@@ -22,6 +23,7 @@ export function SettingsPage(): ReactElement {
           { key: "config", label: "配置", children: <ConfigTab /> },
           { key: "proxies", label: "代理", children: <ProxiesTab /> },
           { key: "accounts", label: "账号数据", children: <AccountsTab /> },
+          { key: "history", label: "任务历史", children: <TaskHistoryTab /> },
         ]}
       />
     </div>

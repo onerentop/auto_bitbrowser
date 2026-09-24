@@ -91,6 +91,8 @@ export function executeBatchBind(params: {
   ownerOf?: (browserId: string) => string | null;
   log: LogFn;
   progress: (current: number) => void;
+  /** 逐条目结果（任务历史用） */
+  item?: (key: string, status: string, message: string) => void;
 }): BatchBindResults {
   const { matchedPairs, shouldStop, log, progress } = params;
   const results = createBatchBindResults(matchedPairs.length);
@@ -98,6 +100,7 @@ export function executeBatchBind(params: {
     results.failed_count += 1;
     results.failed_list.push({ email, error });
     log(`绑定失败: ${email} - ${error}`);
+    params.item?.(email, "失败", error);
   };
   for (let index = 0; index < matchedPairs.length; index++) {
     if (shouldStop()) {
@@ -114,6 +117,7 @@ export function executeBatchBind(params: {
       } else {
         results.success_count += 1;
         log(`绑定: ${email} -> ${browserId}`);
+        params.item?.(email, "成功", "");
       }
     } catch (error) {
       fail(email, errorText(error));
@@ -149,6 +153,8 @@ export async function executeBatchDelete(params: {
   deleteBrowser: (browserId: string) => Promise<{ success: boolean }> | { success: boolean };
   log: LogFn;
   progress: (current: number) => void;
+  /** 逐条目结果（任务历史用） */
+  item?: (key: string, status: string, message: string) => void;
 }): Promise<BatchDeleteResults> {
   const { accounts, browserIds, withWindows, shouldStop, log, progress } = params;
   const results = createBatchDeleteResults(accounts.length);
@@ -167,15 +173,18 @@ export async function executeBatchDelete(params: {
         results.failed_count += 1;
         results.failed_list.push({ email, error: "数据库中未删除该账号" });
         log(`删除 ${email} 失败: 数据库中未删除该账号`);
+        params.item?.(email, "失败", "数据库中未删除该账号");
       } else {
         accountDeleted = true;
         results.deleted_accounts += 1;
         log(`已删除: ${email}`);
+        params.item?.(email, "成功", "");
       }
     } catch (error) {
       results.failed_count += 1;
       results.failed_list.push({ email, error: errorText(error) });
       log(`删除 ${email} 失败: ${errorText(error)}`);
+      params.item?.(email, "失败", errorText(error));
     }
 
     if (accountDeleted && withWindows && browserId) {
@@ -273,6 +282,11 @@ export async function executeAccountWorkerTask(params: {
   progressFromLog: LogFn;
   /** 对标 create_batch_processor(concurrency)；callback 即 processor_progress */
   createProcessor: (options: { concurrency: number; callback: LogFn }) => WorkerProcessor;
+  /**
+   * 逐条目结果上报（任务历史用）。批量登录是并发跑的，逐账号结果只有收尾时才成对出现，
+   * 因此统一在这里上报 —— 包括「被停止」的情况。
+   */
+  item?: (key: string, status: string, message: string) => void;
 }): Promise<Record<string, unknown>> {
   const { taskType, shouldStop, log } = params;
   let processor: WorkerProcessor | null = null;
@@ -303,6 +317,9 @@ export async function executeAccountWorkerTask(params: {
     browserIds: params.browserIds,
     llm: params.llm,
   });
+  // 先上报逐账号结果，再判断是否已停止：停止时已处理完的账号结果同样要落库，
+  // 否则历史会显示 total=0，与实际处理量不符
+  if (params.item) reportAccountResultItems(result, params.item);
   if (shouldStop()) return { ...createStoppedResult(taskType) };
   return result;
 }
@@ -324,4 +341,40 @@ export function workerFinishedLogLines(result: Record<string, unknown>): string[
   if (type === "login")
     return [`登录完成: 成功 ${num(r, "success_count")}, 失败 ${num(r, "failed_count")}, 跳过 ${num(r, "skipped_count")}`];
   return [];
+}
+
+// ==================== 逐条目结果上报（任务历史用） ====================
+
+/** BatchResultItem.status → 界面口径（与 AI_TASK_ITEM_STATUS 一致） */
+const ACCOUNT_ITEM_STATUS: Record<string, string> = {
+  success: "成功",
+  failed: "失败",
+  skipped: "跳过",
+};
+
+function stringOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * 把批量结果里的逐账号结果上报成条目（任务历史据此统计总数与成功 / 失败）。
+ *
+ * 入参是 `runAccountWorkerTask` 的原始返回值（形如 `{type:"login", result:{results:[…]}}`），
+ * 所以调用点必须在「停止分支」**之前**上报；形状不认识时什么都不做。
+ */
+export function reportAccountResultItems(
+  result: Record<string, unknown>,
+  item: (key: string, status: string, message: string) => void,
+): void {
+  const payload = result["result"];
+  if (payload === null || typeof payload !== "object") return;
+  const list = (payload as Record<string, unknown>)["results"];
+  if (!Array.isArray(list)) return;
+  for (const entry of list) {
+    if (entry === null || typeof entry !== "object") continue;
+    const row = entry as Record<string, unknown>;
+    const raw = stringOf(row["status"]);
+    const message = stringOf(row["error"]) || stringOf(row["reason"]);
+    item(stringOf(row["email"]), ACCOUNT_ITEM_STATUS[raw] ?? raw, message);
+  }
 }

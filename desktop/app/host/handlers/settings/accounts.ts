@@ -142,6 +142,7 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
             break;
           }
           const email = emails[i] as string;
+          let note = "";
           api.log(`[${i + 1}/${total}] 删除账号: ${email}`);
 
           try {
@@ -156,14 +157,17 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
                 if (await deleteBrowserById(ixDeps, profileId)) {
                   deletedWindows += 1;
                   api.log(`  ✓ 已删除窗口 ${profileId}`);
+                  note = `已删除窗口 ${profileId}`;
                 } else {
                   api.log(`  ✗ 窗口 ${profileId} 删除失败`);
+                  note = `窗口 ${profileId} 删除失败`;
                 }
               } catch {
                 // 照搬 accounts_tab.py:381-382
               }
             } else {
               api.log("  未找到对应窗口");
+              note = "未找到对应窗口";
             }
           } catch {
             // 照搬 accounts_tab.py:383-384
@@ -171,6 +175,8 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
 
           ctx.accountRepo().deleteAccount(email);
           deletedAccounts += 1;
+          // 逐条目结果（任务历史用）：窗口那一侧的成败放进消息里，账号删除语义照搬 Python（必然删账号）
+          api.item(email, "成功", note);
           api.progress(i + 1, total);
         }
 

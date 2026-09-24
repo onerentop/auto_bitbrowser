@@ -8,6 +8,7 @@
  * 数据库、配置都是**惰性**创建：第一次用到时才打开。这样即使库文件损坏，
  * 后端进程也能起来，错误以信封形式返回给界面，而不是启动即崩。
  */
+import { TaskHistoryRepository } from "../../src/db/task-history-repository.ts";
 import { join } from "node:path";
 import { ConfigManager } from "../../src/core/config-manager.ts";
 import { openDb, type Db } from "../../src/db/connection.ts";
@@ -27,6 +28,8 @@ export interface HostContext {
   accountRepo(): AccountRepository;
   ix(): IxBrowserClient;
   readonly tasks: TaskRunner;
+  /** 批量任务运行结果历史（本地新增能力，Python 侧没有） */
+  taskHistoryRepo(): TaskHistoryRepository;
   log(message: string): void;
 }
 
@@ -51,6 +54,7 @@ function lazy<T>(factory: () => T): () => T {
   };
 }
 
+
 export function createHostContext(options: HostContextOptions): HostContext {
   const log = options.log ?? ((m: string) => process.stdout.write(`${m}\n`));
   const dbPath = join(options.dataRoot, "accounts.db");
@@ -64,6 +68,8 @@ export function createHostContext(options: HostContextOptions): HostContext {
     return handle;
   });
 
+  const taskHistoryRepo = lazy(() => new TaskHistoryRepository(db()));
+
   return {
     dataRoot: options.dataRoot,
     dbPath,
@@ -71,8 +77,19 @@ export function createHostContext(options: HostContextOptions): HostContext {
     config: lazy(() => new ConfigManager({ configFile, log })),
     db,
     accountRepo: lazy(() => new AccountRepository(db())),
+    taskHistoryRepo,
     ix: lazy(() => options.ixClient ?? new IxBrowserClient()),
-    tasks: new TaskRunner({ emit: options.emit }),
+    tasks: new TaskRunner({
+      emit: options.emit,
+      // 任务收尾时把运行结果落库；写库失败绝不能影响任务本身的结果
+      onRecord: (record) => {
+        try {
+          taskHistoryRepo().record(record);
+        } catch (error) {
+          log(`⚠ 任务结果落库失败: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
+    }),
     log,
   };
 }

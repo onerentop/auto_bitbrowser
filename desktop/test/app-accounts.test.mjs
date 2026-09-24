@@ -71,7 +71,8 @@ function setup({ windows = [], ixFail = false, deps = {} } = {}) {
     return env.data;
   };
   const finished = () => new Promise((r) => waiters.push(r));
-  return { ctx, ix, events, call, dispatch, finished, logs: () => events.filter(([c]) => c === IPC.event.taskLog).map(([, p]) => p.message) };
+  const items = () => events.filter(([c]) => c === IPC.event.taskItem).map(([, p]) => [p.key, p.status, p.message]);
+  return { ctx, ix, events, call, dispatch, finished, logs: () => events.filter(([c]) => c === IPC.event.taskLog).map(([, p]) => p.message), items };
 }
 
 const INSERT = `INSERT INTO accounts (email, login_status, browser_profile_id, is_pro, sub2api_status,
@@ -221,7 +222,11 @@ function fakeProcessorFactory() {
         state.calls.push(["batchLogin", a.map((x) => x.email), b, o]);
         opts.callback("[1/1] ✓ 成功");
         if (state.gate) await state.gate;
-        return createBatchResult({ total: a.length, success_count: a.length });
+        return createBatchResult({
+          total: a.length,
+          success_count: a.length,
+          results: a.map((x) => ({ email: x.email, status: "success" })),
+        });
       },
       stop() {
         state.stopped++;
@@ -250,6 +255,8 @@ test("start：批量登录作为后台任务运行，传入并发数，结果形
   assert.ok(logs.includes("登录完成: 成功 1, 失败 0, 跳过 0"));
   // 进度从日志解析
   assert.ok(s.events.some(([c, p2]) => c === IPC.event.taskProgress && p2.current === 1 && p2.total === 1));
+  // 批量登录按账号上报条目（任务历史的逐条目来源）
+  assert.deepEqual(s.items(), [["a", "成功", ""]]);
 });
 
 
@@ -269,6 +276,8 @@ test("start：停止会触发 processor.stop，任务结束状态为 stopped", a
   const e = await done;
   assert.equal(e.outcome, "stopped");
   assert.deepEqual(e.result, { type: "stopped", task_type: "login", message: "用户停止任务" });
+  // 停止也要保留已处理账号的条目：否则历史显示 total=0，与实际处理量不符
+  assert.deepEqual(s.items(), [["a", "成功", ""]]);
 });
 
 test("start：已有任务在跑时抛 TASK_BUSY", async () => {
@@ -317,6 +326,13 @@ test("start：删除+窗口 —— 结果形状，窗口先关后删，账号从
   );
   assert.equal(s.ctx.accountRepo().count(), 0);
   assert.ok(s.logs().includes("批量删除完成: 删除账号 2/2, 失败 0"));
+  assert.deepEqual(
+    s.items(),
+    [
+      ["a", "成功", ""],
+      ["b", "成功", ""],
+    ],
+  );
 });
 
 
@@ -328,6 +344,7 @@ test("start：批量绑定 —— 结果形状 {total, success_count, failed_cou
   const e = await done;
   assert.deepEqual(e.result, { total: 1, success_count: 1, failed_count: 0, failed_list: [] });
   assert.equal(s.ctx.accountRepo().getAccountByEmail("a@x.com").browser_profile_id, "7");
+  assert.deepEqual(s.items(), [["a@x.com", "成功", ""]]);
 });
 
 // ==================== 单条操作 ====================
@@ -417,6 +434,11 @@ test("start：删除+窗口 —— 行上窗口 ID 与数据库不一致时整�
   assert.ok(s.ctx.accountRepo().getAccountByEmail("a"));
   assert.equal(s.ctx.accountRepo().getAccountByEmail("b"), null);
   assert.ok(s.logs().includes("数据已变化，请刷新后重试: a"));
+  // 过期账号也要上报条目：历史里的总数 / 失败数必须与日志里的「失败 1」对得上
+  assert.deepEqual(s.items(), [
+    ["a", "失败", "数据已变化，请刷新后重试"],
+    ["b", "成功", ""],
+  ]);
 
   // 全部不一致 → 直接拒绝
   const w = await s.call(CH.accountsPrecheck, "delete_with_windows", [{ email: "a", browserId: "" }]);

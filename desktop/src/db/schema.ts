@@ -116,6 +116,34 @@ const CREATE_REFRESH_TASK_ITEMS = `
                 )
             `;
 
+/** 批量任务运行结果（任务级）—— 本地新增能力，Python 侧没有对应表 */
+const CREATE_TASK_RUN_HISTORY = `
+                CREATE TABLE IF NOT EXISTS task_run_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_type TEXT NOT NULL,
+                    label TEXT,
+                    outcome TEXT,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    total INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    error TEXT
+                )
+            `;
+
+/** 批量任务运行结果（逐条目） */
+const CREATE_TASK_RUN_ITEMS = `
+                CREATE TABLE IF NOT EXISTS task_run_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    item_key TEXT,
+                    status TEXT,
+                    message TEXT,
+                    FOREIGN KEY (run_id) REFERENCES task_run_history(id) ON DELETE CASCADE
+                )
+            `;
+
 /** 列已存在（duplicate column name）时 SQLite 报的错误 */
 function isDuplicateColumn(error: unknown): boolean {
   return error instanceof Error && /duplicate column name/i.test(error.message);
@@ -140,4 +168,6 @@ export function initDb(db: Db): void {
   db.exec(CREATE_PROXY_WINDOW_BINDINGS);
   db.exec(CREATE_REFRESH_TASKS);
   db.exec(CREATE_REFRESH_TASK_ITEMS);
+  db.exec(CREATE_TASK_RUN_HISTORY);
+  db.exec(CREATE_TASK_RUN_ITEMS);
 }

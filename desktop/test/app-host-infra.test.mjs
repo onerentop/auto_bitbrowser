@@ -176,7 +176,7 @@ test("resolveDataRoot：ABB_DATA_ROOT 优先；打包取 exe 目录；开发取 
 
 // ==================== 建表 ====================
 
-test("initDb：建出 5 张表与 accounts 全部迁移列，可重复执行", () => {
+test("initDb：建出 7 张表与 accounts 全部迁移列，可重复执行", () => {
   const db = new DatabaseSync(":memory:");
   initDb(db);
   initDb(db);
@@ -190,6 +190,8 @@ test("initDb：建出 5 张表与 accounts 全部迁移列，可重复执行", (
     "accounts",
     "proxies",
     "proxy_window_bindings",
+    "task_run_history",
+    "task_run_items",
   ]);
   const cols = db.prepare("PRAGMA table_info(accounts)").all();
   assert.equal(cols.length, 8 + ACCOUNT_MIGRATIONS.length);

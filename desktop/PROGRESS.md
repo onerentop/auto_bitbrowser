@@ -97,10 +97,10 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 478/478 通过
+pnpm test               # 490/490 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
-                        # 覆盖率 95.5%：6 条 modify_2sv 改写提示词已登记「有意不比对」，
+                        # 覆盖率 94.7%：12 条（6 modify_2sv + 6 kick_devices）改写提示词已登记「有意不比对」，
                         # 余 2 条缺失是 login.py 的既有偏差
 pnpm verify:selectors   # 选择器缺失 0（197/197）
 ```
@@ -473,6 +473,44 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 - 回归用例 `desktop/test/app-totp.test.mjs`：修前 4 红 → 修后 **15/15 绿**
 - 本轮**未**改动（记在任务待办）：窗口备注整条覆盖（`recovery_email` 为空会把备注第 3 段写空）、
   覆盖已有密钥不写 `authenticator_modification_history`、导入密钥无格式校验、前端 UI 层未做真机操作
+
+### 任务结果持久化与导出（F4，2026-09-24）
+
+本地新增能力，Python 侧没有对应实现（批量任务结果只打在界面日志里，关掉就没了）。产品背景是第七轮评估：
+「Google 账号管理系统」需要能回答「上一次批量任务哪几个账号成了、哪几个败了、为什么」。
+
+- 新表 `task_run_history`（任务级）+ `task_run_items`（逐条目），`initDb` 由 5 张表变 7 张
+- 新仓储 `src/db/task-history-repository.ts`：`record()` 按条目状态统计 total / 成功 / 失败，另有 `listRuns` / `listItems` / `exportText()`
+- `TaskRunner` 收尾时用 `TaskRunnerOptions.onRecord` 把结果交出去落库（`try/catch` 兜住，写库失败不影响任务本身的结果）
+- 刻意**不复用** Python 遗留的 `account_refresh_tasks` / `_items`（语义是「刷新家庭组信息」，混用会让两边含义都变模糊）
+- 通道 `abb/taskhistory/list|items|export`，渲染层 `TaskHistoryTab.tsx`（设置页新增「任务历史」页签）
+  - 通道第二段必须小写（测试正则是 `abb/<小写>/...`），所以是 `taskhistory` 而不是 `taskHistory`
+  - `app/shared/channels/task-history.ts` 自己声明行类型 —— 直接 import 仓储会把 `node:sqlite` 拖进 web 构建
+
+真机暴露的缺陷与修复（先红后绿）：
+
+| 缺陷 | 真机证据 | 修法 |
+|---|---|---|
+| **批量任务从不上报逐条目**（`runBrowserBatch` 只调 `log/progress/shouldStop`）→ 任务成功但历史 `total=0`、逐条目 0 条 | 库里 run 1：`outcome=succeeded, total=0 成功=0 失败=0`，同一份日志里却有 `[1/1] ✓ 窗口 7 打开成功` | `home.ts` 逐窗口上报 `api.item`；静态复核发现批量登录 / 批量绑定 / 批量删除 / 设置页删除账号 **4 处同样缺失**，一并补上（`executeBatchBind` / `executeBatchDelete` 加可选 `item` 回调，`reportAccountResultItems()` 处理并发登录收尾才成形的逐账号结果） |
+| 失败条目消息只能到「窗口 N 打开失败」，底层原因（「窗口不存在」）只在任务日志里 | run 2 条目消息是 `窗口 999999 打开失败`，而日志里有 `窗口打开失败: 窗口不存在` | `BrowserOp` 签名改为 `(id, log)`，把本条目内最后一条底层日志当作失败原因；run 3 条目消息变成 `窗口打开失败: 窗口不存在` |
+
+- 独立只读复查（code-reviewer 子代理）后又修掉 3 处**统计口径**问题（同一类：历史数字与实际不符）：
+  ① 逐条目不去重 —— AI 任务每个账号发两次（「处理中」→「成功/失败」），3 个账号会写成 `总数 6`；
+  改为 `TaskRunner` 内 `itemIndex: Map<key, 下标>`，同一个 key 只留**最终**一条；
+  ② 批量登录被停止时条目全丢（停止分支返回 `{type:"stopped"}`，带不出逐账号结果）→ 把上报挪进
+  `executeAccountWorkerTask`，在停止分支**之前**用原始 result 上报；
+  ③ 界面数据过期的账号只打日志、不记条目 → 补 `api.item(email, "失败", "数据已变化，请刷新后重试")`。
+  另外 `record()` 用 `BEGIN/COMMIT/ROLLBACK` 包住写入，不留「有统计、没条目」的半条运行
+- 回归用例：`app-task-history.test.mjs`（含**真机缺陷回归**：端到端跑首页批量打开窗口，历史必须有
+  total / 成功 / 失败与逐条目；同一个 key 只留最终状态；半写入回滚）、`app-home.test.mjs`、
+  `app-accounts.test.mjs`（停止登录保留条目、过期账号条目）；先红 7 个 → 修后 **492/492 绿**
+- 只读独立复验（`th-verify.py`，`mode=ro` 逐表行数 + 排序内容 sha256 比对跑前备份）：16 张既有表
+  全部逐行一致，只多了两张新表 → PASS（加固后复跑再过一次）
+- 遗留：「跳过」条目不计入成功 / 失败两列（页面说明已写明）；不保存任务级 `result`（「删除了几个
+  窗口」这类数字不在历史里）；历史时间取本地时间而其它表是 UTC（有意不一致）；落库失败只在后端
+  日志可见（与 Python 共用库、`openDb` 无 `busy_timeout` 时会 `SQLITE_BUSY`，属既有全局条件）；
+  批量登录 / 绑定 / 删除的条目上报目前只有单测覆盖，未上真机
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -516,6 +554,7 @@ pnpm verify:selectors
    - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除（第二章第 8 节）
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
    - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机 / 踢出设备** 五个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
+   - **任务历史（F4）**：新增 `task_run_history` / `task_run_items` 两表 + 设置页「任务历史」页签 + CSV 导出；真机跑首页批量打开窗口时发现「任务成功但历史 `total=0`」（任务体从不调 `api.item`），修掉后同一路径复跑 `total=2 / 成功 1 / 失败 1 / 逐条目 2 条`，详见 `.trellis/tasks/09-24-task-history-real-run/real-run-log.md`
 
 ## 六、Python 侧现状（勿动）
 

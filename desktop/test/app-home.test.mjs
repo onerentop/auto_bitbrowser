@@ -265,15 +265,25 @@ test("selectAllVisible / selectedProfileIds：只作用于可见项", () => {
 
 // ==================== 批量任务体 ====================
 
-test("runBrowserBatch：逐个执行、记录失败、抛错视为失败、进度到 total", async () => {
+test("runBrowserBatch：逐个执行、记录失败、抛错视为失败、进度到 total，并逐条上报条目", async () => {
   const logs = [];
   const progress = [];
+  const items = [];
   const res = await runBrowserBatch(
-    { log: (m) => logs.push(m), progress: (c, t) => progress.push([c, t]), shouldStop: () => false },
+    {
+      log: (m) => logs.push(m),
+      progress: (c, t) => progress.push([c, t]),
+      item: (k, s, m) => items.push([k, s, m]),
+      shouldStop: () => false,
+    },
     [1, 2, 3],
     "打开",
-    async (id) => {
+    async (id, log) => {
       if (id === 3) throw new Error("炸了");
+      if (id === 2) {
+        log("底层原因: 窗口不存在");
+        return false;
+      }
       return id === 1;
     },
   );
@@ -281,11 +291,37 @@ test("runBrowserBatch：逐个执行、记录失败、抛错视为失败、进�
   assert.deepEqual(progress.at(-1), [3, 3]);
   assert.ok(logs.some((m) => m.includes("✓ 窗口 1 打开成功")));
   assert.ok(logs.some((m) => m.includes("窗口 3 打开异常: 炸了")));
+  assert.ok(logs.some((m) => m.includes("底层原因: 窗口不存在")), "底层日志照旧转发到任务日志");
+  // 逐条目结果：任务历史靠它统计 total / 成功 / 失败（真机上曾因不上报而全是 0）
+  assert.deepEqual(items, [
+    ["1", "成功", ""],
+    ["2", "失败", "底层原因: 窗口不存在"],
+    ["3", "失败", "炸了"],
+  ]);
+});
+
+test("runBrowserBatch：停止后不再上报未处理窗口的条目", async () => {
+  const items = [];
+  let n = 0;
+  const res = await runBrowserBatch(
+    { log: () => {}, progress: () => {}, item: (k, s) => items.push([k, s]), shouldStop: () => n > 1 },
+    [1, 2, 3],
+    "删除",
+    async () => {
+      n += 1;
+      return true;
+    },
+  );
+  assert.deepEqual(res, { total: 3, success_count: 2, failed_count: 0, failed_ids: [] });
+  assert.deepEqual(items, [
+    ["1", "成功"],
+    ["2", "成功"],
+  ]);
 });
 
 // ==================== handler：打开 / 删除任务 ====================
 
-test("openBrowsers：成功与失败混合，返回 {total, success_count, failed_count, failed_ids}", async (t) => {
+test("openBrowsers：成功与失败混合，返回 {total, success_count, failed_count, failed_ids}；逐窗口上报条目", async (t) => {
   const s = setup({
     async openProfile(id) {
       if (id === 22) throw new Error("profile not exist");
@@ -302,6 +338,14 @@ test("openBrowsers：成功与失败混合，返回 {total, success_count, faile
   const logs = taskLogs(s.events);
   assert.ok(logs.some((m) => m.includes("窗口打开失败: profile not exist")), "window.ts 的日志转到任务日志");
   assert.ok(s.events.some(([c, p]) => c === "abb/task/event/progress" && p.current === 3 && p.total === 3));
+  assert.deepEqual(
+    s.events.filter(([c]) => c === "abb/task/event/item").map(([, p]) => [p.key, p.status, p.message]),
+    [
+      ["21", "成功", ""],
+      ["22", "失败", "窗口打开失败: profile not exist"],
+      ["23", "成功", ""],
+    ],
+  );
 });
 
 test("deleteBrowsers：全部成功", async (t) => {

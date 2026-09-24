@@ -22,6 +22,7 @@ import {
   type TaskInfo,
   type TaskOutcome,
 } from "../shared/ipc.ts";
+import type { TaskRunItemRecord, TaskRunRecord } from "../../src/db/task-history-repository.ts";
 
 export type TaskEmit = <C extends EventChannel>(channel: C, payload: EventPayload<C>) => void;
 
@@ -30,7 +31,10 @@ export interface TaskApi {
   readonly taskId: number;
   log(message: string): void;
   progress(current: number, total: number): void;
-  /** 单个条目的状态变化（对标 Python AI Worker 的 progress(email, status, message)） */
+  /**
+   * 单个条目的状态变化（对标 Python AI Worker 的 progress(email, status, message)）。
+   * 同一个 key 可以上报多次（例如「处理中 → 成功」），落库时只保留**最终**一条。
+   */
   item(key: string, status: string, message: string): void;
   /** 是否已请求停止（对标 Python 的 should_stop()） */
   shouldStop(): boolean;
@@ -45,17 +49,25 @@ export interface TaskRunnerOptions {
   now?: () => number;
   /** 结束后的回调（测试用来等待任务完成） */
   onFinished?: (event: TaskFinishedEvent) => void;
+  /** 任务收尾时把运行结果交出去落库（写库失败不能影响任务本身的结果） */
+  onRecord?: (record: TaskRunRecord) => void;
 }
 
 interface RunningTask {
   info: TaskInfo;
   stopHooks: Array<() => void>;
+  /** 逐条目结果，任务收尾时一并交给落库回调 */
+  items: TaskRunItemRecord[];
+  /** item key → items 下标：同一个 key 重复上报时只保留最终一条（见 api.item） */
+  itemIndex: Map<string, number>;
 }
 
 export class TaskRunner {
   private readonly emit: TaskEmit;
   private readonly now: () => number;
   private readonly onFinished: ((event: TaskFinishedEvent) => void) | null;
+  /** 任务收尾时的落库回调（可选） */
+  private readonly onRecord: ((record: TaskRunRecord) => void) | undefined;
   private running: RunningTask | null = null;
   private nextId = 1;
 
@@ -63,6 +75,7 @@ export class TaskRunner {
     this.emit = options.emit;
     this.now = options.now ?? (() => Date.now());
     this.onFinished = options.onFinished ?? null;
+    this.onRecord = options.onRecord;
   }
 
   /** 当前任务快照（无则 null） */
@@ -89,7 +102,7 @@ export class TaskRunner {
       current: 0,
       total: 0,
     };
-    const task: RunningTask = { info, stopHooks: [] };
+    const task: RunningTask = { info, stopHooks: [], items: [], itemIndex: new Map() };
     this.running = task;
 
     const api: TaskApi = {
@@ -106,6 +119,16 @@ export class TaskRunner {
       },
       item: (key, status, message) => {
         if (this.running !== task) return;
+        // 同一个 key 的状态会变（AI 任务是「处理中 → 成功/失败」），历史里只保留**最终**一条：
+        // 否则一个账号会写成两行、任务级「总数」也翻倍（界面实时视图本来就是按 key 覆盖的）
+        const record: TaskRunItemRecord = { key, status, message };
+        const at = task.itemIndex.get(key);
+        if (at === undefined) {
+          task.itemIndex.set(key, task.items.length);
+          task.items.push(record);
+        } else {
+          task.items[at] = record;
+        }
         this.emit(IPC.event.taskItem, { taskId: info.id, type, key, status, message });
       },
       shouldStop: () => info.stopRequested,
@@ -162,6 +185,21 @@ export class TaskRunner {
     };
     this.emit(IPC.event.taskFinished, event);
     this.onFinished?.(event);
+    // 运行结果交给调用方落库（TaskHistoryRepository）。落库失败不能影响任务本身的结果，
+    // 所以 TaskRunner 自己兜住：调用方通常也会兜一层，但异常绝不能抛到任务链上。
+    try {
+      this.onRecord?.({
+        taskType: task.info.type,
+        label: task.info.label,
+        outcome,
+        startedAt: task.info.startedAt,
+        finishedAt: event.finishedAt,
+        items: task.items,
+        error,
+      });
+    } catch {
+      /* 落库失败只影响历史记录 */
+    }
   }
 }
 

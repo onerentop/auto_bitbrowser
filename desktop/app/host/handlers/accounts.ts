@@ -199,6 +199,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
             log: api.log,
             progressFromLog: createLogProgressTracker(total, api.progress),
             createProcessor,
+            item: api.item,
           });
           for (const line of workerFinishedLogLines(result)) api.log(line);
           return result;
@@ -221,6 +222,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
             },
             log: api.log,
             progress: (i) => api.progress(i, total),
+            item: api.item,
           });
           // 对标 _onBatchBindFinished（:997-1014）
           api.log(`批量绑定完成: ${results.success_count}/${results.total}`);
@@ -234,7 +236,12 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           const total = spec.accounts.length;
           api.log(`开始批量删除，共 ${total + spec.staleEmails.length} 个账号...`);
           // 界面数据过期的账号：整条跳过（不删账号也不删窗口），计为失败
-          for (const email of spec.staleEmails) api.log(staleLog(email));
+          for (const email of spec.staleEmails) {
+            api.log(staleLog(email));
+            // 与 executeBatchDelete 的失败条目同口径：过期账号也要上报条目，
+            // 否则日志里的「失败 2」在任务历史里查不到，总数/失败数会对不上
+            api.item(email, "失败", "数据已变化，请刷新后重试");
+          }
           api.progress(0, total);
           // 先删账号，账号删除成功后再删窗口；deleteAccount 返回 false 计为失败（见 executeBatchDelete 注释）
           const results = await executeBatchDelete({
@@ -247,6 +254,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
             deleteBrowser,
             log: api.log,
             progress: (i) => api.progress(i, total),
+            item: api.item,
           });
           results.total += spec.staleEmails.length;
           results.failed_count += spec.staleEmails.length;

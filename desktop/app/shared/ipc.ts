@@ -17,6 +17,7 @@ import { HOME_INVOKE, type HomeInvokeMap } from "./channels/home.ts";
 import { SETTINGS_INVOKE, type SettingsInvokeMap } from "./channels/settings.ts";
 import { AI_TASKS_INVOKE, type AiTasksInvokeMap } from "./channels/ai-tasks.ts";
 import { TOTP_INVOKE, type TotpInvokeMap } from "./channels/totp.ts";
+import { TASK_HISTORY_INVOKE, type TaskHistoryInvokeMap } from "./channels/task-history.ts";
 
 // ==================== 通道表 ====================
 
@@ -42,6 +43,7 @@ export const IPC = {
     ...ACCOUNTS_INVOKE,
     ...AI_TASKS_INVOKE,
     ...TOTP_INVOKE,
+    ...TASK_HISTORY_INVOKE,
   },
   event: {
     /** 后端进程状态变化推送 */
@@ -223,7 +225,8 @@ export interface InvokeMap
     HomeInvokeMap,
     AccountsInvokeMap,
     AiTasksInvokeMap,
-    TotpInvokeMap {
+    TotpInvokeMap,
+    TaskHistoryInvokeMap {
   "abb/app/getVersion": { args: []; result: AppVersionInfo };
   "abb/host/getStatus": { args: []; result: HostStatus };
   "abb/host/restart": { args: []; result: HostStatus };
