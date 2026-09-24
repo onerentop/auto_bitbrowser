@@ -12,9 +12,9 @@
 import type { TaskInfo } from "../ipc.ts";
 
 export const AI_TASKS_INVOKE = {
-  /** 读取账号 + 分组 + 窗口，组成两级树 */
+  /** 读取账号 + 分组 + 窗口，组成平铺列表 */
   aiTasksLoad: "abb/aitasks/load",
-  /** 对选中账号串行执行某一种 AI 任务（后台任务） */
+  /** 对选中账号逐个执行某一种 AI 任务（后台任务） */
   aiTasksStart: "abb/aitasks/start",
 } as const;
 
@@ -107,18 +107,15 @@ export function isAiTaskKind(value: unknown): value is AiTaskKind {
 /** 全部 AI 任务类型（渲染层据此判断结束事件是否属于 AI 任务） */
 export const AI_TASK_TYPES: readonly string[] = Object.values(AI_TASK_KINDS).map((d) => d.taskType);
 
-/**
- * 状态筛选下拉，含遗留状态值，保留不清理。
- * value 为空串表示「全部」（不筛选）。
- */
-export const AI_TASK_STATUS_FILTERS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "", label: "全部" },
-  { value: "pending", label: "pending - 待处理" },
-  { value: "link_ready", label: "link_ready - 链接就绪" },
-  { value: "verified", label: "verified - 已验证" },
-  { value: "subscribed", label: "subscribed - 已订阅" },
-  { value: "ineligible", label: "ineligible - 不符合" },
-  { value: "error", label: "error - 错误" },
+/** 「账号状态」筛选（按数据库 login_status 与是否在库） */
+export type AiTaskLoginFilter = "all" | "logged_in" | "login_failed" | "other" | "not_in_db";
+
+export const AI_TASK_LOGIN_FILTERS: ReadonlyArray<{ value: AiTaskLoginFilter; label: string }> = [
+  { value: "all", label: "全部" },
+  { value: "logged_in", label: "已登录" },
+  { value: "login_failed", label: "登录失败" },
+  { value: "other", label: "其它 / 未知" },
+  { value: "not_in_db", label: "不在数据库" },
 ];
 
 /** 逐行状态字面量（各 Worker 的 progressSignal） */
@@ -131,32 +128,43 @@ export const AI_TASK_ITEM_STATUS = {
 
 // ==================== 数据类型 ====================
 
-/** 树的二级节点：一个窗口（name 视为 email） */
-export interface AiTaskBrowserNode {
-  /** 树内唯一键 */
+/**
+ * 列表的一行：一个窗口（窗口名视为 email）+ 按 email 匹配到的数据库账号信息。
+ * **只下发布尔值与登录状态**，不下发密码 / 2FA 密钥 / 辅助邮箱原文。
+ */
+export interface AiTaskRow {
+  /** 行键：规则同首页（有效且不重复的窗口 ID 为 `b:{id}`） */
   key: string;
   /** 窗口 ID；原始数据缺失或非法时为 null（无法执行任务） */
   profileId: number | null;
-  /** 窗口名，即 email（:307） */
-  name: string;
-  /** 账号状态：匹配到数据库时取其 status，否则 "pending"（:310-312） */
-  status: string;
-  /** 是否匹配到数据库账号 */
-  matched: boolean;
-}
-
-/** 树的一级节点：分组 */
-export interface AiTaskGroupNode {
-  key: string;
+  /** 窗口名原文，即 email（不清洗：执行前要与窗口当前名称逐字比对） */
+  email: string;
   groupId: number;
   groupName: string;
-  browsers: AiTaskBrowserNode[];
+  /** 是否匹配到数据库账号 */
+  inDb: boolean;
+  hasRecoveryEmail: boolean;
+  /** 数据库里是否有 2FA 密钥 */
+  hasSecret: boolean;
+  /** 数据库 login_status 原值；不在库或为空时为 "" */
+  loginStatus: string;
+  /** 数据库 last_login_at 原文（本地时间字符串）；没有为 null */
+  lastLoginAt: string | null;
+}
+
+/** 分组标签的一项：只列有窗口的分组 */
+export interface AiTaskGroupCount {
+  groupId: number;
+  groupName: string;
+  count: number;
 }
 
 export interface AiTaskLoadResult {
-  groups: AiTaskGroupNode[];
+  rows: AiTaskRow[];
+  /** 按分组 ID 升序 */
+  groups: AiTaskGroupCount[];
   totalBrowsers: number;
- /** 加载失败原因（ 的 result['error']）；此时 groups 为空 */
+  /** 加载失败原因；此时 rows 为空 */
   error: string | null;
 }
 
@@ -188,7 +196,7 @@ export interface AiTaskRunResult {
 export interface AiTasksInvokeMap {
   "abb/aitasks/load": { args: []; result: AiTaskLoadResult };
   "abb/aitasks/start": {
-    args: [kind: AiTaskKind, items: AiTaskStartItem[], params: AiTaskParams, concurrency: number];
+    args: [kind: AiTaskKind, items: AiTaskStartItem[], params: AiTaskParams];
     result: TaskInfo;
   };
 }

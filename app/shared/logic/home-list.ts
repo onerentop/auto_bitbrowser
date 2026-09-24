@@ -212,8 +212,8 @@ export function tableSorter(key: BrowserSortKey) {
   };
 }
 
-/** 刷新后：去掉已不存在的窗口的勾选，其余保留（保持原顺序） */
-export function reconcileChecked(checkedKeys: readonly string[], list: readonly HomeBrowserNode[]): string[] {
+/** 刷新后：去掉已不存在的行的勾选，其余保留（保持原顺序）；只看行 key，首页与 AI 任务页共用 */
+export function reconcileChecked(checkedKeys: readonly string[], list: readonly { key: string }[]): string[] {
   const exists = new Set(list.map((b) => b.key));
   return checkedKeys.filter((k) => exists.has(k));
 }
@@ -221,7 +221,7 @@ export function reconcileChecked(checkedKeys: readonly string[], list: readonly 
 /** 勾选统计：total 为全部勾选数，hidden 为其中不在当前视图（被筛选 / 搜索隐藏）的数量 */
 export function selectionSummary(
   checkedKeys: readonly string[],
-  visible: readonly HomeBrowserNode[],
+  visible: readonly { key: string }[],
 ): { total: number; hidden: number } {
   const shown = new Set(visible.map((b) => b.key));
   const hidden = checkedKeys.filter((k) => !shown.has(k)).length;

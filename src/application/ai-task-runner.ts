@@ -2,7 +2,7 @@
  * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备）的执行逻辑
  *
  * 包含四部分：
- *   - buildAiTaskTree：从窗口列表构造 AI 任务树
+ *   - buildAiTaskRows：窗口列表 + 数据库账号 → 平铺账号列表
  *   - invokeAiTask：按任务类型分派到对应的 automation 函数
  *   - describeOutcome：把执行结果转成行状态与文案
  *   - runAiTask：串行执行整批任务并上报进度 / 日志
@@ -13,15 +13,15 @@
 import {
   AI_TASK_ITEM_STATUS,
   AI_TASK_KINDS,
-  type AiTaskBrowserNode,
-  type AiTaskGroupNode,
   type AiTaskItemResult,
   type AiTaskKind,
+  type AiTaskLoadResult,
   type AiTaskParams,
+  type AiTaskRow,
   type AiTaskRunResult,
   type AiTaskStartItem,
 } from "../../app/shared/channels/ai-tasks.ts";
-import { cleanText, UNGROUPED_NAME } from "../../app/shared/logic/home-list.ts";
+import { buildBrowserList } from "../../app/shared/logic/home-list.ts";
 import type { AccountRepository } from "../db/account-repository.ts";
 import type { HistoryRepository } from "../db/history-repository.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
@@ -42,92 +42,50 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-// ==================== 加载：两级树 ====================
+// ==================== 加载：平铺列表 ====================
 
-/** 分组 ID 只认整数；其余视为无效 */
-function asGroupId(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) ? value : null;
-}
-
-/** 窗口 ID：正整数（或可转成正整数的字符串）才有效 */
-function asProfileId(value: unknown): number | null {
-  const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
-  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : null;
-}
-
-export interface BuiltAiTaskTree {
-  groups: AiTaskGroupNode[];
-  totalBrowsers: number;
+function nonEmpty(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 /**
- * 构建「分组 → 窗口」两级树。
- *   - 分组名：去掉不可打印字符，为空时用 `分组 {gid}`；另加 0 号「未分组」
- *   - 分组归属：group_id 缺失或非数字时按 0（未分组）处理
- *   - 只列出有窗口的分组，按 gid 升序（:287）；group-list 里没有的 gid 显示 `分组 {gid}`（:289）
- *   - 窗口名即 email；按 email 匹配数据库账号，未匹配时状态为 pending
- * 状态筛选在渲染层做，这里返回全部窗口。
+ * 平铺账号列表：
+ *   - 分组名、行 key、分组统计与首页同一规则（直接复用 buildBrowserList）
+ *   - email 取窗口名**原文**（不清洗）：执行前要与窗口当前名称逐字比对，也用它按 email 匹配数据库账号
+ *   - 只从账号里取布尔值 / 登录状态 / 最后登录时间，**不带出密码、密钥、辅助邮箱原文**
  */
-export function buildAiTaskTree(
+export function buildAiTaskRows(
   accounts: readonly unknown[],
   groups: readonly unknown[],
   browsers: readonly unknown[],
-): BuiltAiTaskTree {
-  // 按 email 建索引
+): Omit<AiTaskLoadResult, "error"> {
   const accountByEmail = new Map<string, Record<string, unknown>>();
   for (const raw of accounts) {
     const acc = asRecord(raw);
     if (acc && typeof acc["email"] === "string") accountByEmail.set(acc["email"], acc);
   }
 
-  const groupNames = new Map<number, string>();
-  for (const raw of groups) {
-    const g = asRecord(raw);
-    if (!g) continue;
-    const gid = asGroupId(g["id"]);
-    if (gid === null) continue;
-    const title = cleanText(String(g["title"] ?? ""));
-    groupNames.set(gid, title || `分组 ${gid}`);
-  }
-  groupNames.set(0, UNGROUPED_NAME);
-
-  const grouped = new Map<number, AiTaskBrowserNode[]>();
-  const usedProfileIds = new Set<number>();
-  let seq = 0;
-  for (const raw of browsers) {
-    const b = asRecord(raw);
-    if (!b) continue;
-    const gid = asGroupId(b["group_id"]) ?? 0;
-    let list = grouped.get(gid);
-    if (!list) {
-      list = [];
-      grouped.set(gid, list);
-    }
-    const email = String(b["name"] ?? "");
-    const profileId = asProfileId(b["profile_id"]);
-    const index = seq++;
-    // 行 key 规则与首页一致（app/shared/logic/home-list.ts 的 buildBrowserList）
-    let key: string;
-    if (profileId !== null && !usedProfileIds.has(profileId)) {
-      usedProfileIds.add(profileId);
-      key = `b:${profileId}`;
-    } else {
-      key = `b:${gid}:${index}`;
-    }
+  // buildBrowserList 与这里用同一个 asRecord 过滤，下标一一对应
+  const records = browsers.map(asRecord).filter((b): b is Record<string, unknown> => b !== null);
+  const list = buildBrowserList(groups, records);
+  const rows: AiTaskRow[] = list.browsers.map((node, i) => {
+    const email = String(records[i]?.["name"] ?? "");
     const acc = accountByEmail.get(email);
-    // 数据库里 status 为 NULL 时显示为空；账号不在库里时状态为 pending
-    const status = acc ? (acc["status"] === null || acc["status"] === undefined ? "" : String(acc["status"])) : "pending";
-    list.push({ key, profileId, name: email, status, matched: acc !== undefined });
-  }
-
-  const result: AiTaskGroupNode[] = [];
-  let total = 0;
-  for (const gid of [...grouped.keys()].sort((a, b) => a - b)) {
-    const list = grouped.get(gid) ?? [];
-    total += list.length;
-    result.push({ key: `g:${gid}`, groupId: gid, groupName: groupNames.get(gid) ?? `分组 ${gid}`, browsers: list });
-  }
-  return { groups: result, totalBrowsers: total };
+    const lastLogin = acc?.["last_login_at"];
+    return {
+      key: node.key,
+      profileId: node.profileId,
+      email,
+      groupId: node.groupId,
+      groupName: node.groupName,
+      inDb: acc !== undefined,
+      hasRecoveryEmail: nonEmpty(acc?.["recovery_email"]),
+      hasSecret: nonEmpty(acc?.["secret_key"]),
+      loginStatus: typeof acc?.["login_status"] === "string" ? acc["login_status"] : "",
+      lastLoginAt: nonEmpty(lastLogin) ? String(lastLogin) : null,
+    };
+  });
+  return { rows, groups: list.groups, totalBrowsers: rows.length };
 }
 
 // ==================== 分派注册表 ====================
@@ -284,14 +242,11 @@ export interface RunAiTaskOptions {
   kind: AiTaskKind;
   items: readonly AiTaskStartItem[];
   params: AiTaskParams;
-  /** 并发数：只记录不使用，见 runAiTask 注释 */
-  concurrency: number;
 }
 
 /**
  * 批处理任务的执行循环：
- *   - **串行执行**：逐个账号 await，
- *     从不读取 config['concurrent']，concurrency 只写进日志。
+ *   - **串行执行**：逐个账号 await（没有并发选项）。
  *   - 每个账号开始前检查停止标志。
  *     停止只在账号之间生效：正在处理的账号无法中断，要等它结束。
  *   - accountInfo 以数据库为准：按 email 重新读取；无记录时为 {email}，
@@ -316,7 +271,6 @@ export async function runAiTask(
 
   // :382
   api.log(`开始为 ${total} 个账号执行${def.taskName}...`);
-  api.log(`并发数: ${options.concurrency}（与原版一致，按顺序逐个执行）`);
   api.progress(0, total);
 
   for (let i = 0; i < total; i++) {

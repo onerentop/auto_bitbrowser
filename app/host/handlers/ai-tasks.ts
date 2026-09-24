@@ -1,8 +1,7 @@
 /**
  * 5 个 AI 批量任务页（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备） 的后端 handler
  *
- * - load：读取账号 + 分组 + 窗口，只读，做成普通请求（理由同 home.ts 的 listBrowsers：
- *   ixBrowser 是本机服务，正常每页 <1s，只有服务挂死时才会撞上主进程 30s 超时）
+ * - load：读取账号 + 分组 + 窗口，只读，做成普通请求（分组与窗口并发、窗口大页，同 home.ts 的 listBrowsers）
  * - start：逐个账号跑 AI 自动化，耗时不定，必须走后台任务
  * 执行逻辑见 src/application/ai-task-runner.ts。
  */
@@ -22,12 +21,13 @@ import { getBrowserInfo, getBrowserList } from "../../../src/ixbrowser/window.ts
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
 import {
   DEFAULT_AI_TASK_AUTOMATION,
-  buildAiTaskTree,
+  buildAiTaskRows,
   runAiTask,
   type AiTaskAutomation,
   type ModifyAuthDeps,
   type ChangePasswordDeps,
 } from "../../../src/application/ai-task-runner.ts";
+import { HOME_LIST_PAGE_SIZE } from "./home.ts";
 
 /** 单次批量上限：防止误传超大数组 */
 const MAX_ITEMS = 10_000;
@@ -52,19 +52,18 @@ export interface ParsedStartArgs {
   kind: AiTaskKind;
   items: AiTaskStartItem[];
   params: AiTaskParams;
-  concurrency: number;
 }
 
 /**
- * 校验 start 的参数 (kind, items, params, concurrency)：
+ * 校验 start 的参数 (kind, items, params)：
  *   - kind 必须在 AI_TASK_KINDS 内
  *   - items 非空数组；每项 {email: 非空字符串, profileId: 正整数}；按 (email, profileId) 去重保序
  *   - params 普通对象，只允许该 kind 的额外输入键，值为字符串且长度 ≤ 200
- *   - concurrency 为 1-10 的整数
+ * （没有并发数参数：任务一直是逐个账号顺序执行）
  */
 export function parseStartArgs(args: unknown[]): ParsedStartArgs {
-  if (args.length !== 4) throw invalid("需要 4 个参数：任务种类、账号列表、参数对象、并发数");
-  const [rawKind, rawItems, rawParams, rawConcurrency] = args;
+  if (args.length !== 3) throw invalid("需要 3 个参数：任务种类、账号列表、参数对象");
+  const [rawKind, rawItems, rawParams] = args;
 
   if (!isAiTaskKind(rawKind)) throw invalid(`不支持的任务种类: ${String(rawKind)}`);
   const kind = rawKind;
@@ -100,16 +99,7 @@ export function parseStartArgs(args: unknown[]): ParsedStartArgs {
     params[def.extraField.key] = value.trim();
   }
 
-  if (
-    typeof rawConcurrency !== "number" ||
-    !Number.isInteger(rawConcurrency) ||
-    rawConcurrency < 1 ||
-    rawConcurrency > 10
-  ) {
-    throw invalid("并发数必须是 1-10 的整数");
-  }
-
-  return { kind, items, params, concurrency: rawConcurrency };
+  return { kind, items, params };
 }
 
 export interface AiTasksHandlerOptions {
@@ -124,7 +114,8 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
 
   return {
     /**
-     * 加载分组与窗口，组装账号树。
+     * 加载分组与窗口，组装平铺账号列表。
+     * 分组与窗口并发请求、窗口每页 HOME_LIST_PAGE_SIZE 条（同首页：ixBrowser 每次请求约 3.3s 固定开销）。
      * 任何一步抛错都返回 error 字段，不抛异常。
      */
     "abb/aitasks/load": async (...args: unknown[]): Promise<AiTaskLoadResult> => {
@@ -132,11 +123,13 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
       try {
         const accounts = ctx.accountRepo().getAllAccounts();
         const deps = { client: ctx.ix(), log: ctx.log };
-        const groups = await getGroupList(deps);
-        const browsers = await getBrowserList(deps, { fetchAll: true });
-        return { ...buildAiTaskTree(accounts, groups, browsers), error: null };
+        const [groups, browsers] = await Promise.all([
+          getGroupList(deps),
+          getBrowserList(deps, { fetchAll: true, limit: HOME_LIST_PAGE_SIZE }),
+        ]);
+        return { ...buildAiTaskRows(accounts, groups, browsers), error: null };
       } catch (error) {
-        return { groups: [], totalBrowsers: 0, error: errText(error) };
+        return { rows: [], groups: [], totalBrowsers: 0, error: errText(error) };
       }
     },
 

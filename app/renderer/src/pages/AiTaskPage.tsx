@@ -1,29 +1,33 @@
 /**
  * 通用 AI 批量任务页
- * 驱动 5 个导航项：替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备。
+ * 驱动 6 个导航项：替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备 / 修改密码。
  *
- * 布局：「{任务名} 配置」卡片 → 按钮行（加载数据 / 开始{任务名} / 停止 … 共 N 个账号）→ 账号树。
+ * 布局：「{任务名}」配置卡片（额外输入框 + 开始 / 停止）→ 账号列表卡片（刷新、搜索、筛选、平铺表格）。
  * 进度条与日志区由底部全局任务坞替代，界面侧日志用 logLocal。
  *
- * 5 个实例同时挂载、切走不卸载：所有状态都在组件内部，互不影响。
- * 页面不自动加载，需点「加载数据」。
+ * 6 个实例首次打开时各自自动加载一次，切走不卸载：所有状态都在组件内部，互不影响。
+ * 刷新列表保留勾选（去掉已不存在的）与本次任务结果；开始新任务时才清空任务结果。
+ * 任务一直是逐个账号顺序执行（没有并发数设置）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { App, Button, Card, Input, InputNumber, Select, Space, Typography } from "antd";
-import { DownloadOutlined, PauseOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { App, Button, Card, Input, Space, Typography } from "antd";
+import { PauseOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import {
   AI_TASK_KINDS,
-  AI_TASK_STATUS_FILTERS,
   isAiTaskKind,
-  type AiTaskGroupNode,
   type AiTaskKind,
+  type AiTaskLoadResult,
+  type AiTaskLoginFilter,
   type AiTaskParams,
+  type AiTaskStartItem,
 } from "../../../shared/channels/ai-tasks.ts";
 import type { TaskFinishedEvent, TaskItemEvent } from "../../../shared/ipc.ts";
+import { filterRows, isFailedRuntime, selectedItems, type RowRuntime } from "../../../shared/logic/ai-task-list.ts";
+import { reconcileChecked, selectionSummary } from "../../../shared/logic/home-list.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, stopTask, useTaskState } from "../stores/task.ts";
-import { AccountTreeCard, type RowRuntime } from "./ai-tasks/AccountTreeCard.tsx";
-import { countVisible, filterByStatus, pruneChecked, selectedItems } from "./ai-tasks/tree.ts";
+import { useHostStatus } from "../stores/host-status.ts";
+import { AccountListCard } from "./ai-tasks/AccountListCard.tsx";
 
 export interface AiTaskPageProps {
   /** 任务种类键，见 app/shared/channels/ai-tasks.ts 的 AI_TASK_KINDS */
@@ -51,34 +55,38 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   const { message, modal } = App.useApp();
   const { running } = useTaskState();
 
-  const [concurrency, setConcurrency] = useState(1);
-  const [statusFilter, setStatusFilter] = useState("");
   const [extraValue, setExtraValue] = useState("");
 
-  const [groups, setGroups] = useState<AiTaskGroupNode[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [list, setList] = useState<AiTaskLoadResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
   const [runtime, setRuntime] = useState<Record<string, RowRuntime>>({});
   // 只采纳最近一次加载的结果（比它更早的结果直接丢弃）
   const loadSeq = useRef(0);
 
+  // 筛选条件
+  const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const [groupId, setGroupId] = useState<number | null>(null);
+  const [login, setLogin] = useState<AiTaskLoginFilter>("all");
+  const [failedOnly, setFailedOnly] = useState(false);
+
   // 本页启动的任务 id；启动请求在途时 pending 非空
   const taskIdRef = useRef<number | null>(null);
   const pendingRef = useRef<PendingStart | null>(null);
 
-  const visible = useMemo(() => filterByStatus(groups, statusFilter), [groups, statusFilter]);
-  const total = countVisible(visible);
+  const rows = useMemo(() => list?.rows ?? [], [list]);
+  const visible = useMemo(
+    () => filterRows(rows, { groupId, login, failedOnly, text: deferredSearch }, runtime),
+    [rows, groupId, login, failedOnly, deferredSearch, runtime],
+  );
+  const hiddenChecked = selectionSummary(checked, visible).hidden;
+  const failedCount = useMemo(() => Object.values(runtime).filter(isFailedRuntime).length, [runtime]);
 
-  /** 加载分组与窗口数据 */
+  /** 加载 / 刷新账号列表：保留仍存在账号的勾选与本次任务结果 */
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
-    setGroups([]);
-    setChecked([]);
-    setRuntime({});
-    setLoaded(false);
     setLoading(true);
-    logLocal("正在加载数据...");
     try {
       const res = await invoke(IPC.invoke.aiTasksLoad);
       if (seq !== loadSeq.current) return;
@@ -86,24 +94,26 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
         logLocal(`⚠️ 加载数据时发生错误: ${res.error}`);
         return;
       }
-      setGroups(res.groups);
-      setLoaded(true);
-      logLocal(`加载完成: ${countVisible(filterByStatus(res.groups, statusFilter))} 个账号`);
+      setList(res);
+      setChecked((prev) => reconcileChecked(prev, res.rows));
+      setGroupId((g) => (g !== null && !res.groups.some((x) => x.groupId === g) ? null : g));
+      logLocal(`${taskName}：加载完成，${res.totalBrowsers} 个账号`);
     } catch (e) {
       if (seq !== loadSeq.current) return;
-      logLocal(`❌ 处理加载结果失败: ${describeError(e)}`);
+      logLocal(`❌ 加载账号列表失败: ${describeError(e)}`);
     } finally {
       if (seq === loadSeq.current) setLoading(false);
     }
-  }, [statusFilter]);
+  }, [taskName]);
 
-  /** 状态筛选变化：已加载时按新条件重新过滤；被隐藏的行取消勾选 */
-  const onFilterChange = (value: string): void => {
-    setStatusFilter(value);
-    const next = filterByStatus(groups, value);
-    setChecked((prev) => pruneChecked(next, prev));
-    if (loaded) logLocal(`加载完成: ${countVisible(next)} 个账号`);
-  };
+  // 首次显示时自动加载。等后端首次就绪再发：窗口可能早于后端 ready 打开。
+  const hostReady = useHostStatus()?.state === "ready";
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (!hostReady || autoLoaded.current) return;
+    autoLoaded.current = true;
+    void load();
+  }, [hostReady, load]);
 
   // ---------- 任务事件 ----------
 
@@ -151,12 +161,15 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
     [taskType, applyFinished],
   );
 
-  const launch = async (items: ReturnType<typeof selectedItems>): Promise<void> => {
+  const launch = async (items: AiTaskStartItem[]): Promise<void> => {
     const params: AiTaskParams = {};
     if (extraField) params[extraField.key] = extraValue.trim();
     pendingRef.current = { items: [], finished: null };
+    // 新一轮任务：清空上一轮的逐行结果（「只看本次失败」随之复位）
+    setRuntime({});
+    setFailedOnly(false);
     try {
-      const info = await invoke(IPC.invoke.aiTasksStart, kind, items, params, concurrency);
+      const info = await invoke(IPC.invoke.aiTasksStart, kind, items, params);
       const pending = pendingRef.current;
       pendingRef.current = null;
       taskIdRef.current = info.id;
@@ -172,17 +185,20 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
 
   /**
    * 开始任务。
-   * 有意偏差：这些操作都会修改账号（破坏性），开始前加一个确认框。
+   * 这些操作都会修改账号（破坏性），开始前确认；被筛选隐藏的勾选也会执行，确认框里单独提示数量。
    */
   const onStart = (): void => {
-    const items = selectedItems(visible, checked);
+    const items = selectedItems(rows, checked);
     if (items.length === 0) {
-      void message.warning("请先选择要处理的账号");
+      void message.warning("请先勾选要处理的账号");
       return;
     }
+    const hiddenLine = hiddenChecked > 0 ? `\n其中 ${hiddenChecked} 个被筛选隐藏，当前列表里看不到。` : "";
     modal.confirm({
       title: `确认${taskName}`,
-      content: `将对 ${items.length} 个账号执行${taskName}，此操作会修改账号`,
+      content: (
+        <div style={{ whiteSpace: "pre-line" }}>{`将对 ${items.length} 个账号逐个执行${taskName}，此操作会修改账号。${hiddenLine}`}</div>
+      ),
       okText: "开始",
       cancelText: "取消",
       onOk: () => {
@@ -205,32 +221,10 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
   const ownRunning = running !== null && running.type === taskType;
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-      {/* 配置卡片 */}
-      <Card size="small" title={`${taskName} 配置`}>
-        <Space direction="vertical" size="middle">
-          <Space wrap size="large">
-            <Space>
-              <span>并发数:</span>
-              <InputNumber
-                min={1}
-                max={10}
-                precision={0}
-                value={concurrency}
-                onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
-                style={{ width: 120 }}
-              />
-            </Space>
-            <Space>
-              <span>状态筛选:</span>
-              <Select
-                value={statusFilter}
-                onChange={onFilterChange}
-                options={AI_TASK_STATUS_FILTERS.map((o) => ({ value: o.value, label: o.label }))}
-                style={{ minWidth: 180 }}
-              />
-            </Space>
-          </Space>
+    // 纵向铺满：账号列表卡片占剩余高度，表格随窗口大小伸缩
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 560 }}>
+      <Card size="small" title={taskName}>
+        <Space wrap size="middle">
           {extraField && (
             <Space>
               <span>{extraField.label}:</span>
@@ -243,32 +237,36 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
               />
             </Space>
           )}
-        </Space>
-      </Card>
-
-      {/* 操作按钮 */}
-      <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
-        <Space wrap>
-          <Button icon={<DownloadOutlined />} onClick={() => void load()} loading={loading} disabled={busy}>
-            加载数据
-          </Button>
           <Button type="primary" icon={<PlayCircleOutlined />} onClick={onStart} disabled={busy}>
             开始{taskName}
+            {checked.length > 0 ? `（${checked.length}）` : ""}
           </Button>
           <Button icon={<PauseOutlined />} onClick={onStop} disabled={!ownRunning || running?.stopRequested === true}>
             停止
           </Button>
+          <Typography.Text type="secondary">逐个账号顺序执行</Typography.Text>
         </Space>
-        <Typography.Text type="secondary">{loaded ? `共 ${total} 个账号` : ""}</Typography.Text>
-      </Space>
+      </Card>
 
-      <AccountTreeCard
-        groups={visible}
+      <AccountListCard
+        list={list}
+        visible={visible}
         loading={loading}
+        onRefresh={() => void load()}
         checkedKeys={checked}
         onCheckedChange={setChecked}
+        hiddenChecked={hiddenChecked}
         runtime={runtime}
+        failedCount={failedCount}
+        search={search}
+        onSearchChange={setSearch}
+        groupId={groupId}
+        onGroupChange={setGroupId}
+        login={login}
+        onLoginChange={setLogin}
+        failedOnly={failedOnly}
+        onFailedOnlyChange={setFailedOnly}
       />
-    </Space>
+    </div>
   );
 }
