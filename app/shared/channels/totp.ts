@@ -92,12 +92,6 @@ export const TOTP_STATUS_TEXT: Readonly<Record<TotpMatchStatus, string>> = {
   no_match: "未匹配",
 };
 
-export const TOTP_STATUS_COLORS: Readonly<Record<TotpMatchStatus, string>> = {
-  can_import: "#4CAF50",
-  has_secret: "#FF9800",
-  no_match: "#888888",
-};
-
 /** 与入参 entries 按下标一一对应的匹配结果 */
 export interface TotpMatchRow {
   status: TotpMatchStatus;

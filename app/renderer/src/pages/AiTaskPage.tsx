@@ -2,7 +2,7 @@
  * 通用 AI 批量任务页
  * 驱动 6 个导航项：替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备 / 修改密码。
  *
- * 布局：「{任务名}」配置卡片（额外输入框 + 开始 / 停止）→ 账号列表卡片（刷新、搜索、筛选、平铺表格）。
+ * 布局：页头（任务名 + 一句说明 + 开始 / 停止）→「任务参数」分节（仅有额外输入框的任务）→ 账号列表面板（刷新、搜索、筛选、平铺表格）。
  * 进度条与日志区由底部全局任务坞替代，界面侧日志用 logLocal。
  *
  * 6 个实例首次打开时各自自动加载一次，切走不卸载：所有状态都在组件内部，互不影响。
@@ -10,7 +10,7 @@
  * 任务一直是逐个账号顺序执行（没有并发数设置）。
  */
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { App, Button, Card, Input, Space, Typography } from "antd";
+import { App, Button, Input, Typography } from "antd";
 import { PauseOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import {
   AI_TASK_KINDS,
@@ -28,6 +28,8 @@ import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, stopTask, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { AccountListCard } from "./ai-tasks/AccountListCard.tsx";
+import { PageHeader } from "../components/PageHeader.tsx";
+import { Panel, Section } from "../components/Section.tsx";
 
 export interface AiTaskPageProps {
   /** 任务种类键，见 app/shared/channels/ai-tasks.ts 的 AI_TASK_KINDS */
@@ -42,6 +44,16 @@ export function AiTaskPage(props: AiTaskPageProps): ReactElement {
   }
   return <AiTaskView kind={props.kind} />;
 }
+
+/** 页头说明：用户视角讲清该任务会对勾选账号做什么（依据 src/automation/auto-*.ts 与 AI_TASK_KINDS） */
+const TASK_DESCRIPTIONS: Readonly<Record<AiTaskKind, string>> = {
+  replace_phone: "把勾选账号的辅助手机号换成下面填写的号码；留空则移除原手机号。",
+  replace_email: "把勾选账号的辅助邮箱换成下面填写的地址；留空则移除原辅助邮箱。",
+  modify_2sv: "把勾选账号的两步验证（2SV）手机改成下面填写的号码。",
+  modify_auth: "为勾选账号重新绑定身份验证器，新密钥保存到数据库和窗口的 2FA 设置。",
+  kick_devices: "让勾选账号退出除本机以外的所有已登录设备。",
+  change_password: "为勾选账号换成系统随机生成的新密码，Google 侧改成功后才写入数据库和窗口。",
+};
 
 /** 启动请求返回前到达的事件先缓存（跨进程时事件可能先于返回值到达，见 stores/task.ts:37-43） */
 interface PendingStart {
@@ -219,34 +231,47 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
 
   const busy = running !== null;
   const ownRunning = running !== null && running.type === taskType;
+  const paramId = `ai-task-param-${kind}`;
 
   return (
-    // 纵向铺满：账号列表卡片占剩余高度，表格随窗口大小伸缩
+    // 纵向铺满：账号列表面板占剩余高度，表格随窗口大小伸缩
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 560 }}>
-      <Card size="small" title={taskName}>
-        <Space wrap size="middle">
-          {extraField && (
-            <Space>
-              <span>{extraField.label}:</span>
+      <PageHeader
+        title={taskName}
+        description={TASK_DESCRIPTIONS[kind]}
+        extra={
+          <>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              逐个账号顺序执行
+            </Typography.Text>
+            <Button icon={<PauseOutlined />} onClick={onStop} disabled={!ownRunning || running?.stopRequested === true}>
+              停止任务
+            </Button>
+            <Button type="primary" icon={<PlayCircleOutlined />} onClick={onStart} disabled={busy}>
+              开始{taskName}
+              {checked.length > 0 ? `（${checked.length}）` : ""}
+            </Button>
+          </>
+        }
+      />
+
+      {extraField && (
+        <Panel>
+          <Section first title="任务参数">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <label htmlFor={paramId}>{extraField.label}</label>
               <Input
+                id={paramId}
                 value={extraValue}
                 onChange={(e) => setExtraValue(e.target.value)}
                 placeholder={extraField.placeholder}
                 maxLength={200}
                 style={{ width: 320 }}
               />
-            </Space>
-          )}
-          <Button type="primary" icon={<PlayCircleOutlined />} onClick={onStart} disabled={busy}>
-            开始{taskName}
-            {checked.length > 0 ? `（${checked.length}）` : ""}
-          </Button>
-          <Button icon={<PauseOutlined />} onClick={onStop} disabled={!ownRunning || running?.stopRequested === true}>
-            停止
-          </Button>
-          <Typography.Text type="secondary">逐个账号顺序执行</Typography.Text>
-        </Space>
-      </Card>
+            </div>
+          </Section>
+        </Panel>
+      )}
 
       <AccountListCard
         list={list}

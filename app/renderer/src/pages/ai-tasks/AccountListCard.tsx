@@ -1,12 +1,12 @@
 /**
- * AI 任务页的账号列表卡片：工具栏 + 分组标签 + 筛选条 + 平铺表格（虚拟滚动）
+ * AI 任务页的账号列表面板：工具栏 + 分组标签 + 筛选条 + 平铺表格（虚拟滚动），同在一个 Panel 内
  *
- * 结构与首页 BrowserListCard 相同。行底色按本次任务逐行结果着色。
+ * 结构与首页 BrowserListCard 相同。行底色按本次任务逐行结果着色（颜色取自主题令牌）。
  * 勾选与筛选状态由父组件（AiTaskPage）持有：开始任务时要用。
  * 纯逻辑在 app/shared/logic/ai-task-list.ts 与 home-list.ts。
  */
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
-import { Button, Card, Empty, Input, Segmented, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Empty, Input, Segmented, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { CheckCircleFilled, MinusCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import {
@@ -15,14 +15,9 @@ import {
   type AiTaskLoginFilter,
   type AiTaskRow,
 } from "../../../../shared/channels/ai-tasks.ts";
-import {
-  TONE_BACKGROUND,
-  isSelectable,
-  loginStatusLabel,
-  rowSorter,
-  statusTone,
-  type RowRuntime,
-} from "../../../../shared/logic/ai-task-list.ts";
+import { isSelectable, loginStatusLabel, rowSorter, statusTone, type RowRuntime, type StatusTone } from "../../../../shared/logic/ai-task-list.ts";
+import { Panel } from "../../components/Section.tsx";
+import { useTokens } from "../../theme/tokens.ts";
 
 export interface AccountListCardProps {
   list: AiTaskLoadResult | null;
@@ -53,20 +48,27 @@ const TABLE_CHROME = 40;
 
 /** 有 / 无 的小图标 */
 function Flag({ on, onTip, offTip }: { on: boolean; onTip: string; offTip: string }): ReactNode {
+  const t = useTokens();
   return (
     <Tooltip title={on ? onTip : offTip}>
-      {on ? <CheckCircleFilled style={{ color: "#52c41a" }} /> : <MinusCircleOutlined style={{ color: "rgba(128,128,128,0.6)" }} />}
+      {on ? (
+        <CheckCircleFilled aria-label={onTip} style={{ color: t.ok }} />
+      ) : (
+        <MinusCircleOutlined aria-label={offTip} style={{ color: t.idle }} />
+      )}
     </Tooltip>
   );
 }
 
-const LOGIN_COLOR: Record<string, string> = { 已登录: "green", 登录失败: "red", 不在数据库: "default" };
+/** 登录状态 → antd 语义色（未列出的用默认灰） */
+const LOGIN_COLOR: Record<string, string> = { 已登录: "success", 登录失败: "error" };
 
 export function AccountListCard(props: AccountListCardProps): ReactElement {
   const { runtime, visible } = props;
   const total = props.list?.totalBrowsers ?? 0;
+  const t = useTokens();
 
-  // 表格高度跟随容器（卡片占满页面剩余高度）
+  // 表格高度跟随容器（面板占满页面剩余高度）
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(400);
   useEffect(() => {
@@ -80,9 +82,11 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
   }, []);
 
   const columns = useMemo<ColumnsType<AiTaskRow>>(() => {
+    // 行底色：状态色的淡色版（color-mix 按当前主题令牌混出，深浅色都可读）
+    const toneColor: Record<StatusTone, string> = { success: t.ok, error: t.bad, warning: t.warn };
     const cellStyle = (r: AiTaskRow): { style?: { background: string } } => {
       const rt = runtime[r.email];
-      return rt ? { style: { background: TONE_BACKGROUND[statusTone(rt.status)] } } : {};
+      return rt ? { style: { background: `color-mix(in srgb, ${toneColor[statusTone(rt.status)]} 16%, transparent)` } } : {};
     };
     return [
       {
@@ -101,7 +105,8 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         sorter: rowSorter("profileId"),
         defaultSortOrder: "descend",
         onCell: cellStyle,
-        render: (_, r) => r.profileId ?? <Typography.Text type="secondary">—</Typography.Text>,
+        render: (_, r) =>
+          r.profileId !== null ? <span className="abb-mono">{r.profileId}</span> : <Typography.Text type="secondary">—</Typography.Text>,
       },
       {
         title: "分组",
@@ -164,16 +169,12 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         render: (_, r) => runtime[r.email]?.message ?? "",
       },
     ];
-  }, [runtime]);
+  }, [runtime, t]);
 
   const filtered = visible.length !== (props.list?.rows.length ?? 0);
 
   return (
-    <Card
-      size="small"
-      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
-      styles={{ body: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 } }}
-    >
+    <Panel fill>
       {/* 工具栏：刷新 + 搜索 + 账号状态 + 只看本次失败 */}
       <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
         <Space wrap>
@@ -259,6 +260,6 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
           }}
         />
       </div>
-    </Card>
+    </Panel>
   );
 }

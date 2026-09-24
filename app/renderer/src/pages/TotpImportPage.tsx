@@ -1,7 +1,8 @@
 /**
  * TOTP 密钥导入页
  *
- * 布局：导入方式切换 → 说明卡片 → 导入区（QR / 文本）→ 全选栏 → 结果表格 → 底部状态与导入按钮。
+ * 布局：页头（标题 + 说明 + 「导入选中账号」）→ 导入面板（方式切换 + muted 说明 + QR / 文本输入）
+ *       → 结果面板（全选栏 + 状态 + 结果表格，占满剩余高度）。
  * 日志区由底部全局任务坞替代，界面侧日志用 logLocal。
  * 页面切走不卸载，解析结果与勾选状态会保留。
  *
@@ -17,12 +18,14 @@ import {
   type DragEvent,
   type ReactElement,
 } from "react";
-import { App, Button, Card, Checkbox, Input, Progress, Segmented, Space, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Input, Progress, Segmented, Space, Typography } from "antd";
 import {
   CheckOutlined,
   DeleteOutlined,
+  FileTextOutlined,
   FolderAddOutlined,
   FolderOpenOutlined,
+  QrcodeOutlined,
   SearchOutlined,
   SyncOutlined,
 } from "@ant-design/icons";
@@ -34,22 +37,24 @@ import {
 } from "../../../shared/channels/totp.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
+import { PageHeader } from "../components/PageHeader.tsx";
+import { Panel, Section } from "../components/Section.tsx";
+import { useTokens } from "../theme/tokens.ts";
 import { decodeQrFromFile, IMAGE_ACCEPT, isImageFileName } from "./totp/qr-decode.ts";
 import { importConfirmMessage, importFinishedNotice, isImportResult } from "./totp/messages.ts";
 import { ResultTable, type ResultRow } from "./totp/ResultTable.tsx";
 
 type Mode = "qr" | "text";
 
-/** 说明卡片文案 */
+/** 说明区文案（QR 模式按有序列表渲染，序号由 <ol> 提供） */
 const QR_HELP = [
-  "1. 打开手机 Google Authenticator → 右上角菜单 → 导出账号",
-  "2. 对生成的 QR 码截图并保存到电脑",
-  "3. 点击「选择图片」或直接拖放截图到此窗口",
+  "打开手机 Google Authenticator → 右上角菜单 → 导出账号",
+  "对生成的 QR 码截图并保存到电脑",
+  "点击「选择图片」或直接把截图拖放到此窗口",
 ];
 const TEXT_HELP = [
-  "每行一条记录，格式：邮箱----密码----密钥",
+  "每行一条记录，格式：邮箱----密码----密钥（用四个短横线 ---- 分隔）",
   "示例：example@gmail.com----password123----ABCDEFGHIJKLMNOP",
-  "注意：使用四个短横线 ---- 作为分隔符",
 ];
 /** 文本输入框占位 */
 const TEXT_PLACEHOLDER =
@@ -61,15 +66,6 @@ const TEXT_PLACEHOLDER =
 
 function Multiline({ text }: { text: string }): ReactElement {
   return <div style={{ whiteSpace: "pre-wrap" }}>{text}</div>;
-}
-
-function HelpCard({ title, lines }: { title: string; lines: string[] }): ReactElement {
-  return (
-    <Card size="small">
-      <Typography.Text type="secondary">{title}</Typography.Text>
-      <Multiline text={lines.join("\n")} />
-    </Card>
-  );
 }
 
 /** 表格重建后的默认勾选：只勾「可导入」 */
@@ -85,6 +81,7 @@ export function TotpImportPage(): ReactElement {
   const { modal, notification } = App.useApp();
   const { running } = useTaskState();
   const busy = running !== null;
+  const t = useTokens();
 
   const [mode, setMode] = useState<Mode>("qr");
   const [entries, setEntries] = useState<TotpEntry[]>([]);
@@ -366,6 +363,7 @@ export function TotpImportPage(): ReactElement {
   // ---------- 渲染 ----------
 
   const runningImport = running?.type === TOTP_IMPORT_TASK_TYPE ? running : null;
+  const toolbarRow = { display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } as const;
 
   return (
     <div
@@ -375,81 +373,98 @@ export function TotpImportPage(): ReactElement {
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 12,
-        outline: dragOver ? "2px dashed #1677ff" : undefined,
+        gap: 16,
+        height: "100%",
+        minHeight: 560,
+        borderRadius: 8,
+        // 拖入图片时的落点提示（仅 QR 模式）
+        outline: dragOver ? `2px dashed ${t.indigo}` : undefined,
         outlineOffset: 4,
       }}
     >
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        导入 TOTP 密钥
-      </Typography.Title>
+      <PageHeader
+        title="导入 TOTP 密钥"
+        description="从 Google Authenticator 导出的 QR 码截图或账号文本中读出 2FA 密钥，导入到匹配的数据库账号。"
+        extra={
+          <Button
+            type="primary"
+            icon={<CheckOutlined />}
+            disabled={visibleRows.length === 0 || busy || scanning}
+            onClick={() => void startImport()}
+          >
+            导入选中账号
+          </Button>
+        }
+      />
 
-      {/* 导入方式切换 */}
-      <Card size="small">
-        <Space style={{ width: "100%", justifyContent: "space-between" }}>
-          <Space>
-            <Typography.Text type="secondary">导入方式：</Typography.Text>
+      {/* 导入区：方式切换 + 说明 + 对应的输入 */}
+      <Panel>
+        <Section
+          first
+          title={mode === "qr" ? "从 QR 码截图导入" : "从文本导入"}
+          extra={
             <Segmented<Mode>
               value={mode}
               onChange={changeMode}
               options={[
-                { value: "qr", label: "📷 QR码导入" },
-                { value: "text", label: "📝 文本导入" },
+                { value: "qr", label: "QR 码导入", icon: <QrcodeOutlined /> },
+                { value: "text", label: "文本导入", icon: <FileTextOutlined /> },
               ]}
             />
-          </Space>
-          <Tag color="success">就绪</Tag>
-        </Space>
-      </Card>
-
-      {mode === "qr" ? <HelpCard title="QR 码导入说明" lines={QR_HELP} /> : <HelpCard title="文本导入说明" lines={TEXT_HELP} />}
-
-      {mode === "qr" ? (
-        <Space wrap>
-          <input ref={singleInput} type="file" accept={IMAGE_ACCEPT} hidden onChange={(e) => onFilesChosen(e.currentTarget)} />
-          <input
-            ref={multiInput}
-            type="file"
-            accept={IMAGE_ACCEPT}
-            multiple
-            hidden
-            onChange={(e) => onFilesChosen(e.currentTarget)}
-          />
-          <Button
-            type="primary"
-            icon={<FolderOpenOutlined />}
-            title="选择单个 QR 码截图"
-            disabled={scanning}
-            onClick={() => singleInput.current?.click()}
-          >
-            选择图片
-          </Button>
-          <Button
-            icon={<FolderAddOutlined />}
-            title="选择多个 QR 码截图"
-            disabled={scanning}
-            onClick={() => multiInput.current?.click()}
-          >
-            批量选择
-          </Button>
-          <Button type="text" icon={<SyncOutlined />} onClick={refreshMatch}>
-            刷新匹配
-          </Button>
-        </Space>
-      ) : (
-        <Card size="small">
-          <Space direction="vertical" style={{ width: "100%" }}>
-            <Input.TextArea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={TEXT_PLACEHOLDER}
-              autoSize={{ minRows: 5, maxRows: 7 }}
-              spellCheck={false}
-            />
-            <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+          }
+        >
+          {mode === "qr" ? (
+            <>
+              <ol style={{ margin: "0 0 12px", paddingLeft: 20, color: t.muted }}>
+                {QR_HELP.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ol>
               <Space wrap>
+                <input ref={singleInput} type="file" accept={IMAGE_ACCEPT} hidden onChange={(e) => onFilesChosen(e.currentTarget)} />
+                <input
+                  ref={multiInput}
+                  type="file"
+                  accept={IMAGE_ACCEPT}
+                  multiple
+                  hidden
+                  onChange={(e) => onFilesChosen(e.currentTarget)}
+                />
                 <Button
-                  type="primary"
+                  icon={<FolderOpenOutlined />}
+                  title="选择单个 QR 码截图"
+                  disabled={scanning}
+                  onClick={() => singleInput.current?.click()}
+                >
+                  选择图片
+                </Button>
+                <Button
+                  icon={<FolderAddOutlined />}
+                  title="选择多个 QR 码截图"
+                  disabled={scanning}
+                  onClick={() => multiInput.current?.click()}
+                >
+                  批量选择
+                </Button>
+              </Space>
+            </>
+          ) : (
+            <>
+              <div style={{ color: t.muted, marginBottom: 12 }}>
+                {TEXT_HELP.map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+              </div>
+              <Input.TextArea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={TEXT_PLACEHOLDER}
+                aria-label="账号文本"
+                autoSize={{ minRows: 5, maxRows: 7 }}
+                spellCheck={false}
+              />
+              <Space wrap style={{ marginTop: 12 }}>
+                <Button
                   icon={<SearchOutlined />}
                   title="解析输入的文本并匹配数据库账号"
                   loading={parsing}
@@ -458,70 +473,58 @@ export function TotpImportPage(): ReactElement {
                   解析文本
                 </Button>
                 <Button type="text" icon={<DeleteOutlined />} onClick={clearText}>
-                  清空
-                </Button>
-                <Button type="text" icon={<SyncOutlined />} onClick={refreshMatch}>
-                  刷新匹配
+                  清空文本
                 </Button>
               </Space>
-              <Typography.Text type="secondary">格式：邮箱----密码----密钥（四个短横线分隔）</Typography.Text>
-            </Space>
-          </Space>
-        </Card>
-      )}
-
-      {/* 全选栏 */}
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Space size={12}>
-          <Checkbox
-            checked={allChecked}
-            indeterminate={someChecked}
-            disabled={selectableRows.length === 0}
-            title="全选/取消全选可导入的账号"
-            onChange={(e) => toggleAll(e.target.checked)}
-          >
-            全选
-          </Checkbox>
-          <Typography.Text type="secondary">已选: {checkedRows.length}</Typography.Text>
-        </Space>
-        <Checkbox checked={onlyMatched} onChange={(e) => changeOnlyMatched(e.target.checked)}>
-          仅显示可匹配账号
-        </Checkbox>
-      </Space>
-
-      <ResultTable rows={visibleRows} selected={selected} onSelectedChange={setSelected} />
-
-      {/* 底部状态和导入按钮 */}
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Space size={12}>
-          <Typography.Text type="secondary">{statusText}</Typography.Text>
-          {scan && (
-            <Progress
-              style={{ width: 200, margin: 0 }}
-              size="small"
-              percent={Math.round((scan.current / Math.max(scan.total, 1)) * 100)}
-              format={() => `${scan.current}/${scan.total}`}
-            />
+            </>
           )}
-          {runningImport && runningImport.total > 0 && (
-            <Progress
-              style={{ width: 200, margin: 0 }}
-              size="small"
-              percent={Math.round((runningImport.current / runningImport.total) * 100)}
-              format={() => `${runningImport.current}/${runningImport.total}`}
-            />
-          )}
-        </Space>
-        <Button
-          type="primary"
-          icon={<CheckOutlined />}
-          style={{ width: 150 }}
-          disabled={visibleRows.length === 0 || busy || scanning}
-          onClick={() => void startImport()}
-        >
-          导入选中账号
-        </Button>
-      </Space>
+        </Section>
+      </Panel>
+
+      {/* 结果面板：全选栏 + 状态 + 表格 */}
+      <Panel fill>
+        <div style={{ ...toolbarRow, justifyContent: "space-between" }}>
+          <div style={toolbarRow}>
+            <Checkbox
+              checked={allChecked}
+              indeterminate={someChecked}
+              disabled={selectableRows.length === 0}
+              title="全选/取消全选可导入的账号"
+              onChange={(e) => toggleAll(e.target.checked)}
+            >
+              全选
+            </Checkbox>
+            <Typography.Text type="secondary">已选 {checkedRows.length} 个</Typography.Text>
+            <Typography.Text type="secondary">{statusText}</Typography.Text>
+            {scan && (
+              <Progress
+                style={{ width: 200, margin: 0 }}
+                size="small"
+                percent={Math.round((scan.current / Math.max(scan.total, 1)) * 100)}
+                format={() => `${scan.current}/${scan.total}`}
+              />
+            )}
+            {runningImport && runningImport.total > 0 && (
+              <Progress
+                style={{ width: 200, margin: 0 }}
+                size="small"
+                percent={Math.round((runningImport.current / runningImport.total) * 100)}
+                format={() => `${runningImport.current}/${runningImport.total}`}
+              />
+            )}
+          </div>
+          <div style={toolbarRow}>
+            <Checkbox checked={onlyMatched} onChange={(e) => changeOnlyMatched(e.target.checked)}>
+              仅显示可匹配账号
+            </Checkbox>
+            <Button icon={<SyncOutlined />} onClick={refreshMatch}>
+              刷新匹配
+            </Button>
+          </div>
+        </div>
+
+        <ResultTable rows={visibleRows} selected={selected} onSelectedChange={setSelected} />
+      </Panel>
     </div>
   );
 }
