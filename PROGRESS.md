@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 606/606 通过
+pnpm test              # 应 607/607 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
@@ -47,7 +47,7 @@ pnpm run typecheck:test # 应无输出
 | `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `src/` | 业务库（不依赖 Electron，可单独单测） |
 | `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `test/` | 单测（606 个，含 `app-*.test.mjs`） |
+| `test/` | 单测（607 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -67,7 +67,7 @@ pnpm run typecheck:test # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 606/606 通过
+pnpm test               # 607/607 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
