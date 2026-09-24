@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 604/604 通过
+pnpm test              # 应 606/606 通过
 pnpm run typecheck:app # 应无输出
 pnpm run build:app     # 应构建成功
 pnpm run check:deps    # 应 0 个 error
@@ -47,7 +47,7 @@ pnpm run typecheck:test # 应无输出
 | `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `src/` | 业务库（不依赖 Electron，可单独单测） |
 | `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `test/` | 单测（604 个，含 `app-*.test.mjs`） |
+| `test/` | 单测（606 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -67,7 +67,7 @@ pnpm run typecheck:test # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 604/604 通过
+pnpm test               # 606/606 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 pnpm run build:app      # 构建到 out/，主进程产物不含业务模块
 pnpm run check:deps     # 分层依赖规则 0 个 error
@@ -128,7 +128,7 @@ TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `tes
 - 账号列表直接带出**明文密码**（可复制）、按数据库 `secret_key` 算的 **2FA 验证码**（只回码不回密钥）、以及**窗口备注**（点击小窗编辑，只写 `note` 一个字段）；2FA 密钥与辅助邮箱原文仍只在编辑弹窗里取
 - 账号页与首页共用同一套验证码取数逻辑（`components/TfaCodeCell.tsx`）：密钥在后端，界面只拿 6 位码与周期结束时间
 - 标签是 **ixBrowser 自己的标签**（不做本地字段）：读走窗口 `tag_id` + `tag-list` 词表映射（**不用 `tag_name`**，因为标题本身可能含空格），写走 `profile-update` 的 `tag`（标签名数组）；账号页可勾选增删标签、按标签多选筛（命中任一）、并管理词表（新建/改名/删除，改删会影响所有挂它的窗口，删前提示窗口数）。标签挂在窗口上，未绑定窗口的账号改不了；列显示与否可在「列」里自己勾选，记在 localStorage
-- 凡是带勾选列的表格都**点行即选中**（多选表再点一次取消；单选表 `mode:"always"` 只选不取消），不必非点复选框——六张表共用 `components/row-select.ts` 一份规则，禁用行与勾选框用同一个判断（点了不选中，光标也不摆成手型）；行内的按钮 / 链接 / 输入框 / 勾选框，以及标了 `data-no-row-select` 的单元格（账号页的验证码、标签、备注）只做自己的事，不抢行点击
+- 凡是带勾选列的表格都**点行即选中**（多选表再点一次取消；单选表 `mode:"always"` 只选不取消），不必非点复选框——六张表共用 `components/row-select.ts` 一份规则，禁用行与勾选框用同一个判断（点了不选中，光标也不摆成手型）；行内的按钮 / 链接 / 输入框 / 勾选框，以及标了 `data-no-row-select` 的单元格（账号页的验证码、标签、备注）只做自己的事，不抢行点击。**选中键必须与表格 `rowKey` 同源**（`keyOf` 与 `checkedKeys.includes()` 取同一个字段），写岔了不报错、只表现为「点行没反应」，由 `test/row-select-wiring.test.mjs` 钉住
 - 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）；开始前有确认框
 - AI 任务界面上的并发数只记录不使用，**串行执行**；`modify_2sv` 任务结束关闭窗口；停止后「开始」要等任务真正结束才可用
 - 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖其它键）；越界数值加载时夹紧；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层
@@ -455,6 +455,27 @@ GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩�
 「一次改多个账号」未真机（单测覆盖计数与停止语义）；`describeSaveOutcome` 四种组合只有单测；
 「点击后二次确认弹层」没有任何真机证据，真机没出现过；「修改验证器不再写备注」只有代码改动 +
 grep 复核，未真机跑（验证它要真的改一次验证器）。
+
+### 列表点行选中的真机缺陷与修复（2026-09-25）
+
+六张表统一接线 `components/row-select.ts` 后真机点行复核，**AI 任务账号列表点行没反应、也不变色**
+（其余五张表正常）。根因是**行键写岔**：该表 `rowKey="key"`（`b:{profileId}`），接线的 `keyOf`
+却取 `email` 生成选中键，而界面读的 `checkedKeys` 里装的是 `b:{profileId}` —— 两边永远对不上，
+表现为「已选 N 个」在涨、复选框不勾、行底色不变（不报错，只静默失效）。
+
+| 位置 | 问题 | 修法 |
+|---|---|---|
+| `pages/ai-tasks/AccountListCard.tsx` 行选中 | `keyOf: (r) => r.email` 与同表 `rowKey="key"` 不一致 | 改 `keyOf: (r) => r.key` |
+| 同文件行底色豁免 | `checkedKeys.includes(r.email)` 判断不到选中行，内联底色压过选中色 | 改 `includes(r.key)` |
+
+- 回归用例 `test/row-select-wiring.test.mjs`（2 条）：按源码扫出所有用 `rowSelect` 的表，断言
+  `rowKey` 字面量与 `keyOf` / `checkedKeys.includes(...)` 取的是同一个字段；两处分别改回 `email`
+  时各自变红（mutation 复核），修好后 10/10 绿
+- 真机复核：AI 任务列表与账号管理列表均**点行即选中、再点取消、选中行显示底色**（antd `row-selected`），
+  行内的验证码 / 标签 / 备注单元格不抢行点击
+- 排除过的假设（都**不成立**，别再往这个方向查）：`onRow` 在虚拟表格不生效、虚拟表格缺
+  `row-selected` 样式 —— `rc-table` 会把这些 `rowProps` 合并到行 div，`.ant-table-tbody` 也挂在
+  虚拟列表根节点上；真问题只有上面两处接线
 
 ## 四、下一步
 

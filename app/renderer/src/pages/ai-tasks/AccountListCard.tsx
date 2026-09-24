@@ -88,7 +88,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
     const cellStyle = (r: AiTaskRow): { style?: { background: string } } => {
       const rt = runtime[r.email];
       // 选中行让位给选中底色：内联底色优先级高于 antd 的选中样式，否则选了看不出颜色
-      if (props.checkedKeys.includes(r.email)) return {};
+      if (props.checkedKeys.includes(r.key)) return {};
       return rt ? { style: { background: `color-mix(in srgb, ${toneColor[statusTone(rt.status)]} 16%, transparent)` } } : {};
     };
     return [
@@ -178,7 +178,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
 
   // 点行即选中（再点取消）；不可选的行与勾选框一致，点了不算
   const accountRow = rowSelect<AiTaskRow, string>({
-    keyOf: (r) => r.email,
+    keyOf: (r) => r.key,
     keys: props.checkedKeys,
     onChange: props.onCheckedChange,
     disabled: (r) => !isSelectable(r),
