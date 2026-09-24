@@ -83,6 +83,7 @@ import { TagManagerModal } from "./accounts/TagManagerModal.tsx";
 import { PageHeader } from "../components/PageHeader.tsx";
 import { Panel } from "../components/Section.tsx";
 import { useTokens } from "../theme/tokens.ts";
+import { rowSelect } from "../components/row-select.ts";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_delete", "health_check"]);
@@ -570,6 +571,7 @@ export function AccountsPage(): ReactElement {
           return (
             <Tooltip title={r.tags.length > 0 ? r.tags.map((t) => t.title).join("、") : "点击设置标签"}>
               <span
+                data-no-row-select
                 onClick={() => setTagEdit({ email: r.email, windowName: r.window_name, tagIds: r.tags.map((t) => t.id) })}
                 style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
               >
@@ -633,6 +635,7 @@ export function AccountsPage(): ReactElement {
           return (
             <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{r.note || "点击添加备注"}</span>}>
               <span
+                data-no-row-select
                 onClick={() => setNoteTarget({ email: r.email, windowName: r.window_name, note: r.note })}
                 style={{ display: "block", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
               >
@@ -766,6 +769,13 @@ export function AccountsPage(): ReactElement {
   const total = rows.length;
   const filtered = visible.length !== total;
   const hasChecked = checked.length > 0;
+
+  // 点行即选中（多选表再点一次取消）；勾选框、右键菜单不受影响
+  const accountRow = rowSelect<AccountListRow, string>({
+    keyOf: (r) => r.email,
+    keys: checked,
+    onChange: setChecked,
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 600 }}>
@@ -936,6 +946,7 @@ export function AccountsPage(): ReactElement {
               onChange: (keys) => setChecked(keys.map(String)),
             }}
             onRow={(record) => ({
+              ...accountRow(record),
               onContextMenu: (e) => {
                 e.preventDefault();
                 setCtxMenu({ row: record, x: e.clientX, y: e.clientY });

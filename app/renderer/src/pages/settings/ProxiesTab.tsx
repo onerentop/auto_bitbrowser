@@ -29,6 +29,7 @@ import { useHostStatus } from "../../stores/host-status.ts";
 import { BatchImportModal } from "../../components/BatchImportModal.tsx";
 import { Panel } from "../../components/Section.tsx";
 import { useTokens, type Palette } from "../../theme/tokens.ts";
+import { rowSelect } from "../../components/row-select.ts";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 
@@ -311,6 +312,13 @@ export function ProxiesTab(): ReactElement {
     },
   ];
 
+  // 点行即选中（再点取消）
+  const proxyRow = rowSelect<ProxyListItemDto, number>({
+    keyOf: (p) => p.index,
+    keys: selected,
+    onChange: setSelected,
+  });
+
   return (
     <Panel>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -342,6 +350,7 @@ export function ProxiesTab(): ReactElement {
         dataSource={items}
         loading={loading}
         rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]) }}
+        onRow={proxyRow}
         pagination={{ defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200] }}
         locale={{ emptyText: <Empty description="暂无代理" /> }}
         style={{ marginTop: 12 }}

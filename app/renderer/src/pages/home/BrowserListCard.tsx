@@ -22,6 +22,7 @@ import {
 } from "../../../../shared/logic/home-list.ts";
 import { Panel } from "../../components/Section.tsx";
 import { TfaCell, useTfaCodes } from "../../components/TfaCodeCell.tsx";
+import { rowSelect } from "../../components/row-select.ts";
 import { IPC, invoke } from "../../lib/ipc.ts";
 
 export interface BrowserListCardProps {
@@ -150,6 +151,14 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
   const total = props.list?.totalBrowsers ?? 0;
   const filtered = visible.length !== all.length;
 
+  // 点行即选中（再点取消）；未绑定窗口的行不可选，双击仍是打开窗口
+  const browserRow = rowSelect<HomeBrowserNode, string>({
+    keyOf: (b) => b.key,
+    keys: checked,
+    onChange: setChecked,
+    disabled: (b) => b.profileId === null,
+  });
+
   return (
     <Panel fill>
       {/* 工具栏 */}
@@ -226,10 +235,10 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
             ),
           }}
           onRow={(b) => ({
+            ...browserRow(b),
             onDoubleClick: () => {
               if (b.profileId !== null && !props.busy) props.onOpen([b.profileId]);
             },
-            style: { cursor: "default" },
           })}
           rowSelection={{
             selectedRowKeys: checked,

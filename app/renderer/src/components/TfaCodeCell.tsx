@@ -100,6 +100,8 @@ export function TfaCell({ hasTfa, code, invalid, periodEndsAt }: TfaCellProps): 
   return (
     <Tooltip title="点击复制验证码">
       <Space
+        // 点这一格只复制验证码，不切换行选中
+        data-no-row-select
         size={8}
         style={{ cursor: "pointer", userSelect: "none" }}
         onClick={copy}

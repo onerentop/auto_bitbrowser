@@ -12,6 +12,7 @@ import type { TaskRunItemRow, TaskRunRow } from "../../../../shared/channels/tas
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { onTaskFinished } from "../../stores/task.ts";
 import { Panel, Section } from "../../components/Section.tsx";
+import { rowSelect } from "../../components/row-select.ts";
 
 /** 任务结果的标签色：antd 语义色（主题里已映射到 ok / warn / bad 令牌） */
 function outcomeTag(outcome: string | null): ReactElement {
@@ -121,6 +122,14 @@ export function TaskHistoryTab(): ReactElement {
     { title: "消息", dataIndex: "message", ellipsis: true, render: (v: string | null) => v ?? "" },
   ];
 
+  // 点行即选中；任务历史是单选表，再点已选行不会取消（与 radio 一致）
+  const historyRow = rowSelect<TaskRunRow, number>({
+    keyOf: (row) => row.id,
+    keys: selectedRunId === null ? [] : [selectedRunId],
+    onChange: (next) => setSelectedRunId(next[0] ?? null),
+    mode: "always",
+  });
+
   return (
     <Panel>
       <Section
@@ -157,7 +166,7 @@ export function TaskHistoryTab(): ReactElement {
             selectedRowKeys: selectedRunId === null ? [] : [selectedRunId],
             onChange: (keys) => setSelectedRunId(Number(keys[0])),
           }}
-          onRow={(row) => ({ onClick: () => setSelectedRunId(row.id), style: { cursor: "pointer" } })}
+          onRow={historyRow}
         />
       </Section>
 

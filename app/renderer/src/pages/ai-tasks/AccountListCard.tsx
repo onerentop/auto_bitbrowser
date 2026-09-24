@@ -18,6 +18,7 @@ import {
 import { isSelectable, loginStatusLabel, rowSorter, statusTone, type RowRuntime, type StatusTone } from "../../../../shared/logic/ai-task-list.ts";
 import { Panel } from "../../components/Section.tsx";
 import { useTokens } from "../../theme/tokens.ts";
+import { rowSelect } from "../../components/row-select.ts";
 
 export interface AccountListCardProps {
   list: AiTaskLoadResult | null;
@@ -86,6 +87,8 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
     const toneColor: Record<StatusTone, string> = { success: t.ok, error: t.bad, warning: t.warn };
     const cellStyle = (r: AiTaskRow): { style?: { background: string } } => {
       const rt = runtime[r.email];
+      // 选中行让位给选中底色：内联底色优先级高于 antd 的选中样式，否则选了看不出颜色
+      if (props.checkedKeys.includes(r.email)) return {};
       return rt ? { style: { background: `color-mix(in srgb, ${toneColor[statusTone(rt.status)]} 16%, transparent)` } } : {};
     };
     return [
@@ -169,9 +172,17 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         render: (_, r) => runtime[r.email]?.message ?? "",
       },
     ];
-  }, [runtime, t]);
+  }, [runtime, t, props.checkedKeys]);
 
   const filtered = visible.length !== (props.list?.rows.length ?? 0);
+
+  // 点行即选中（再点取消）；不可选的行与勾选框一致，点了不算
+  const accountRow = rowSelect<AiTaskRow, string>({
+    keyOf: (r) => r.email,
+    keys: props.checkedKeys,
+    onChange: props.onCheckedChange,
+    disabled: (r) => !isSelectable(r),
+  });
 
   return (
     <Panel fill>
@@ -258,6 +269,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
             onChange: (keys) => props.onCheckedChange(keys.map(String)),
             getCheckboxProps: (r) => ({ disabled: !isSelectable(r) }),
           }}
+          onRow={accountRow}
         />
       </div>
     </Panel>

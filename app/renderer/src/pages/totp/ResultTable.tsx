@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { Empty, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { TOTP_STATUS_TEXT, type TotpEntry, type TotpMatchRow, type TotpMatchStatus } from "../../../../shared/channels/totp.ts";
+import { rowSelect } from "../../components/row-select.ts";
 
 export interface ResultRow {
   /** 在 entries 里的下标（行键） */
@@ -107,6 +108,14 @@ export function ResultTable({ rows, selected, onSelectedChange }: ResultTablePro
     return () => ro.disconnect();
   }, []);
 
+  // 点行即选中（未匹配行不可选），与勾选框的 disabled 一致
+  const resultRow = rowSelect<ResultRow, number>({
+    keyOf: (r) => r.index,
+    keys: [...selected],
+    onChange: (next) => onSelectedChange(new Set(next)),
+    disabled: (r) => r.match.status === "no_match",
+  });
+
   return (
     <div ref={boxRef} style={{ flex: 1, minHeight: 200 }}>
       <Table<ResultRow>
@@ -133,6 +142,7 @@ export function ResultTable({ rows, selected, onSelectedChange }: ResultTablePro
             onSelectedChange(next);
           },
         }}
+        onRow={resultRow}
       />
     </div>
   );
