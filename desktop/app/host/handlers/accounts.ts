@@ -41,6 +41,8 @@ import {
 import { BatchAccountProcessor } from "../../../src/automation/batch-account-processor.ts";
 import { deleteBrowserById } from "../../../src/ixbrowser/window.ts";
 import type { ConfigManager } from "../../../src/core/config-manager.ts";
+import { autoHealthCheck, type HealthCheckResult } from "../../../src/automation/auto-health-check.ts";
+import { executeHealthCheck, healthCheckSummaryLine } from "../../../src/application/health-check.ts";
 
 /** Python 的 get_profile_list(page=1, limit=500)（:377 / :899 / :1548） */
 export const WINDOW_LIST_QUERY = { page: 1, limit: 500 } as const;
@@ -61,6 +63,11 @@ export interface AccountsHandlerDeps {
   deleteBrowser?: (browserId: string) => Promise<{ success: boolean }>;
   /** 对标 get_profile_list(page=1, limit=500)，失败抛错 */
   listWindows?: () => Promise<WindowLike[]>;
+  /**
+   * 账号健康巡检的单账号判定（本地新增）。默认走 autoHealthCheck（真机连窗口只读判定），
+   * 单测注入假实现以保持离线。
+   */
+  healthCheck?: (browserId: string, account: Record<string, unknown>) => Promise<HealthCheckResult>;
 }
 
 // ==================== 参数校验 ====================
@@ -264,6 +271,30 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           if (spec.withWindows) api.log(`已删除 ${results.deleted_windows} 个窗口`);
           return results;
         });
+
+      // ---------- 账号健康巡检（本地新增：只读判定，不产生新登录会话） ----------
+      case "health_check": {
+        return ctx.tasks.start("health_check", spec.label, async (api) => {
+          const total = spec.accounts.length;
+          api.log(`开始健康巡检，共 ${total} 个账号（只读：不提交密码或验证码，不产生新登录会话）...`);
+          api.progress(0, total);
+          const check =
+            deps.healthCheck ??
+            ((browserId: string, account: Record<string, unknown>) =>
+              autoHealthCheck(browserId, account, { callback: api.log, accountRepo: repo() }));
+          const summary = await executeHealthCheck({
+            accounts: spec.accounts,
+            browserIds: spec.browserIds,
+            check,
+            shouldStop: api.shouldStop,
+            log: api.log,
+            progress: (i) => api.progress(i, total),
+            item: api.item,
+          });
+          api.log(healthCheckSummaryLine(summary));
+          return summary;
+        });
+      }
     }
   };
 

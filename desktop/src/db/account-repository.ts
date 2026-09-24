@@ -205,6 +205,25 @@ export class AccountRepository {
     }
   }
 
+  /**
+   * 只写一条「最近发现的问题」（例如健康巡检发现窗口打不开），**不动** login_status。
+   *
+   * 为什么不能直接用 updateLoginStatus：它对 `logged_in` 会顺带把 last_error 清成 NULL，
+   * 于是「账号状态是已登录、但窗口有问题」这种情况根本写不进消息。
+   * message 传 null 表示清空（巡检发现只是需要登录时，清掉上一次的错误，避免误导）。
+   */
+  setLastError(email: string, message: string | null): boolean {
+    try {
+      const info = this.db
+        .prepare("UPDATE accounts SET last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?")
+        .run(message, email);
+      return Number(info.changes ?? 0) > 0;
+    } catch (error) {
+      console.error(`[DB ERROR] set_last_error 失败: ${error}`);
+      return false;
+    }
+  }
+
   /** 按邮箱删除账号。对标 delete_account()：删到行返回 true，出错返回 false */
   deleteAccount(email: string): boolean {
     try {

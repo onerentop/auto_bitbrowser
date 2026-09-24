@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { ERROR_CODES } from "../app/shared/envelope.ts";
 import { IPC } from "../app/shared/ipc.ts";
-import { ACCOUNTS_INVOKE } from "../app/shared/channels/accounts.ts";
+import { ACCOUNTS_ACTIONS, ACCOUNTS_INVOKE } from "../app/shared/channels/accounts.ts";
 import { createHostContext } from "../app/host/context.ts";
 import { createDispatcher } from "../app/host/dispatch.ts";
 import { createAccountsHandlers, createDefaultProcessor, readLlmParams } from "../app/host/handlers/accounts.ts";
@@ -610,6 +610,140 @@ test("handler 工厂不打开数据库（惰性）", () => {
   });
   const table = createAccountsHandlers(ctx);
   assert.deepEqual(Object.keys(table).sort(), Object.values(ACCOUNTS_INVOKE).sort());
+});
+
+// ==================== 账号健康巡检（F2） ====================
+
+const HC_OK = { status: "ok", message: "已登录", url: "https://myaccount.google.com/?hl=en", reason: "页面显示了该邮箱" };
+
+test("health_check 是受支持的动作，预检通过后返回账号数", async () => {
+  assert.ok(ACCOUNTS_ACTIONS.includes("health_check"));
+  const s = setup();
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+  const pre = await s.call(CH.accountsPrecheck, "health_check", [{ email: "a@x.com", browserId: "11" }]);
+  assert.deepEqual(pre, { ok: true, confirms: [], logs: [], total: 1 });
+});
+
+test("health_check：未选择账号时提示；已有任务在跑时拒绝", async () => {
+  const s = setup();
+  assert.deepEqual(await s.call(CH.accountsPrecheck, "health_check", []), {
+    ok: false,
+    level: "info",
+    title: "提示",
+    message: "请先选择要巡检的账号",
+  });
+
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+  let release;
+  s.ctx.tasks.start("x", "占位任务", () => new Promise((r) => (release = r)));
+  const busy = await s.call(CH.accountsPrecheck, "health_check", [{ email: "a@x.com", browserId: "11" }]);
+  assert.deepEqual(busy, {
+    ok: false,
+    level: "warning",
+    title: "警告",
+    message: "已有任务在执行中，请等待完成后再巡检",
+  });
+  release();
+});
+
+test("health_check：后台任务逐个巡检、统计四种结论、上报逐条目", async () => {
+  const calls = [];
+  const answers = {
+    "a@x.com": HC_OK,
+    "b@x.com": { status: "need_login", message: "需要登录", url: "", reason: "" },
+    "c@x.com": { status: "suspended", message: "账号已被停用", url: "", reason: "" },
+  };
+  const s = setup({
+    deps: {
+      healthCheck: async (browserId, account) => {
+        calls.push([browserId, account.email]);
+        return answers[account.email];
+      },
+    },
+  });
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "11" },
+    { email: "b@x.com", browser_profile_id: "12" },
+    { email: "c@x.com", browser_profile_id: "13" },
+  ]);
+  const rows = [
+    { email: "a@x.com", browserId: "11" },
+    { email: "b@x.com", browserId: "12" },
+    { email: "c@x.com", browserId: "13" },
+  ];
+
+  const done = s.finished();
+  const info = await s.call(CH.accountsStart, "health_check", rows, OPTS);
+  assert.equal(info.type, "health_check");
+  const e = await done;
+  assert.equal(e.outcome, "succeeded");
+  assert.equal(e.result.total, 3);
+  assert.equal(e.result.ok, 1);
+  assert.equal(e.result.need_login, 1);
+  assert.equal(e.result.suspended, 1);
+  assert.equal(e.result.window_error, 0);
+  assert.deepEqual(calls, [["11", "a@x.com"], ["12", "b@x.com"], ["13", "c@x.com"]]);
+  assert.deepEqual(s.items(), [
+    ["a@x.com", "成功", "已登录"],
+    ["b@x.com", "失败", "需要登录"],
+    ["c@x.com", "失败", "账号已被停用"],
+  ]);
+  assert.ok(s.logs().includes("巡检完成: 正常 1，需要登录 1，已停用 1，窗口异常 0"));
+  assert.ok(s.events.some(([c, p]) => c === IPC.event.taskProgress && p.current === 3 && p.total === 3));
+  // 只读承诺：巡检不动 ixBrowser（不开关窗口、不删不改）
+  assert.deepEqual(s.ix.calls, []);
+});
+
+test("health_check：未绑定窗口的账号记 window_error，不去连引擎；某个账号抛错也不影响后面的", async () => {
+  const calls = [];
+  const s = setup({
+    deps: {
+      healthCheck: async (browserId, account) => {
+        calls.push(account.email);
+        if (account.email === "b@x.com") throw new Error("Target closed");
+        return HC_OK;
+      },
+    },
+  });
+  seed(s.ctx, [
+    { email: "a@x.com" },
+    { email: "b@x.com", browser_profile_id: "12" },
+    { email: "c@x.com", browser_profile_id: "13" },
+  ]);
+  const rows = [
+    { email: "a@x.com", browserId: "" },
+    { email: "b@x.com", browserId: "12" },
+    { email: "c@x.com", browserId: "13" },
+  ];
+
+  const done = s.finished();
+  await s.call(CH.accountsStart, "health_check", rows, OPTS);
+  const e = await done;
+  assert.deepEqual(calls, ["b@x.com", "c@x.com"], "未绑定窗口的账号不应调用巡检");
+  assert.equal(e.result.window_error, 2);
+  assert.equal(e.result.ok, 1);
+  assert.deepEqual(s.items(), [
+    ["a@x.com", "错误", "未绑定窗口"],
+    ["b@x.com", "错误", "窗口打不开: Target closed"],
+    ["c@x.com", "成功", "已登录"],
+  ]);
+});
+
+test("finishedNotice：巡检完成弹汇总（成功才弹）", () => {
+  const notice = finishedNotice({
+    type: "health_check",
+    label: "健康巡检（3 个账号）",
+    outcome: "succeeded",
+    result: { total: 3, ok: 1, need_login: 1, suspended: 0, window_error: 1 },
+  });
+  assert.deepEqual(notice, {
+    title: "巡检完成",
+    message: "正常 1 个\n需要登录 1 个\n已停用 0 个\n窗口异常 1 个",
+  });
+  assert.equal(
+    finishedNotice({ type: "health_check", label: "x", outcome: "stopped", result: {} }),
+    null,
+  );
 });
 
 // ==================== 渲染层纯函数 ====================

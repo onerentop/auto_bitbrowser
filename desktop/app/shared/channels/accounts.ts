@@ -76,7 +76,12 @@ export type AccountsAction =
   /** 删除选中 + 窗口 */
   | "delete_with_windows"
   /** 右键「删除账号和窗口」（对标 _deleteAccountWithWindow，:1649） */
-  | "delete_one_with_window";
+  | "delete_one_with_window"
+  /**
+   * 账号健康巡检（本地新增，Python 侧没有）：只读访问 myaccount.google.com 判断
+   * 每个账号在窗口里的会话状态，不提交密码或验证码，因此不产生新登录会话。
+   */
+  | "health_check";
 
 export const ACCOUNTS_ACTIONS: readonly AccountsAction[] = [
   "single_login",
@@ -85,7 +90,12 @@ export const ACCOUNTS_ACTIONS: readonly AccountsAction[] = [
   "delete",
   "delete_with_windows",
   "delete_one_with_window",
+  "health_check",
 ];
+
+/** 健康巡检任务的 type（与 ctx.tasks.start 的第一个参数一致，渲染层据此识别完成事件） */
+export const HEALTH_CHECK_TASK_TYPE = "health_check";
+
 
 /** 勾选的一行：邮箱 + 表格里显示的窗口 ID（对标 _getSelectedRows 的 (email, browser_id)） */
 export interface SelectedRow {

@@ -55,6 +55,16 @@ export type TaskSpec =
       withWindows: boolean;
       /** 界面行上的窗口 ID 与数据库不一致而跳过的账号（执行时记日志并计为失败） */
       staleEmails: string[];
+    }
+  | {
+      /**
+       * 账号健康巡检（本地新增）：只读检查每个账号在窗口里的会话状态。
+       * browserIds 与 accounts 一一对应；未绑定窗口的账号在编排层直接判 window_error。
+       */
+      kind: "health_check";
+      label: string;
+      accounts: AccountDict[];
+      browserIds: string[];
     };
 
 export type PlanFailure = Extract<AccountsPrecheckResult, { ok: false }>;
@@ -257,6 +267,20 @@ export async function planAction(action: AccountsAction, rows: readonly Selected
             message: `确定要删除账号 ${email} 及其对应的浏览器窗口吗？\n\n窗口 ID: ${browserId}\n\n⚠️ 此操作不可恢复！`,
           },
         ],
+      );
+    }
+
+    // ---------- 账号健康巡检（本地新增，Python 侧没有对应按钮） ----------
+    // 只读，所以不做「未绑定窗口」之类的阻断：没绑窗口的账号在编排层直接记 window_error，
+    // 免得一个坏账号挡住整批巡检。
+    case "health_check": {
+      const busy = conflict("巡检");
+      if (busy) return busy;
+      const { accounts, browserIds } = selectedDb();
+      if (accounts.length === 0) return info("请先选择要巡检的账号");
+      return ok(
+        { kind: "health_check", label: `健康巡检（${accounts.length} 个账号）`, accounts, browserIds },
+        accounts.length,
       );
     }
   }

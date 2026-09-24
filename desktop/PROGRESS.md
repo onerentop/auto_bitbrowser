@@ -97,7 +97,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 490/490 通过
+pnpm test               # 521/521 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 覆盖率 94.7%：12 条（6 modify_2sv + 6 kick_devices）改写提示词已登记「有意不比对」，
@@ -511,6 +511,66 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
   日志可见（与 Python 共用库、`openDb` 无 `busy_timeout` 时会 `SQLITE_BUSY`，属既有全局条件）；
   批量登录 / 绑定 / 删除的条目上报目前只有单测覆盖，未上真机
 
+### 账号健康巡检（F2，2026-09-24）
+
+本地新增能力：Python 侧没有对应实现 —— 想知道「这批号还有多少能用」，原版只能真的跑一次批量登录
+（会改动会话、耗时，还容易触发风控）。本功能只读访问 `myaccount.google.com`，按落点判定：
+
+| 结论 | 判定依据 | 写回 |
+|---|---|---|
+| `ok` | 域名是 myaccount 且页面（文本或 HTML）出现该邮箱 | `login_status = logged_in`（顺带清空 last_error） |
+| `need_login` | 跳回 accounts.google.com / www.google.com；或 myaccount 两个页面都看不到该邮箱 | `login_status = not_logged`，先清掉旧 last_error |
+| `suspended` | 地址含 `/disabled`，或页面出现停用文案（复用 `login.ts` 的 `TEXT.ACCOUNT_DISABLED`） | `login_status = login_failed` + last_error |
+| `window_error` | 导航失败 / 拿不到地址 / 未绑定窗口 | **不改** login_status，只写一条 last_error（窗口坏 ≠ 账号状态坏） |
+
+- 文件：`src/automation/auto-health-check.ts`（判定 + 写回）、`src/application/health-check.ts`（批量编排）、
+  `src/db/account-repository.ts` 新增 `setLastError()`、通道动作 `health_check`、账号管理页「健康巡检」按钮
+- **为什么必须单独加 `setLastError`**：`updateLoginStatus` 对 `logged_in` 会把 `last_error` 置空，
+  于是「状态是已登录、但窗口有问题」根本写不进去（有专门的回归测试盯着这个坑）
+- 坏账号不挡整批：未绑定窗口的账号直接判 `window_error` 且不去连引擎；单个账号抛错也只影响它自己
+- 真机（窗口 7）：真实邮箱 → `ok`（依据「myaccount 页面显示了该账号邮箱」，URL `myaccount.google.com/?hl=en`）；
+  同一窗口传不匹配邮箱 → `need_login`（依据「myaccount 页面未显示该邮箱」）
+- **只读有硬证据**：用原型打点记录巡检期间调用过的引擎方法，两次判定分别调用 5 / 10 次，
+  方法集合只有 `navigate / wait / getCurrentUrl / getPageContent / getPageHtml` —— 非只读方法为空
+  （没有 `fill` / `click` / `typeText` / `pressKey` / `act`）
+- 生产路径真跑：`health_check` 任务 `outcome=succeeded`、`total=1 / 正常 1`、逐条目 `成功 | 已登录`、
+  `login_status` 由 `not_logged` → `logged_in`，任务历史里可查
+- 只读独立复验（`hc-verify.py`，逐表 + accounts 列级白名单）：15 张既有表逐行一致，
+  accounts 只有测试账号的 `updated_at` / `last_login_at` 变化，账号增删为 0 → PASS
+- 未覆盖：`suspended` 与 `window_error` 没有真机验证（不会为了测试把账号搞停用 / 弄坏窗口），
+  只有单测；批量多账号没上真机（真机 1 个账号）；GUI 按钮没真点
+
+### 登录「选择验证方式」页的修复（2026-09-24，属于登录轮）
+
+真机现象（用户反馈「没有正确填入密钥」）：账密提交后落在
+`https://accounts.google.com/v3/signin/challenge/selection`，页面是「Choose how you want to sign in:
+Get a verification code from the Google Authenticator app」，而 `LoginOperation` 只处理**直接出现**的
+验证器输入框，于是判 `need_2fa` 结束 —— **流程压根没走到填验证码那一步**。
+
+排查顺序与结论：
+
+1. 先排除算码算法：用独立实现（Python `hmac` + `base64.b32decode`）对同一密钥、4 个固定时间点比对，
+   全部一致；带空格 / 小写的密钥也能正确生成 → 不是 TOTP 的问题
+2. 只读 DOM 探测该页：可点元素是 `<div role="link" jsname="EBHGs" tabindex="0">Get a verification code
+   from the Google Authenticator app</div>`（内层），而 `clickByText("Google Authenticator app")` 返回 `null`
+3. **根因**：`textClickScript` 用 `label(el).startsWith(want)` 匹配，而这一项的文本以
+   「Get a verification code from the …」开头，永远匹配不上（之前的临时绕过脚本用的是「包含」匹配，所以能过）
+
+修法（**有意偏离 Python 版**：Python 的 `operations/login.py` 同样只处理直接出现的 TOTP 框，遇到这一页会失败；
+本轮没动 Python 侧。没有新增 AI 提示词，因此不需要登记进 `REMOVED_PROMPTS`）：
+
+- `stagehand-engine.ts`：`textClickScript(text, mode)` 增加 `contains` 模式（默认仍 `prefix`，
+  不影响「保存 / 下一步」这类按钮的精确匹配）；命中元素打 `data-abb-text-hit="1"` 标记供坐标点击兜底
+  （沿用踢出设备那轮的真机教训：Google 的 Material 列表项对 DOM `click()` 不响应）
+- `operations/login.ts`：新增 `chooseAuthenticator()`，在 `verify_selection` 阶段用 contains 模式尝试
+  `Google Authenticator app` / `Authenticator app` / `身份验证器` / `验证器应用`；点到后等页面进验证码页
+  （跳不动就用标记选择器坐标点击重试）；都点不到仍保持原 `need_2fa` 结论，不假装成功
+- 测试：`engine-click-by-text.test.mjs` 增 2 条、`engine-login.test.mjs` 增 3 条（先红 4 → 全绿）
+- 真机复跑：同一账号 `execute: success=true state=logged_in`（修复前每次都停在 `need_2fa`）
+
+> 注：本次提交的 `desktop/src/engine/operations/login.ts` 里同时包含**登录轮此前未提交**的 TS 移植内容
+> （HEAD 版是 327 行的旧实现，工作区是重写后的版本），提交信息里已写明这一点。
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -555,6 +615,10 @@ pnpm verify:selectors
    - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess（Node 24.21 / SQLite 3.53.4）中直接使用
    - **真机回归进行中**：已通过 打开窗口 / 批量绑定 / 批量登录（测试号）；**替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改2SV手机 / 踢出设备** 五个 AI 任务都已完成真机端到端验证并修掉同源缺陷（各自独立复跑成功、并与账号真实状态核对一致），详见 `.trellis/tasks/09-24-{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices}-real-run/real-run-log.md`；其余按 `.pi/plan/真实账号逐项测试计划-*.md` 继续
    - **任务历史（F4）**：新增 `task_run_history` / `task_run_items` 两表 + 设置页「任务历史」页签 + CSV 导出；真机跑首页批量打开窗口时发现「任务成功但历史 `total=0`」（任务体从不调 `api.item`），修掉后同一路径复跑 `total=2 / 成功 1 / 失败 1 / 逐条目 2 条`，详见 `.trellis/tasks/09-24-task-history-real-run/real-run-log.md`
+   - **账号健康巡检（F2）**：账号管理页新增「健康巡检」按钮，只读判定 `ok / need_login / suspended / window_error`
+     并写回 `login_status` / `last_error`；真机（窗口 7）真实邮箱 → `ok`、不匹配邮箱 → `need_login`，
+     只读审计证明没有调用任何写操作。顺带修掉登录卡在「选择验证方式」页的既存缺陷（验证码一直没被填），
+     详见 `.trellis/tasks/09-24-health-check-real-run/real-run-log.md`
 
 ## 六、Python 侧现状（勿动）
 

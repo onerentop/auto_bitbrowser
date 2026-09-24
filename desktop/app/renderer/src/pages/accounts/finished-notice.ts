@@ -37,6 +37,14 @@ export function finishedNotice(e: Pick<TaskFinishedEvent, "type" | "label" | "ou
       return { title: "删除完成", message: `已删除 ${deletedAccounts} 个账号\n已删除 ${num(r, "deleted_windows")} 个窗口` };
     }
 
+    case "health_check":
+      return {
+        title: "巡检完成",
+        message:
+          `正常 ${num(r, "ok")} 个\n需要登录 ${num(r, "need_login")} 个\n` +
+          `已停用 ${num(r, "suspended")} 个\n窗口异常 ${num(r, "window_error")} 个`,
+      };
+
     default:
       return null;
   }

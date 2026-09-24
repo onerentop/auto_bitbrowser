@@ -44,7 +44,8 @@ import { FILTER_OPTIONS, loginView, matchesFilter, statsText, type FilterOption 
 import { finishedNotice } from "./accounts/finished-notice.ts";
 
 /** 本页启动的任务类型：结束后刷新列表（对标各 finished 回调里的 _loadData） */
-const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete"]);
+// 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error）
+const ACCOUNT_TASK_TYPES = new Set(["login", "batch_bind", "batch_delete", "health_check"]);
 
 
 function toSelected(row: AccountListRow): SelectedRow {
@@ -353,6 +354,7 @@ export function AccountsPage(): ReactElement {
           {btn("批量登录", "login", "批量登录选中的账号", { primary: true, icon: <CloudDownloadOutlined /> })}
           <span style={{ width: 8 }} />
           {btn("批量绑定窗口", "batch_bind", "根据窗口名称匹配邮箱自动绑定")}
+          {btn("健康巡检", "health_check", "只读检查选中账号在窗口里的登录状态（不提交密码，不产生新登录）")}
         </Space>
       </Card>
 
