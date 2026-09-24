@@ -673,4 +673,19 @@ export class StagehandGoogleEngine {
     const { ReplacePhoneOperation } = await import("./operations/replace-phone.ts");
     return new ReplacePhoneOperation(this).execute(newPhone, smsService, credentials);
   }
+
+  /**
+   * 修改账号密码（F1，本地新增）。options.newPassword 由调用方生成，凭据不经日志。
+   * log 只用于把「第几轮重新验证」这类进度写进任务日志（不含任何凭据）。
+   */
+  async changePassword(
+    options: import("./operations/change-password.ts").ChangePasswordOptions,
+    log: ((msg: string) => void) | null = null,
+  ): Promise<import("./types.ts").ChangePasswordResult> {
+    const { ChangePasswordOperation } = await import("./operations/change-password.ts");
+    const op = new ChangePasswordOperation(this);
+    op.setLog(log);
+    return op.execute(options);
+  }
+
 }

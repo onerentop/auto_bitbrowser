@@ -22,7 +22,14 @@ export const AI_TASKS_INVOKE = {
 
 // ==================== 任务定义表 ====================
 
-export type AiTaskKind = "replace_phone" | "replace_email" | "modify_2sv" | "modify_auth" | "kick_devices";
+export type AiTaskKind =
+  | "replace_phone"
+  | "replace_email"
+  | "modify_2sv"
+  | "modify_auth"
+  | "kick_devices"
+  /** 修改密码（本地新增，F1）：新密码由系统自动生成，无额外输入 */
+  | "change_password";
 
 /** 额外输入框的参数键 */
 export type AiTaskParamKey = "newPhone" | "newEmail";
@@ -88,6 +95,14 @@ export const AI_TASK_KINDS: Readonly<Record<AiTaskKind, AiTaskKindDef>> = {
     taskName: "踢出设备",
     taskType: "ai_kick_devices",
     processingMessage: "正在踢出设备...",
+    extraField: null,
+  },
+  change_password: {
+    kind: "change_password",
+    taskName: "修改密码",
+    taskType: "ai_change_password",
+    processingMessage: "正在修改密码...",
+    // 新密码由系统自动生成（用户只需勾账号），因此没有额外输入框
     extraField: null,
   },
 };

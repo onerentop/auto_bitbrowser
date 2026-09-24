@@ -30,6 +30,7 @@ import { autoReplaceRecoveryEmail } from "../automation/auto-replace-recovery-em
 import { autoModify2svPhone } from "../automation/auto-modify-2sv-phone.ts";
 import { autoModifyAuthenticator } from "../automation/auto-modify-authenticator.ts";
 import { autoKickDevices } from "../automation/auto-kick-devices.ts";
+import { autoChangePassword } from "../automation/auto-change-password.ts";
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -138,6 +139,7 @@ export interface AiTaskAutomation {
   autoModify2svPhone: typeof autoModify2svPhone;
   autoModifyAuthenticator: typeof autoModifyAuthenticator;
   autoKickDevices: typeof autoKickDevices;
+  autoChangePassword: typeof autoChangePassword;
 }
 
 export const DEFAULT_AI_TASK_AUTOMATION: AiTaskAutomation = {
@@ -146,6 +148,7 @@ export const DEFAULT_AI_TASK_AUTOMATION: AiTaskAutomation = {
   autoModify2svPhone,
   autoModifyAuthenticator,
   autoKickDevices,
+  autoChangePassword,
 };
 
 /** modify_auth 保存新密钥所需的依赖（不注入则 automation 不写库） */
@@ -157,12 +160,28 @@ export interface ModifyAuthDeps {
   projectRoot: string;
 }
 
+/** change_password 写回本地所需的依赖；不注入则只改 Google 侧、不写本地 */
+export interface ChangePasswordDeps {
+  accountRepo: Pick<AccountRepository, "upsertAccount">;
+  ixClient: Pick<IxBrowserClient, "getProfileInfo" | "updateProfile">;
+  /**
+   * op 日志回调（接到任务日志）。
+   *
+   * 不传的话 op 的**全部判定依据**（含「提交后页面: url=… 文本=…」「页面出现拒绝字样…」）
+   * 会被静默丢弃：用户在界面上只看得到「无法确认密码是否已更改」，一个字的原因都没有 ——
+   * 真机改密事故复盘时正是卡在这里，只能靠猜。
+   */
+  callback?: (msg: string) => void;
+}
+
 export interface AiTaskRunnerDeps {
   automation: AiTaskAutomation;
   /** 按 email 读数据库账号；无记录返回 null */
   getAccount: (email: string) => Record<string, unknown> | null;
   /** modify_auth 的依赖，惰性获取（只有该任务才需要） */
   modifyAuthDeps: () => ModifyAuthDeps;
+  /** change_password 的写回依赖（数据库 + ixBrowser 窗口），惰性获取 */
+  changePasswordDeps: () => ChangePasswordDeps;
   /**
    * 读取窗口当前名称（查不到返回 null）。提供时，每个账号执行前校验「窗口名 === email」，
    * 不一致则跳过（见 runAiTask）。生产环境由 handler 注入；不提供则不校验（仅供测试）。
@@ -198,7 +217,7 @@ export async function invokeAiTask(
   browserId: string,
   accountInfo: Record<string, unknown>,
   params: AiTaskParams,
-  deps: Pick<AiTaskRunnerDeps, "automation" | "modifyAuthDeps">,
+  deps: Pick<AiTaskRunnerDeps, "automation" | "modifyAuthDeps" | "changePasswordDeps">,
 ): Promise<AiTaskOutcome> {
   const a = deps.automation;
   switch (kind) {
@@ -224,6 +243,10 @@ export async function invokeAiTask(
       const result = await a.autoKickDevices(browserId, accountInfo);
       const [ok, message] = result;
       return { ok: Boolean(ok), message: textOf(message), extra: { kicked_count: Number(result.kickedCount ?? 0) || 0 } };
+    }
+    case "change_password": {
+      const [ok, message] = await a.autoChangePassword(browserId, accountInfo, { ...deps.changePasswordDeps() });
+      return { ok: Boolean(ok), message: textOf(message) };
     }
   }
 }

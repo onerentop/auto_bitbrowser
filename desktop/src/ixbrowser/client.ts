@@ -244,7 +244,8 @@ export class IxBrowserClient {
    */
   async updateProfile(
     profileId: number,
-    fields: { note?: string; tfa_secret?: string; name?: string },
+    // password / username 是窗口信息面板上的账号字段（F1 改密后要同步窗口 password）
+    fields: { note?: string; tfa_secret?: string; name?: string; password?: string; username?: string },
   ): Promise<boolean> {
     const params: Record<string, unknown> = { profile_id: profileId };
     for (const [k, v] of Object.entries(fields)) {

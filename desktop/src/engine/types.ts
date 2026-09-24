@@ -405,3 +405,37 @@ export function createReplacePhoneResult(overrides: Partial<ReplacePhoneResult> 
   return base as unknown as ReplacePhoneResult;
 }
 
+/**
+ * 修改密码操作结果。
+ * 刻意**不带新密码**：新密码由调用方（automation 层）生成并持有，操作本身只负责把它填进去；
+ * 回传密码只会让它多出现在日志 / 事件载荷里。
+ */
+export interface ChangePasswordResult {
+  success: boolean;
+  message: string;
+  error: string | null;
+  error_type: string | null;
+  duration_ms: number;
+  can_retry: boolean;
+  operation: string;
+  /** 是否在页面上确认到「已更改」 */
+  verified: boolean;
+}
+
+export function createChangePasswordResult(overrides: Partial<ChangePasswordResult> = {}): ChangePasswordResult {
+  const base: Record<string, unknown> = {
+    success: false,
+    message: "",
+    error: null,
+    error_type: null,
+    duration_ms: 0,
+    can_retry: false,
+    operation: "change_password",
+    verified: false,
+  };
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v;
+  }
+  return base as unknown as ChangePasswordResult;
+}
+

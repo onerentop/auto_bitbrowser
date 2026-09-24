@@ -27,6 +27,7 @@ import {
   runAiTask,
   type AiTaskAutomation,
   type ModifyAuthDeps,
+  type ChangePasswordDeps,
 } from "../../../src/application/ai-task-runner.ts";
 
 /** 单次批量上限：防止误传超大数组 */
@@ -162,11 +163,19 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
         return authDeps;
       };
 
+
       return ctx.tasks.start(def.taskType, `${def.taskName}（${parsed.items.length} 个账号）`, (api) =>
         runAiTask(api, parsed, {
           automation,
           getAccount: (email) => ctx.accountRepo().getAccountByEmail(email),
           modifyAuthDeps,
+          // change_password 的写回依赖（数据库 + ixBrowser 窗口）+ 把 op 日志接到任务日志：
+          // 没有 callback 时，「提交后页面: …」这类判定依据到不了界面，真机只能靠猜（事故教训）
+          changePasswordDeps: (): ChangePasswordDeps => ({
+            accountRepo: ctx.accountRepo(),
+            ixClient: ctx.ix(),
+            callback: api.log,
+          }),
           // 执行前按窗口 ID 重新读取窗口名，校验与 email 一致（防止用 A 的密码操作 B 的窗口）
           getWindowName: options.getWindowName ?? (async (profileId) => {
             const info = await getBrowserInfo({ client: ctx.ix(), log: api.log }, profileId);

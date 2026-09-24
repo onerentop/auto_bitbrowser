@@ -603,6 +603,55 @@ Get a verification code from the Google Authenticator app」，而 `LoginOperati
 未覆盖：没有真的打开克隆出的窗口（只核对配置与列表可见性）；一次建多个未真机（单测覆盖）；
 GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩按钮仍禁用。
 
+### 修改账号密码（F1，2026-09-24）
+
+账号管理 / AI 任务页新增「修改密码」：勾账号 → 系统**自动生成强随机密码**（20 位、四类字符齐全、
+排除易混淆的 `I O l 0 1`）→ 走 Google 改密页 → **确认 Google 侧确实改成功之后**才写回三处落点
+（`accounts.password` / 窗口备注第 2 段 / 窗口 `password` 字段）。这个顺序是刻意的：
+反过来会留下「库里是新密码、Google 还是旧密码」，之后所有登录都会失败。
+
+| 文件 | 作用 |
+|---|---|
+| `src/core/random-password.ts` | `generateStrongPassword()`（长度 < 16 直接抛错，不静默降级） |
+| `src/engine/operations/change-password.ts` | `ChangePasswordOperation`：两步重新验证身份（密码 → TOTP）→ 填两次新密码 → 点「更改密码」→ 判定 |
+| `src/automation/auto-change-password.ts` | 三处写回 `saveNewPassword()`、结果上报 `describeSaveOutcome()`、编排 `autoChangePassword()` |
+| `src/application/ai-task-runner.ts`、`app/host/handlers/ai-tasks.ts` | AI 任务 `change_password`（`ai_change_password`）；op 日志接通任务日志 |
+| `app/renderer/src/App.tsx` | 「修改密码」页 |
+
+真机三轮（窗口 7、真实账号）：
+
+1. **第一轮：改密其实成功了，但判定失灵 → 新密码丢失。** 真机确认文案是「密码**已成功更改**」，
+   而成功词表只有「已更改」——「已成功更改」里**没有连续的「已更改」**，于是 op 报
+   「无法确认密码是否已更改」→ 按约定不写本地 → 三处落点全是旧密码，账号本地凭据整体失效
+   （`run-change-password-1.log`）。雪上加霜的是**那一轮完全没有记录提交后的页面文本**，事后只能靠猜。
+2. **恢复**：用户找回并确认了新密码；先用它在真机上**登出再登录成功**（`verify-newpw-1.log`），
+   再走生产写回函数补齐三处落点（`writeback-1.log`，`{"db":true,"note":true,"windowPassword":true}`）。
+3. **第二轮：修好判定后复跑端到端通过** —— op 报成功、三处落点都是新密码、关窗后用新密码登录成功
+   （`run-change-password-2.log`），并拿到真机提交后页面原文
+   （`myaccount.google.com/security-checkup-welcome?rapt=…`，「账号 帮助 密码已成功更改 …」），
+   反过来印证了第一轮的根因判断。
+
+修掉的四处（每处都有真机回归测试，`test/engine-change-password.test.mjs` 12 条）：
+
+- **成功词表缺口（根因）**：补「已成功」等变体，覆盖「已成功更改 / 已成功更新 / 已成功修改」。
+- **提交后没有证据**：判定时把 `url + 页面文本` 记进任务日志，结果消息也带上判定依据（会进任务历史）。
+- **兜底判据必须取正例**：「已离开密码页且密码表单消失」现在要求**确实取到了页面**、URL 非空、
+  主机是 `myaccount.google.com`（且不在密码页路径上）、页面文本 ≥ 20 字 —— 引擎已死
+  （`getCurrentUrl` 抛错、`isVisible` 恒 false）、`chrome-error://` 错误页、登出落地页
+  `www.google.com/account/about` 都不可能再被判成成功（代码审查指出的假成功形态，逐条补了用例）。
+- **静态提示词不得当拒绝**：拒绝词表原本含「至少使用 8 个字符」，而真机密码表单页**永远**写着
+  「密码强度： 请至少使用 8 个字符」—— 提交后第一轮检查时页面常常还没跳走，于是「还在提交中」
+  会被判成「Google 拒绝了新密码」→ 又不写本地 → 再次丢密码。已删掉静态/过宽词（连同 `invalid`/`无效`），
+  并要求连续两轮命中才算拒绝。
+
+另有一处接线缺陷（代码审查发现）：`ChangePasswordDeps` 少了 `callback` 时，op 的全部日志
+（含判定依据）会被静默丢弃、到不了界面 —— handler 里已把 `api.log` 接上。三处落点**全部**写失败时
+不再报成功，而是报失败并在消息里给出重设指引（`describeSaveOutcome`）。
+
+未覆盖：GUI 里没有真点按钮（任务体与界面走同一条 `change_password` 路径，但按钮本身没点过）；
+「一次改多个账号」未真机（单测覆盖计数与停止语义）；`describeSaveOutcome` 四种组合只有单测；
+「点击后二次确认弹层」没有任何真机证据，真机没出现过。
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -655,6 +704,10 @@ pnpm verify:selectors
      目标分组，界面带个数输入与确认框）；真机创建 → 12 项配置与模板一致 → 列表可见 → 删除 → 窗口列表恢复原状。
      真机暴露并修掉「新窗口 ID 丢失」（`profile-copy` 的 `data` 是裸数字，不是 `{profile_id:N}`），
      详见 `.trellis/tasks/09-24-create-windows-real-run/real-run-log.md`
+   - **修改密码（F1）**：勾账号后系统自动生成强随机密码，**确认 Google 侧改成功**才写回数据库 / 窗口备注第 2 段 /
+     窗口 `password` 字段。真机第一轮「改成功却判定失败」把新密码弄丢了（根因：真机确认文案是「已成功更改」，
+     而成功词表只有「已更改」），恢复后复跑端到端通过。已修：词表缺口、提交后记页面文本、兜底判据取正例、
+     静态提示词不再当拒绝、op 日志接通任务日志，详见 `.trellis/tasks/09-24-change-password-real-run/real-run-log.md`
 
 ## 六、Python 侧现状（勿动）
 

@@ -42,6 +42,8 @@ export const GoogleURLs = {
   RECOVERY_EMAIL: "https://myaccount.google.com/recovery/email",
   RECOVERY_PHONE_SETTINGS: "https://myaccount.google.com/signinoptions/rescuephone",
   RECOVERY_EMAIL_SETTINGS: "https://myaccount.google.com/signinoptions/rescueemail",
+  /** 账号密码设置页（真机 2026-09-24：会先跳「重新验证身份」：密码 → 验证器验证码） */
+  PASSWORD: "https://myaccount.google.com/signinoptions/password",
   ACCOUNT_RECOVERY: "https://accounts.google.com/signin/v2/challenge/recaptcha",
   ACCOUNT_VERIFY: "https://accounts.google.com/signin/v2/identifier",
 } as const;

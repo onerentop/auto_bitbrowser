@@ -12,6 +12,7 @@ import {
   DisconnectOutlined,
   HomeOutlined,
   KeyOutlined,
+  LockOutlined,
   MailOutlined,
   PhoneOutlined,
   QrcodeOutlined,
@@ -39,6 +40,7 @@ type PageKey =
   | "ai_modify_2sv"
   | "ai_modify_auth"
   | "ai_kick_devices"
+  | "ai_change_password"
   | "accounts"
   | "totp"
   | "settings"
@@ -83,6 +85,12 @@ const PAGES: PageDef[] = [
     label: "踢出设备",
     icon: <DisconnectOutlined />,
     render: () => <AiTaskPage kind="kick_devices" label="踢出设备" />,
+  },
+  {
+    key: "ai_change_password",
+    label: "修改密码",
+    icon: <LockOutlined />,
+    render: () => <AiTaskPage kind="change_password" label="修改密码" />,
   },
   { key: "accounts", label: "账号管理", icon: <TeamOutlined />, render: () => <AccountsPage /> },
   { key: "totp", label: "导入 TOTP", icon: <QrcodeOutlined />, render: () => <TotpImportPage /> },
