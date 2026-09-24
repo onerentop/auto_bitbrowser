@@ -105,3 +105,25 @@ test("upsert: 只改一个字段也要刷新 updated_at", () => {
   const row = repo.getAccountByEmail("a@b.com");
   assert.notEqual(row?.updated_at, "2000-01-01 00:00:00", "updated_at 应被刷新");
 });
+test("transaction: fn 成功则提交；抛错则整批回滚并原样抛出", () => {
+  const db = freshDb();
+  const repo = new AccountRepository(db);
+
+  const n = repo.transaction(() => {
+    repo.upsertAccount({ email: "a@b.com", password: "p" });
+    return 1;
+  });
+  assert.equal(n, 1);
+  assert.ok(repo.getAccountByEmail("a@b.com"), "成功时应提交");
+
+  const boom = new Error("boom");
+  assert.throws(
+    () =>
+      repo.transaction(() => {
+        repo.upsertAccount({ email: "c@d.com", password: "p" });
+        throw boom;
+      }),
+    (e) => e === boom,
+  );
+  assert.equal(repo.getAccountByEmail("c@d.com"), null, "抛错时已写入的条目也应回滚");
+});

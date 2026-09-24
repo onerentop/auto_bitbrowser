@@ -13,7 +13,8 @@ import { HOME_INVOKE, HOME_TASK_TYPES } from "../app/shared/channels/home.ts";
 import { TaskRunner } from "../app/host/task-runner.ts";
 import { createHostContext } from "../app/host/context.ts";
 import { createDispatcher } from "../app/host/dispatch.ts";
-import { createHomeHandlers, runBrowserBatch } from "../app/host/handlers/home.ts";
+import { createHomeHandlers } from "../app/host/handlers/home.ts";
+import { runBrowserBatch } from "../src/application/browser-batch.ts";
 import { getGroupList } from "../src/ixbrowser/groups.ts";
 import {
   buildBrowserTree,

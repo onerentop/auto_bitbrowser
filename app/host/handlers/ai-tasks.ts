@@ -20,7 +20,6 @@ import {
 } from "../../shared/channels/ai-tasks.ts";
 import { getBrowserInfo, getBrowserList } from "../../../src/ixbrowser/window.ts";
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
-import { HistoryRepository } from "../../../src/db/history-repository.ts";
 import {
   DEFAULT_AI_TASK_AUTOMATION,
   buildAiTaskTree,
@@ -146,15 +145,13 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
       const def = AI_TASK_KINDS[parsed.kind];
 
       // modify_auth 的保存依赖：同一任务内只建一次。
-      // HistoryRepository 不会自动建表，写入前必须先 initTable。
+      // 历史仓储由组合根提供（首次取用时建表），handler 不直接创建仓储。
       let authDeps: ModifyAuthDeps | null = null;
       const modifyAuthDeps = (): ModifyAuthDeps => {
         if (!authDeps) {
-          const historyRepo = new HistoryRepository(ctx.db());
-          historyRepo.initTable("authenticator");
           authDeps = {
             accountRepo: ctx.accountRepo(),
-            historyRepo,
+            historyRepo: ctx.historyRepo(),
             ixClient: ctx.ix(),
             // 「已修改密钥.txt」写到数据根目录，而不是 out/ 下
             projectRoot: ctx.dataRoot,

@@ -4,7 +4,23 @@
  * 与 executeBatchBind / executeBatchDelete 同一层级与风格：纯编排 + 注入依赖，单测全部离线。
  * 真正的只读判定在 src/automation/auto-health-check.ts，这里只负责逐个调用、计数、上报逐条目。
  */
-import type { HealthCheckResult, HealthStatus } from "../automation/auto-health-check.ts";
+import {
+  autoHealthCheck,
+  type AutoHealthCheckOptions,
+  type HealthCheckResult,
+  type HealthStatus,
+} from "../automation/auto-health-check.ts";
+
+export type { HealthCheckResult };
+
+/** 默认的单账号判定：真机连窗口只读判定（handler 不直连 automation，经这里调用） */
+export function defaultHealthCheck(
+  browserId: string,
+  account: Record<string, unknown>,
+  options: AutoHealthCheckOptions,
+): Promise<HealthCheckResult> {
+  return autoHealthCheck(browserId, account, options);
+}
 
 export type AccountDict = Record<string, unknown>;
 export type LogFn = (message: string) => void;

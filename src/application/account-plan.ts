@@ -14,8 +14,8 @@ import type {
   AccountsPrecheckResult,
   ConfirmStep,
   SelectedRow,
-} from "../../../shared/channels/accounts.ts";
-import { DELETE_ACCOUNTS_ONLY_LABEL } from "../../../shared/channels/accounts.ts";
+} from "../../app/shared/channels/accounts.ts";
+import { DELETE_ACCOUNTS_ONLY_LABEL } from "../../app/shared/channels/accounts.ts";
 import {
   buildBatchDeleteConfirmMessage,
   checkTaskConflicts,
@@ -27,7 +27,7 @@ import {
   type AccountDict,
   type AccountLookup,
   type WindowLike,
-} from "../../../../src/application/account-manager-service.ts";
+} from "./account-manager-service.ts";
 
 export interface PlanEnv {
   repo: AccountLookup;

@@ -6,7 +6,7 @@
  *   precheck / start                                                   —— 批量操作（start 启动后台任务）
  *
  * 批量操作全部走 ctx.tasks（全局单任务，重复启动抛 TASK_BUSY）；
- * 候选筛选 / 确认文案在 ./accounts/plan.ts，执行逻辑在 src/application/account-task-orchestrator.ts。
+ * 候选筛选 / 确认文案在 src/application/account-plan.ts，执行逻辑在 src/application/account-task-orchestrator.ts。
  * 依赖（批处理器、窗口操作）可通过第二参数注入，单测全部离线。
  */
 import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
@@ -28,9 +28,11 @@ import type { TaskInfo } from "../../shared/ipc.ts";
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
 import { createLogProgressTracker, type TaskApi } from "../task-runner.ts";
-import { planAction, staleLog, toPrecheckResult, type PlanEnv, type TaskSpec } from "./accounts/plan.ts";
+import { planAction, staleLog, toPrecheckResult, type PlanEnv, type TaskSpec } from "../../../src/application/account-plan.ts";
 import type { WindowLike } from "../../../src/application/account-manager-service.ts";
 import {
+  createBatchProcessor,
+  createIxWindowOps,
   executeAccountWorkerTask,
   executeBatchBind,
   executeBatchDelete,
@@ -38,11 +40,13 @@ import {
   type LlmParams,
   type WorkerProcessor,
 } from "../../../src/application/account-task-orchestrator.ts";
-import { BatchAccountProcessor } from "../../../src/automation/batch-account-processor.ts";
-import { deleteBrowserById } from "../../../src/ixbrowser/window.ts";
 import type { ConfigManager } from "../../../src/core/config-manager.ts";
-import { autoHealthCheck, type HealthCheckResult } from "../../../src/automation/auto-health-check.ts";
-import { executeHealthCheck, healthCheckSummaryLine } from "../../../src/application/health-check.ts";
+import {
+  defaultHealthCheck,
+  executeHealthCheck,
+  healthCheckSummaryLine,
+  type HealthCheckResult,
+} from "../../../src/application/health-check.ts";
 
 /** 窗口列表查询参数（ixBrowser 每次取前 500 个窗口） */
 export const WINDOW_LIST_QUERY = { page: 1, limit: 500 } as const;
@@ -157,14 +161,8 @@ function errorText(error: unknown): string {
 export function createDefaultProcessor(
   ctx: HostContext,
   options: { concurrency: number; callback: (msg: string) => void },
-): BatchAccountProcessor {
-  return new BatchAccountProcessor(
-    { concurrency: options.concurrency, callback: options.callback },
-    {
-      config: ctx.config(),
-      db: ctx.db(),
-    },
-  );
+): ReturnType<typeof createBatchProcessor> {
+  return createBatchProcessor({ config: ctx.config(), db: ctx.db() }, options);
 }
 
 // ==================== handler 工厂 ====================
@@ -179,10 +177,9 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
     ((options: { concurrency: number; callback: (msg: string) => void }): WorkerProcessor =>
       createDefaultProcessor(ctx, options));
 
-  const closeBrowser = deps.closeBrowser ?? ((id: string) => ctx.ix().closeProfile(Number(id)));
-  const deleteBrowser =
-    deps.deleteBrowser ??
-    (async (id: string) => ({ success: await deleteBrowserById({ client: ctx.ix(), log: ctx.log }, id) }));
+  const windowOps = createIxWindowOps({ client: () => ctx.ix(), log: ctx.log });
+  const closeBrowser = deps.closeBrowser ?? windowOps.closeBrowser;
+  const deleteBrowser = deps.deleteBrowser ?? windowOps.deleteBrowser;
 
   const planEnv = (busy: boolean): PlanEnv => ({ repo: repo(), busy, listWindows });
 
@@ -279,7 +276,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           const check =
             deps.healthCheck ??
             ((browserId: string, account: Record<string, unknown>) =>
-              autoHealthCheck(browserId, account, { callback: api.log, accountRepo: repo() }));
+              defaultHealthCheck(browserId, account, { callback: api.log, accountRepo: repo() }));
           const summary = await executeHealthCheck({
             accounts: spec.accounts,
             browserIds: spec.browserIds,

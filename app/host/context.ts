@@ -14,6 +14,8 @@ import { ConfigManager } from "../../src/core/config-manager.ts";
 import { openDb, type Db } from "../../src/db/connection.ts";
 import { initDb } from "../../src/db/schema.ts";
 import { AccountRepository } from "../../src/db/account-repository.ts";
+import { HistoryRepository } from "../../src/db/history-repository.ts";
+import { ProxyRepository } from "../../src/db/proxy-repository.ts";
 import { IxBrowserClient } from "../../src/ixbrowser/client.ts";
 import { TaskRunner, type TaskEmit } from "./task-runner.ts";
 
@@ -26,6 +28,10 @@ export interface HostContext {
   config(): ConfigManager;
   db(): Db;
   accountRepo(): AccountRepository;
+  /** 代理与代理-窗口绑定 */
+  proxyRepo(): ProxyRepository;
+  /** 各类修改历史（首次取用时建「验证器修改历史」表） */
+  historyRepo(): HistoryRepository;
   ix(): IxBrowserClient;
   readonly tasks: TaskRunner;
   /** 批量任务运行结果历史（本地新增能力） */
@@ -77,6 +83,12 @@ export function createHostContext(options: HostContextOptions): HostContext {
     config: lazy(() => new ConfigManager({ configFile, log })),
     db,
     accountRepo: lazy(() => new AccountRepository(db())),
+    proxyRepo: lazy(() => new ProxyRepository(db())),
+    historyRepo: lazy(() => {
+      const repo = new HistoryRepository(db());
+      repo.initTable("authenticator");
+      return repo;
+    }),
     taskHistoryRepo,
     ix: lazy(() => options.ixClient ?? new IxBrowserClient()),
     tasks: new TaskRunner({

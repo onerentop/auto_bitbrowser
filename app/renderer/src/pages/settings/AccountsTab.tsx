@@ -60,7 +60,8 @@ function isDeleteResult(v: unknown): v is DeleteAccountsResultDto {
     typeof v === "object" &&
     v !== null &&
     typeof (v as Record<string, unknown>)["deleted_accounts"] === "number" &&
-    typeof (v as Record<string, unknown>)["deleted_windows"] === "number"
+    typeof (v as Record<string, unknown>)["deleted_windows"] === "number" &&
+    typeof (v as Record<string, unknown>)["failed_count"] === "number"
   );
 }
 
@@ -177,15 +178,20 @@ export function AccountsTab(): ReactElement {
     if (hostReady && !loaded) void load();
   }, [hostReady, loaded, load]);
 
-  // 删除任务结束后刷新列表，并给出完成提示
+  // 删除任务结束后刷新列表；只有正常完成才弹完成提示（与账号管理页一致，停止 / 失败看任务坞）
   useEffect(
     () =>
       onTaskFinished((e) => {
         if (e.type !== SETTINGS_TASK_TYPES.deleteAccounts) return;
         void load();
-        if (isDeleteResult(e.result)) {
+        if (e.outcome === "succeeded" && isDeleteResult(e.result)) {
           const r = e.result;
-          message.success(`已删除 ${r.deleted_accounts} 个账号` + (r.deleted_windows > 0 ? `，${r.deleted_windows} 个窗口` : ""));
+          const text =
+            `已删除 ${r.deleted_accounts} 个账号` +
+            (r.deleted_windows > 0 ? `，${r.deleted_windows} 个窗口` : "") +
+            (r.failed_count > 0 ? `，失败 ${r.failed_count} 个` : "");
+          if (r.failed_count > 0) message.warning(text);
+          else message.success(text);
         }
       }),
     [load, message],
@@ -244,7 +250,7 @@ export function AccountsTab(): ReactElement {
     modal.confirm({
       title: "确认删除",
       content: (
-        <div style={{ whiteSpace: "pre-line" }}>{`确定要删除选中的 ${rows.length} 个账号吗？\n将同时删除对应的 ixBrowser 窗口。`}</div>
+        <div style={{ whiteSpace: "pre-line" }}>{`确定要删除选中的 ${rows.length} 个账号吗？\n将同时删除已绑定的 ixBrowser 窗口。`}</div>
       ),
       okText: "确定",
       cancelText: "取消",

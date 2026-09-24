@@ -14,6 +14,9 @@
  *   5. 结果里的超长字符串（例如页面文本）截断到 MAX_RESULT_STRING，字段名不变。
  */
 import { batchResultToDict, type BatchResult } from "../automation/batch/types.ts";
+import { BatchAccountProcessor, type BatchProcessorDeps } from "../automation/batch-account-processor.ts";
+import type { IxBrowserClient } from "../ixbrowser/client.ts";
+import { deleteBrowserById, type IxWindowClient } from "../ixbrowser/window.ts";
 
 export type AccountDict = Record<string, unknown>;
 export type LogFn = (message: string) => void;
@@ -205,6 +208,37 @@ export async function executeBatchDelete(params: {
   return results;
 }
 
+/** 批量删除用到的窗口操作 */
+export interface WindowOps {
+  closeBrowser: (browserId: string) => Promise<unknown>;
+  deleteBrowser: (browserId: string) => Promise<{ success: boolean }>;
+}
+
+/**
+ * 批量删除的默认窗口操作（账号管理页与设置页共用同一套）。
+ * client 传取客户端的函数：真正删窗口时才创建 ixBrowser 客户端，handler 工厂保持惰性。
+ * 删除走 deleteBrowserById（可重试错误按退避重试，失败返回 false）。
+ */
+export function createIxWindowOps(deps: {
+  client: () => IxWindowClient & Pick<IxBrowserClient, "closeProfile">;
+  log?: LogFn;
+  sleep?: (ms: number) => Promise<void>;
+}): WindowOps {
+  return {
+    closeBrowser: (id) => deps.client().closeProfile(Number(id)),
+    deleteBrowser: async (id) => ({
+      success: await deleteBrowserById(
+        {
+          client: deps.client(),
+          ...(deps.log ? { log: deps.log } : {}),
+          ...(deps.sleep ? { sleep: deps.sleep } : {}),
+        },
+        id,
+      ),
+    }),
+  };
+}
+
 // ==================== 批处理任务 ====================
 
 /** 账号批处理任务类型 */
@@ -225,6 +259,17 @@ export interface WorkerProcessor {
     options?: { apiKey?: string | null; model?: string | null; provider?: string | null; maxRetries?: number | null },
   ): Promise<BatchResult>;
   stop(): void;
+}
+
+/** 默认批处理器工厂；必须注入 db，否则批处理器会跳过写库 */
+export function createBatchProcessor(
+  deps: Pick<BatchProcessorDeps, "config"> & { db: NonNullable<BatchProcessorDeps["db"]> },
+  options: { concurrency: number; callback: (msg: string) => void },
+): BatchAccountProcessor {
+  return new BatchAccountProcessor(
+    { concurrency: options.concurrency, callback: options.callback },
+    { config: deps.config, db: deps.db },
+  );
 }
 
 /** 把 BatchResult 转成普通对象（字段名不变），并截断超长字符串 */

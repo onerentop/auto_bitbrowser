@@ -207,10 +207,13 @@ export interface ImportResultDto {
   fail_count: number;
 }
 
-/** 删除账号任务的结果 */
+/** 删除账号任务的结果（与账号管理页批量删除同一结构） */
 export interface DeleteAccountsResultDto {
+  total: number;
   deleted_accounts: number;
   deleted_windows: number;
+  failed_count: number;
+  failed_list: Array<{ email: string; error: string }>;
 }
 
 /** 设置页启动的后台任务类型（TaskInfo.type / TaskFinishedEvent.type） */

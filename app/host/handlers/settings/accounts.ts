@@ -2,13 +2,14 @@
  * 设置页「账号数据」标签的 handler（列表 / 增删改 / 批量导入 / 导出 / 删除）
  */
 import {
-  buildAccountImportUpsert,
   isValidNewAccountEmail,
   parseAccountImportLine,
   parseImportText,
   type ImportedAccount,
 } from "../../../shared/logic/settings-data.ts";
-import { deleteBrowserById, findBrowserByEmail, type IxWindowDeps } from "../../../../src/ixbrowser/window.ts";
+import { importAccounts } from "../../../../src/application/account-import.ts";
+import { deleteAccountsByEmail, deleteAccountsFinishedLine } from "../../../../src/application/account-delete.ts";
+import { createIxWindowOps } from "../../../../src/application/account-task-orchestrator.ts";
 import {
   SETTINGS_INVOKE,
   SETTINGS_TASK_TYPES,
@@ -78,15 +79,8 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
     },
 
     /**
-     * 批量导入账号（整批包在一个事务里）。
-     * 后端按同一纯函数重新解析文本；逐条保存。整个导入包在一个事务里，只为减少磁盘同步次数。
-     *
-     * 计数规则（有意如此）：
-     *   - 失败计数：若写库的返回值被忽略、恒按成功计，
-     *     只有抛异常才计 fail 并继续下一条，所以单条写库失败（upsert 内部吞掉异常返回 False）
-     *     单条写库失败也会算成功；这里把 upsertAccount 返回 false 计为 fail，计数更真实。
-     *   - 事务回滚：不包事务、逐条立即提交时，中途异常只影响那一条；这里若循环中抛出
-     *     未被 upsertAccount 吞掉的异常，会 ROLLBACK 整批并把错误抛给界面，已写入的条目也不保留。
+     * 批量导入账号：后端按同一纯函数重新解析文本（不信任渲染层预览），
+     * 写库与计数规则见 src/application/account-import.ts（整批一个事务）。
      */
     [SETTINGS_INVOKE.settingsAccountsImport]: (text: unknown): ImportResultDto => {
       const raw = asString(text, "text", MAX_IMPORT_TEXT_LENGTH);
@@ -95,93 +89,36 @@ export function createAccountsDataHandlers(ctx: HostContext, deps: AccountsHandl
         if (row.result.ok) valid.push(row.result.data);
       }
       if (valid.length === 0) invalid("没有可导入的有效数据");
-
-      const repo = ctx.accountRepo();
-      const db = ctx.db();
-      let success = 0;
-      let fail = 0;
-      db.exec("BEGIN");
-      try {
-        for (const data of valid) {
-          const exists = repo.getAccountByEmail(data.email) !== null;
-          if (repo.upsertAccount(buildAccountImportUpsert(data, exists))) success += 1;
-          else fail += 1;
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-      return { success_count: success, fail_count: fail };
+      return importAccounts(ctx.accountRepo(), valid);
     },
 
     /**
-     * 批量删除账号（同时删除对应窗口）。
-     * 每个账号都要按邮箱查 ixBrowser 窗口（带重试，ixBrowser 未启动时单个账号就要等数秒），
+     * 批量删除账号（同时删除数据库里绑定的窗口；规则见 src/application/account-delete.ts）。
+     * 删窗口要调 ixBrowser（带重试，ixBrowser 未启动时单个账号就要等数秒），
      * 可能超过主进程 30s 转发超时，因此作为后台任务运行，立即返回 TaskInfo。
-     * 语义：找到窗口先关闭（忽略错误）再删除，删除成功才计数；无论窗口是否删成，账号都删除。
      */
     [SETTINGS_INVOKE.settingsAccountsDelete]: (emailsArg: unknown): TaskInfo => {
       const emails = parseEmailListArg(emailsArg);
       const total = emails.length;
 
       return ctx.tasks.start(DELETE_ACCOUNTS_TASK_TYPE, `删除 ${total} 个账号`, async (api) => {
-        const ixDeps: IxWindowDeps = {
-          client: ctx.ix(),
-          log: (m) => api.log(m),
-          ...(deps.sleep ? { sleep: deps.sleep } : {}),
-        };
-        let deletedAccounts = 0;
-        let deletedWindows = 0;
-
-        api.log(`确定删除 ${total} 个账号，将同时删除对应的 ixBrowser 窗口`);
-        for (let i = 0; i < total; i++) {
-          if (api.shouldStop()) {
-            api.log("任务已停止");
-            break;
-          }
-          const email = emails[i] as string;
-          let note = "";
-          api.log(`[${i + 1}/${total}] 删除账号: ${email}`);
-
-          try {
-            const profileId = await findBrowserByEmail(ixDeps, email);
-            if (profileId) {
-              try {
-                await ctx.ix().closeProfile(profileId);
-              } catch {
-                // 关闭窗口失败忽略
-              }
-              try {
-                if (await deleteBrowserById(ixDeps, profileId)) {
-                  deletedWindows += 1;
-                  api.log(`  ✓ 已删除窗口 ${profileId}`);
-                  note = `已删除窗口 ${profileId}`;
-                } else {
-                  api.log(`  ✗ 窗口 ${profileId} 删除失败`);
-                  note = `窗口 ${profileId} 删除失败`;
-                }
-              } catch {
-                // 删除窗口失败忽略
-              }
-            } else {
-              api.log("  未找到对应窗口");
-              note = "未找到对应窗口";
-            }
-          } catch {
-            // 查找 / 删除窗口失败忽略
-          }
-
-          ctx.accountRepo().deleteAccount(email);
-          deletedAccounts += 1;
-          // 逐条目结果（任务历史用）：窗口那一侧的成败放进消息里；账号一律删除，不计窗口成败
-          api.item(email, "成功", note);
-          api.progress(i + 1, total);
-        }
-
-        // 任务结束时的完成提示
-        api.log(`删除完成: 已删除 ${deletedAccounts} 个账号` + (deletedWindows > 0 ? `，${deletedWindows} 个窗口` : ""));
-        const result: DeleteAccountsResultDto = { deleted_accounts: deletedAccounts, deleted_windows: deletedWindows };
+        api.log(`开始删除 ${total} 个账号，将同时删除已绑定的 ixBrowser 窗口`);
+        api.progress(0, total);
+        const results = await deleteAccountsByEmail({
+          emails,
+          repo: ctx.accountRepo(),
+          windowOps: createIxWindowOps({
+            client: () => ctx.ix(),
+            log: api.log,
+            ...(deps.sleep ? { sleep: deps.sleep } : {}),
+          }),
+          shouldStop: api.shouldStop,
+          log: api.log,
+          progress: (i) => api.progress(i, total),
+          item: api.item,
+        });
+        api.log(deleteAccountsFinishedLine(results));
+        const result: DeleteAccountsResultDto = results;
         return result;
       });
     },

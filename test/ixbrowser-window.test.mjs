@@ -7,7 +7,6 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   deleteBrowserById,
-  findBrowserByEmail,
   getBrowserInfo,
   getBrowserList,
   getNextWindowName,
@@ -110,26 +109,6 @@ test("getBrowserInfo：按 profileId 查，查不到返回 null", async () => {
   const { deps: d } = deps(client);
   assert.deepEqual(await getBrowserInfo(d, 7), { profile_id: 7 });
   assert.equal(await getBrowserInfo(d, 8), null);
-});
-
-test("findBrowserByEmail：匹配 name 或 username；空邮箱直接返回 null", async () => {
-  const client = {
-    calls: 0,
-    async getProfileList() {
-      this.calls++;
-      return [
-        { profile_id: 1, name: "a", username: "x@y.com" },
-        { profile_id: 2, name: "b@y.com", username: "" },
-      ];
-    },
-  };
-  const { deps: d } = deps(client);
-  assert.equal(await findBrowserByEmail(d, "x@y.com"), 1);
-  assert.equal(await findBrowserByEmail(d, "b@y.com"), 2);
-  assert.equal(await findBrowserByEmail(d, "none@y.com"), null);
-  const before = client.calls;
-  assert.equal(await findBrowserByEmail(d, ""), null);
-  assert.equal(client.calls, before);
 });
 
 test("openBrowserById / deleteBrowserById：无效 id 返回 false；失败返回 false 不抛", async () => {

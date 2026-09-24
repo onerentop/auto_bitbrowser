@@ -106,8 +106,8 @@ module.exports = {
     },
     {
       name: "handlers-via-application",
-      severity: "warn",
-      comment: "handler 经 src/application 调业务，不直连 automation / engine（组合根 context.ts / index.ts 不在 handlers/ 下）；C3 完成后升为 error",
+      severity: "error",
+      comment: "handler 经 src/application 调业务，不直连 automation / engine（组合根 context.ts / index.ts 不在 handlers/ 下）",
       from: { path: "^app/host/handlers/" },
       to: { path: "^src/(automation|engine)/" },
     },

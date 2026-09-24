@@ -27,6 +27,22 @@ export class AccountRepository {
     this.db = db;
   }
 
+  /**
+   * 在一个事务里执行 fn：成功则提交，fn 抛错则回滚后原样抛出。
+   * 仓储只提供事务原语，不关心里面做什么（批量导入等由用例层决定）。
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   getAllAccounts(): AccountRow[] {
     return this.db.prepare("SELECT * FROM accounts ORDER BY email").all() as AccountRow[];
   }

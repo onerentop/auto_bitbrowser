@@ -6,7 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 
-import { ERROR_CODES } from "../app/shared/envelope.ts";
+import { ERROR_CODES, toEnvelopeError } from "../app/shared/envelope.ts";
+import { InvalidInputError } from "../src/application/errors.ts";
 import { IPC } from "../app/shared/ipc.ts";
 import { TaskRunner, createLogProgressTracker, toCloneable } from "../app/host/task-runner.ts";
 import { createHostContext } from "../app/host/context.ts";
@@ -251,4 +252,12 @@ test("HostContext：惰性打开数据库，首次访问时建表，之后复用
 test("mergeHandlers：重名通道直接报错", () => {
   assert.throws(() => mergeHandlers({ a: () => 1 }, { a: () => 2 }), /重复登记: a/);
   assert.deepEqual(Object.keys(mergeHandlers({ a: () => 1 }, { b: () => 2 })), ["a", "b"]);
+});
+
+// ==================== 用例层错误 → 信封 ====================
+
+test("InvalidInputError：错误码与传输层 INVALID_ARGUMENT 一致，经信封原样传到界面", () => {
+  const e = new InvalidInputError("代理列表已变化，请刷新后重试");
+  assert.equal(e.code, ERROR_CODES.INVALID_ARGUMENT);
+  assert.deepEqual(toEnvelopeError(e), { code: ERROR_CODES.INVALID_ARGUMENT, message: "代理列表已变化，请刷新后重试" });
 });

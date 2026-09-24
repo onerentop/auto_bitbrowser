@@ -1,5 +1,5 @@
 /**
- * 账号管理页：后端 handler（app/host/handlers/accounts.ts + accounts/plan.ts）与渲染层纯函数的离线单测
+ * 账号管理页：后端 handler（app/host/handlers/accounts.ts + src/application/account-plan.ts）与渲染层纯函数的离线单测
  * :memory: 库 + initDb、假 ixBrowser、假批处理器，全部离线。
  */
 import { test } from "node:test";

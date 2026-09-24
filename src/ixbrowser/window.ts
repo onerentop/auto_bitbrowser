@@ -139,16 +139,6 @@ export async function getBrowserInfo(
   return r.value[0] ?? null;
 }
 
-/** 按 name 或 username 精确匹配，未找到返回 null */
-export async function findBrowserByEmail(deps: IxWindowDeps, email: string): Promise<number | null> {
-  if (!email) return null;
-  const browsers = await getBrowserList(deps, { limit: 1000 });
-  for (const b of browsers) {
-    if (b.name === email || b.username === email) return b.profile_id ?? null;
-  }
-  return null;
-}
-
 /** 空值 / 0 / 非数字一律视为无效 */
 function toProfileId(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined || value === "" || value === 0) return null;

@@ -121,7 +121,7 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 | `main-is-thin` | error | 主进程不依赖 `src/`、`app/host`、`app/renderer`、`app/preload` |
 | `preload-only-shared` | error | 预加载不依赖 `src/`、`app/host`、`app/renderer`、`app/main` |
 | `host-no-electron-or-ui` | error | 后端不依赖 electron、`app/main`、`app/renderer`、`app/preload` |
-| `handlers-via-application` | warn → error | `app/host/handlers` 不直接依赖 `src/automation`、`src/engine`（组合根 `app/host/context.ts`、`app/host/index.ts` 例外）；C3 完成后升为 error |
+| `handlers-via-application` | error | `app/host/handlers` 不直接依赖 `src/automation`、`src/engine`（组合根 `app/host/context.ts`、`app/host/index.ts` 例外） |
 | `src-no-electron` | error | `src/` 不依赖 electron |
 | `src-only-application-sees-contracts` | error | `src/` 里只有 `application` 可以依赖 `app/` |
 | `application-only-contracts` | error | `src/application` 只能依赖 `app/shared/channels/` 与 `app/shared/logic/` |
@@ -200,9 +200,6 @@ src/application ──▶ automation ──▶ engine ──▶ ixbrowser
 
 | # | 偏差 | 违反 | 负责子任务 |
 |---|---|---|---|
-| D5 | handler 里做业务编排：`app/host/handlers/settings/proxies.ts:63-204`（直接创建仓储 / DataStore / ProxyAllocator 并做校验去重）、`settings/accounts.ts:103-112`（直接执行事务 SQL）、`home.ts:141-188`（自写批处理循环）、`accounts/plan.ts`（决策逻辑）、`ai-tasks.ts:153`（直接创建 `HistoryRepository`） | §4 | C3 |
-| D6 | handler 直接依赖 automation：`app/host/handlers/accounts.ts` → `src/automation/batch-account-processor.ts`、`src/automation/auto-health-check.ts` | `handlers-via-application` | C3 |
-| D7 | 设置页「删除选中」与账号管理页的删除规则不一致（按邮箱找窗口、不看删除结果）：`app/host/handlers/settings/accounts.ts:124-187`；应复用 `executeBatchDelete`（窗口以数据库绑定为准、先删账号成功才删窗口） | §4 | C3 |
 | D8 | 6 个 engine operation 各写一份「重新验证身份」：`src/engine/operations/{replace-phone,replace-email,modify-auth,modify-2sv,kick-devices,change-password}.ts`，已分叉 | 可维护性 | C4 |
 | D9 | 测试代码不做类型检查（`tsconfig.json` 只 include `test/**/*.ts`，测试全是 `.mjs`） | §8 | C5 |
 

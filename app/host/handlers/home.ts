@@ -12,7 +12,6 @@ import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
   HOME_TASK_TYPES,
   MAX_CREATE_COUNT,
-  type HomeBatchResult,
   type HomeBrowserTree,
   type HomeConfig,
   type HomeConfigPatch,
@@ -20,7 +19,6 @@ import {
   type HomeCreateSpec,
   type HomeGroupListResult,
 } from "../../shared/channels/home.ts";
-import type { TaskApi } from "../task-runner.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
 import { deleteBrowserById, getBrowserList, getNextWindowName, openBrowserById } from "../../../src/ixbrowser/window.ts";
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
@@ -29,6 +27,7 @@ import {
   resolveNamePrefix,
   type CreateWindowsDeps,
 } from "../../../src/application/create-windows.ts";
+import { runBrowserBatch } from "../../../src/application/browser-batch.ts";
 import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../shared/logic/home-tree.ts";
 
 /** 配置键 */
@@ -129,62 +128,6 @@ function readConfig(ctx: HostContext): HomeConfig {
     templateId: configString(cfg.get(HOME_CONFIG_KEYS.templateId, "")),
     namePrefix: configString(cfg.get(HOME_CONFIG_KEYS.namePrefix, "")),
   };
-}
-
-type BrowserOp = (id: number, log: (message: string) => void) => Promise<boolean>;
-
-/**
- * 批量打开 / 删除的任务体：逐个执行，每个窗口一行日志 + 一条逐条目结果（任务历史用），
- * 更新进度，支持中途停止。
- * 打开 / 删除窗口均为新实现。
- */
-export async function runBrowserBatch(
-  api: Pick<TaskApi, "log" | "progress" | "item" | "shouldStop">,
-  ids: readonly number[],
-  verb: string,
-  op: BrowserOp,
-): Promise<HomeBatchResult> {
-  const total = ids.length;
-  const failed: number[] = [];
-  let success = 0;
-  let done = 0;
-  api.log(`准备${verb} ${total} 个窗口...`);
-  api.progress(0, total);
-  for (const id of ids) {
-    if (api.shouldStop()) {
-      api.log(`[用户操作] 任务已停止，剩余 ${total - done} 个窗口未处理`);
-      break;
-    }
-    let ok = false;
-    let failure = "";
-    // 本条目内最后一条底层日志：失败时的原因（「窗口不存在」这类）只在底层日志里，
-    // 逐条目消息带上它，任务历史才能回答「为什么失败」
-    const log = (message: string): void => {
-      failure = message;
-      api.log(message);
-    };
-    try {
-      ok = await op(id, log);
-    } catch (error) {
-      failure = errText(error);
-      api.log(`[错误] 窗口 ${id} ${verb}异常: ${failure}`);
-    }
-    done += 1;
-    if (ok) {
-      success += 1;
-      api.log(`[${done}/${total}] ✓ 窗口 ${id} ${verb}成功`);
-      api.item(String(id), "成功", "");
-    } else {
-      failed.push(id);
-      api.log(`[${done}/${total}] ✗ 窗口 ${id} ${verb}失败`);
-      // 逐条目结果：任务历史（总数 / 成功 / 失败）靠它统计。只打日志的话，
-      // 真机上任务虽然成功，历史里却全是 0（2026-09-24 复现）。
-      api.item(String(id), "失败", failure || `窗口 ${id} ${verb}失败`);
-    }
-    api.progress(done, total);
-  }
-  api.log(`${verb}完成: 成功 ${success}，失败 ${failed.length}`);
-  return { total, success_count: success, failed_count: failed.length, failed_ids: failed };
 }
 
 export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
