@@ -97,7 +97,8 @@ export function AccountEditModal(props: AccountEditModalProps): ReactElement {
       forceRender
     >
       <Spin spinning={loading}>
-        <Form form={form} layout="horizontal" labelCol={{ flex: "80px" }} initialValues={EMPTY}>
+        {/* 标签左对齐、固定宽度，与首页「创建参数」一致；上方留 16 与标题拉开 */}
+        <Form form={form} layout="horizontal" labelAlign="left" labelCol={{ flex: "80px" }} initialValues={EMPTY} style={{ marginTop: 16 }}>
           <Form.Item name="email" label="邮箱">
             <Input placeholder="example@gmail.com" readOnly={editing} />
           </Form.Item>

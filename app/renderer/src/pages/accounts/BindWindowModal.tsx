@@ -93,9 +93,13 @@ export function BindWindowModal({ email, onClose, onBound }: BindWindowModalProp
       okText="绑定"
       destroyOnHidden
     >
-      <Typography.Paragraph>为账号 {email} 选择窗口:</Typography.Paragraph>
+      <Typography.Paragraph style={{ marginTop: 16, marginBottom: 8 }}>
+        为账号 <Typography.Text strong>{email}</Typography.Text> 选择窗口：
+      </Typography.Paragraph>
       {loading ? (
-        <Spin />
+        <div style={{ display: "flex", justifyContent: "center", padding: "8px 0" }}>
+          <Spin />
+        </div>
       ) : (
         <Select
           style={{ width: "100%" }}

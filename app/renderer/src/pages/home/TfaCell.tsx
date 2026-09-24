@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { App, Progress, Space, Tooltip, Typography } from "antd";
 import { MAX_TFA_CODE_IDS, type HomeTfaCodes } from "../../../../shared/channels/home.ts";
 import { IPC, invoke } from "../../lib/ipc.ts";
+import { useTokens } from "../../theme/tokens.ts";
 
 const PERIOD_SECONDS = 30;
 
@@ -71,6 +72,7 @@ export interface TfaCellProps {
 
 export function TfaCell({ hasTfa, code, invalid, periodEndsAt }: TfaCellProps): ReactElement {
   const { message } = App.useApp();
+  const t = useTokens();
   const left = useSecondsLeft(code ? periodEndsAt : null);
 
   if (!hasTfa) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -83,18 +85,19 @@ export function TfaCell({ hasTfa, code, invalid, periodEndsAt }: TfaCellProps): 
       () => void message.error("复制失败"),
     );
   };
+  // 最后 5 秒：验证码与倒计时圈改用 warn 色，提示马上要换新码
   const urgent = left <= 5;
 
   return (
     <Tooltip title="点击复制验证码">
       <Space
-        size={6}
+        size={8}
         style={{ cursor: "pointer", userSelect: "none" }}
         onClick={copy}
         // 双击行 = 打开窗口；在验证码上双击只复制，不打开
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <Typography.Text strong style={{ fontFamily: "Consolas, monospace", fontSize: 15, letterSpacing: 1 }} type={urgent ? "danger" : undefined}>
+        <Typography.Text strong className="abb-mono" style={{ fontSize: 14, letterSpacing: 1 }} type={urgent ? "warning" : undefined}>
           {code.slice(0, 3)} {code.slice(3)}
         </Typography.Text>
         <Progress
@@ -102,9 +105,10 @@ export function TfaCell({ hasTfa, code, invalid, periodEndsAt }: TfaCellProps): 
           size={16}
           percent={(left / PERIOD_SECONDS) * 100}
           showInfo={false}
-          strokeColor={urgent ? "#ff4d4f" : undefined}
+          strokeColor={urgent ? t.warn : t.indigo}
+          trailColor={t.line}
         />
-        <Typography.Text type="secondary" style={{ fontSize: 12, width: 22 }}>
+        <Typography.Text type="secondary" className="abb-num" style={{ fontSize: 12, width: 22 }}>
           {left}s
         </Typography.Text>
       </Space>

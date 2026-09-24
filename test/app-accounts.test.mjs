@@ -975,7 +975,7 @@ test("登录状态文案与颜色（:505-523）", () => {
   const long = "123456789012345678901234";
   assert.deepEqual(loginView(row({ login_status: "login_failed", last_error: long })), {
     text: "失败: 12345678901234567890...",
-    color: "#F44336",
+    color: "error",
     tooltip: `错误原因: ${long}`,
   });
   assert.equal(loginView(row({ login_status: "login_failed" })).text, "失败");

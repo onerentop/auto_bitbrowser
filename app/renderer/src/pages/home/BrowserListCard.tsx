@@ -1,5 +1,5 @@
 /**
- * 窗口列表卡片：工具栏 + 分组筛选标签 + 平铺表格（虚拟滚动）
+ * 窗口列表面板：工具栏 + 分组筛选标签 + 平铺表格（虚拟滚动），同在一块 surface 面板里
  *
  * - 搜索：窗口ID前缀 / 名称 / 备注，不区分大小写；与分组标签叠加
  * - 排序：窗口ID（默认降序，新建的在上面）/ 名称 / 最近打开
@@ -8,7 +8,7 @@
  * 纯逻辑全部在 app/shared/logic/home-list.ts。
  */
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Button, Card, Empty, Input, Space, Table, Tag, Typography } from "antd";
+import { Button, Empty, Input, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { DeleteOutlined, EyeOutlined, SyncOutlined } from "@ant-design/icons";
 import type { HomeBrowserList, HomeBrowserNode } from "../../../../shared/channels/home.ts";
@@ -20,6 +20,7 @@ import {
   selectionSummary,
   tableSorter as sorter,
 } from "../../../../shared/logic/home-list.ts";
+import { Panel } from "../../components/Section.tsx";
 import { TfaCell, useTfaCodes } from "./TfaCell.tsx";
 
 export interface BrowserListCardProps {
@@ -66,7 +67,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
   const tfa = useTfaCodes(tfaIds, props.version);
   const invalidSet = useMemo(() => new Set(tfa?.invalid ?? []), [tfa]);
 
-  // 表格高度跟随容器（卡片占满页面剩余高度）
+  // 表格高度跟随容器（面板占满页面剩余高度）
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(400);
   useEffect(() => {
@@ -94,7 +95,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
           <Typography.Text type="secondary">—</Typography.Text>
         ) : (
           <span onDoubleClick={(e) => e.stopPropagation()}>
-            <Typography.Text copyable={{ text: String(b.profileId), tooltips: ["复制窗口ID", "已复制"] }}>
+            <Typography.Text className="abb-mono" copyable={{ text: String(b.profileId), tooltips: ["复制窗口ID", "已复制"] }}>
               {b.profileId}
             </Typography.Text>
           </span>
@@ -149,7 +150,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
   const filtered = visible.length !== all.length;
 
   return (
-    <Card size="small" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }} styles={{ body: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 } }}>
+    <Panel fill>
       {/* 工具栏 */}
       <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
         <Space wrap>
@@ -192,7 +193,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
       </Space>
 
       {/* 分组筛选标签：单选；数量为分组内窗口总数（不随搜索变化） */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <Tag.CheckableTag checked={groupId === null} onChange={() => setGroupId(null)}>
           全部 ({total})
         </Tag.CheckableTag>
@@ -238,6 +239,6 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
           }}
         />
       </div>
-    </Card>
+    </Panel>
   );
 }

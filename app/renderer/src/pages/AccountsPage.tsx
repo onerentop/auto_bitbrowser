@@ -1,7 +1,7 @@
 /**
  * 账号管理页（账号列表 / 添加编辑导入导出 / 绑定窗口 / 批量任务）
  *
- * 布局：操作卡片（账号数据 | 批量任务 | 删除）→ 列表卡片（刷新、搜索、登录状态、分组标签、平铺虚拟表格）。
+ * 布局：PageHeader（添加 / 批量导入 / 导出选中）→ 列表面板（筛选工具栏、批量操作栏、分组标签、平铺虚拟表格）。
  *   - 账号数据（添加 / 编辑 / 批量导入 / 导出）从原设置页「账号数据」迁来；列表只显示密码 / 密钥 / 辅助邮箱有无，
  *     编辑时才按邮箱取原文
  *   - 筛选全部在前端叠加（分组 / 登录状态 / 搜索）；被筛选隐藏的勾选保留，批量操作作用于全部勾选，确认前提示隐藏数
@@ -15,9 +15,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, ty
 import {
   App,
   Button,
-  Card,
   Checkbox,
-  Divider,
   Dropdown,
   Empty,
   Input,
@@ -73,6 +71,9 @@ import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
 import { loginView } from "./accounts/status.ts";
 import { finishedNotice } from "./accounts/finished-notice.ts";
+import { PageHeader } from "../components/PageHeader.tsx";
+import { Panel } from "../components/Section.tsx";
+import { useTokens } from "../theme/tokens.ts";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_delete", "health_check"]);
@@ -93,11 +94,12 @@ function Multiline({ text }: { text: string }): ReactElement {
   return <div style={{ whiteSpace: "pre-wrap" }}>{text}</div>;
 }
 
-/** 有 / 无 的小图标 */
+/** 有 / 无 的小图标（有 = ok 色，无 = idle 色） */
 function Flag({ on, label }: { on: boolean; label: string }): ReactNode {
+  const t = useTokens();
   return (
     <Tooltip title={on ? `有${label}` : `没有${label}`}>
-      {on ? <CheckCircleFilled style={{ color: "#52c41a" }} /> : <MinusCircleOutlined style={{ color: "rgba(128,128,128,0.6)" }} />}
+      {on ? <CheckCircleFilled style={{ color: t.ok }} /> : <MinusCircleOutlined style={{ color: t.idle }} />}
     </Tooltip>
   );
 }
@@ -124,6 +126,7 @@ export function AccountsPage(): ReactElement {
   const { modal, notification, message } = App.useApp();
   const { running } = useTaskState();
   const busy = running !== null;
+  const tk = useTokens();
 
   const [list, setList] = useState<AccountsListResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -387,7 +390,11 @@ export function AccountsPage(): ReactElement {
       ellipsis: true,
       render: (_, r) => {
         const v = loginView(r);
-        const t = <Tag color={v.color}>{v.text}</Tag>;
+        const t = (
+          <Tag bordered={false} color={v.color}>
+            {v.text}
+          </Tag>
+        );
         return v.tooltip ? <Tooltip title={v.tooltip}>{t}</Tooltip> : t;
       },
     },
@@ -397,7 +404,8 @@ export function AccountsPage(): ReactElement {
       width: 90,
       sorter: accountSorter("windowId"),
       defaultSortOrder: "descend",
-      render: (_, r) => r.browser_profile_id || <Typography.Text type="secondary">—</Typography.Text>,
+      render: (_, r) =>
+        r.browser_profile_id ? <span className="abb-mono">{r.browser_profile_id}</span> : <Typography.Text type="secondary">—</Typography.Text>,
     },
     {
       title: "窗口名",
@@ -408,7 +416,7 @@ export function AccountsPage(): ReactElement {
         <>
           {hasSameNameWindows(r) && (
             <Tooltip title={`有 ${r.same_name_windows} 个同名窗口，右键「重新绑定窗口」可确认或更换`}>
-              <Tag color="orange" style={{ marginInlineEnd: 4 }}>
+              <Tag bordered={false} color="warning" style={{ marginInlineEnd: 4 }}>
                 同名×{r.same_name_windows}
               </Tag>
             </Tooltip>
@@ -475,12 +483,15 @@ export function AccountsPage(): ReactElement {
 
   const total = rows.length;
   const filtered = visible.length !== total;
+  const hasChecked = checked.length > 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", minHeight: 600 }}>
-      <Card size="small" title="Google 账号管理">
-        <Space wrap split={<Divider type="vertical" />}>
-          <Space wrap>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 600 }}>
+      <PageHeader
+        title="账号"
+        description="Google 账号与绑定的 ixBrowser 窗口。勾选后可以批量登录、巡检或删除，右键单个账号有更多操作。"
+        extra={
+          <>
             <Button icon={<PlusOutlined />} onClick={() => setEditEmail("")}>
               添加账号
             </Button>
@@ -492,41 +503,12 @@ export function AccountsPage(): ReactElement {
                 导出选中
               </Button>
             </Tooltip>
-          </Space>
-          <Space wrap>
-            {actionBtn(`批量登录${checked.length > 0 ? `（${checked.length}）` : ""}`, "login", "批量登录勾选的账号", {
-              primary: true,
-              icon: <CloudDownloadOutlined />,
-            })}
-            <Tooltip title="批量登录时同时打开的窗口数">
-              <Space size={4}>
-                <span>并发</span>
-                <InputNumber
-                  min={1}
-                  max={10}
-                  precision={0}
-                  value={concurrency}
-                  onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
-                  disabled={busy}
-                  style={{ width: 64 }}
-                />
-              </Space>
-            </Tooltip>
-            {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
-          </Space>
-          <Space wrap>
-            {actionBtn("删除选中", "delete", "只删除账号记录，不删浏览器窗口", { icon: <DeleteOutlined /> })}
-            {actionBtn("删除+窗口", "delete_with_windows", "删除勾选账号及其绑定的浏览器窗口", { danger: true })}
-          </Space>
-        </Space>
-      </Card>
+          </>
+        }
+      />
 
-      <Card
-        size="small"
-        style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
-        styles={{ body: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 } }}
-      >
-        {/* 工具栏：刷新 + 搜索 + 登录状态 | 已选 + 计数 */}
+      <Panel fill>
+        {/* 筛选工具栏：刷新 + 搜索 + 登录状态 + 同名 | 计数 */}
         <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
           <Space wrap>
             <Button icon={<SyncOutlined />} loading={loading} onClick={() => void load()}>
@@ -553,22 +535,65 @@ export function AccountsPage(): ReactElement {
               </Tooltip>
             )}
           </Space>
-          <Space wrap>
-            {checked.length > 0 && (
-              <Typography.Text>
-                已选 <b>{checked.length}</b> 个
-                {hiddenChecked > 0 && <Typography.Text type="warning">（其中 {hiddenChecked} 个不在当前视图）</Typography.Text>}
-                <Button type="link" size="small" onClick={() => setChecked([])}>
-                  清空
-                </Button>
-              </Typography.Text>
-            )}
-            <Typography.Text type="secondary">{filtered ? `显示 ${visible.length} / 共 ${total}` : `共 ${total} 个账号`}</Typography.Text>
-          </Space>
+          <Typography.Text type="secondary">{filtered ? `显示 ${visible.length} / 共 ${total}` : `共 ${total} 个账号`}</Typography.Text>
         </Space>
 
+        {/* 批量操作栏：左侧已选摘要，右侧批量任务与删除；有勾选时底色换成主色浅底，更醒目。
+            可用条件与原来一致（只受 busy 控制，未勾选时由 precheck 给出提示） */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "6px 8px",
+            borderRadius: 6,
+            background: hasChecked ? tk.indigoSoft : tk.canvas,
+          }}
+        >
+          {hasChecked ? (
+            <Typography.Text>
+              已选 <b className="abb-num">{checked.length}</b> 个
+              {hiddenChecked > 0 && <Typography.Text type="warning">（其中 {hiddenChecked} 个不在当前视图）</Typography.Text>}
+              <Button type="link" size="small" onClick={() => setChecked([])}>
+                清空
+              </Button>
+            </Typography.Text>
+          ) : (
+            <Typography.Text type="secondary">勾选账号后批量操作</Typography.Text>
+          )}
+          <Space wrap size={16}>
+            <Space wrap>
+              {actionBtn(`批量登录${hasChecked ? `（${checked.length}）` : ""}`, "login", "批量登录勾选的账号", {
+                primary: hasChecked,
+                icon: <CloudDownloadOutlined />,
+              })}
+              <Tooltip title="批量登录时同时打开的窗口数">
+                <Space size={8}>
+                  <span>并发</span>
+                  <InputNumber
+                    min={1}
+                    max={10}
+                    precision={0}
+                    value={concurrency}
+                    onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
+                    disabled={busy}
+                    style={{ width: 64 }}
+                  />
+                </Space>
+              </Tooltip>
+              {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
+            </Space>
+            <Space wrap>
+              {actionBtn("删除选中", "delete", "只删除账号记录，不删浏览器窗口", { icon: <DeleteOutlined /> })}
+              {actionBtn("删除+窗口", "delete_with_windows", "删除勾选账号及其绑定的浏览器窗口", { danger: true })}
+            </Space>
+          </Space>
+        </div>
+
         {/* 分组标签：单选；数量为分组内账号总数（不随其它筛选变化） */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           <Tag.CheckableTag checked={groupId === null} onChange={() => setGroupId(null)}>
             全部 ({total})
           </Tag.CheckableTag>
@@ -614,7 +639,7 @@ export function AccountsPage(): ReactElement {
             })}
           />
         </div>
-      </Card>
+      </Panel>
 
       {/* 右键菜单：在鼠标位置放一个 1px 锚点，受控打开 */}
       <Dropdown

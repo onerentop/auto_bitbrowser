@@ -1,13 +1,13 @@
 /**
  * 首页（ixBrowser 窗口管理）
  *
- * 布局：创建参数配置卡片 → 操作按钮行 → 窗口列表卡片。
- * 日志区由底部全局任务坞替代，界面侧日志用 logLocal。
+ * 布局：PageHeader（主操作：根据模板创建窗口 + 个数）→ 创建参数分节 → 窗口列表面板（工具栏 + 分组标签 + 表格）。
+ * 日志区由底部全局任务坞替代，界面侧日志用 logLocal；停止任务用任务坞的「停止」。
  * 页面切走不卸载，因此挂载时的自动加载只发生一次。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { App, Button, InputNumber, Space, Tooltip } from "antd";
-import { AppstoreAddOutlined, PauseOutlined, PlusOutlined } from "@ant-design/icons";
+import { PlusOutlined } from "@ant-design/icons";
 import {
   HOME_TASK_TYPES,
   MAX_CREATE_COUNT,
@@ -19,6 +19,7 @@ import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { defaultGroupOptions, refreshSummary } from "../../../shared/logic/home-list.ts";
+import { PageHeader } from "../components/PageHeader.tsx";
 import { ConfigCard } from "./home/ConfigCard.tsx";
 import { BrowserListCard } from "./home/BrowserListCard.tsx";
 
@@ -155,7 +156,7 @@ export function HomePage(): ReactElement {
   const onCreate = (): void => {
     const templateId = Number.parseInt(config.current.templateId.trim(), 10);
     if (!Number.isInteger(templateId) || templateId <= 0) {
-      void message.warning("请先在上方填写模板窗口ID");
+      void message.warning("请先在「创建参数」里填写模板窗口ID");
       return;
     }
     const prefix = config.current.namePrefix.trim();
@@ -186,8 +187,35 @@ export function HomePage(): ReactElement {
   };
 
   return (
-    // 纵向铺满：窗口列表卡片占剩余高度，表格随窗口大小伸缩
+    // 纵向铺满：窗口列表面板占剩余高度，表格随窗口大小伸缩
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 560 }}>
+      <PageHeader
+        title="窗口"
+        description="ixBrowser 里的全部窗口。勾选后可以打开或删除，也可以按模板批量创建。"
+        extra={
+          <>
+            <Space size={8}>
+              <span>个数</span>
+              <InputNumber
+                min={1}
+                max={MAX_CREATE_COUNT}
+                value={createCount}
+                onChange={(v) => setCreateCount(typeof v === "number" ? v : 1)}
+                disabled={running !== null}
+                style={{ width: 80 }}
+              />
+            </Space>
+            <Tooltip title="按「创建参数」里的模板窗口ID创建，名字为「前缀_序号」">
+              <span>
+                <Button type="primary" icon={<PlusOutlined />} disabled={running !== null} onClick={onCreate}>
+                  根据模板创建窗口
+                </Button>
+              </span>
+            </Tooltip>
+          </>
+        }
+      />
+
       <ConfigCard
         groupOptions={groupOptions}
         groupId={groupId}
@@ -196,43 +224,6 @@ export function HomePage(): ReactElement {
         groupsLoading={groupsLoading}
         onValuesChange={(v) => (config.current = v)}
       />
-
-      {/* 三个按钮：「根据模板创建窗口」已接上真实实现；
-          「使用默认模板创建」与「停止任务」保持禁用（停止用底部任务坞的按钮） */}
-      <Space wrap>
-        <Tooltip title="按上方「模板窗口ID」创建，名字为「前缀_序号」">
-          <span>
-            <Button type="primary" icon={<PlusOutlined />} disabled={running !== null} onClick={onCreate}>
-              根据模板创建窗口
-            </Button>
-          </span>
-        </Tooltip>
-        <Space size={4}>
-          <span>个数</span>
-          <InputNumber
-            min={1}
-            max={MAX_CREATE_COUNT}
-            value={createCount}
-            onChange={(v) => setCreateCount(typeof v === "number" ? v : 1)}
-            disabled={running !== null}
-            style={{ width: 80 }}
-          />
-        </Space>
-        <Tooltip title="暂未实现">
-          <span>
-            <Button icon={<AppstoreAddOutlined />} disabled>
-              使用默认模板创建
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="用底部任务坞的「停止」">
-          <span>
-            <Button icon={<PauseOutlined />} disabled>
-              停止任务
-            </Button>
-          </span>
-        </Tooltip>
-      </Space>
 
       <BrowserListCard
         list={list}

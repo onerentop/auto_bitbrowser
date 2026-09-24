@@ -1,18 +1,20 @@
 /**
- * 「创建参数配置」卡片（模板窗口 ID / 数量 / 窗口前缀 / 目标分组）
+ * 「创建参数」分节（模板窗口 ID / 窗口前缀 / 目标分组）
  *
+ * 放在一块面板里的单个 Section，不再单独套卡片；表单标签左对齐。
  * 模板窗口 ID / 窗口前缀来自配置。
  * 改为输入框失焦时经 abb/home/saveConfig 写回，
  * 值没变就不发请求。
- * 目标分组下拉 + 「刷新」。
+ * 目标分组下拉 + 「刷新分组」。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { App, Button, Card, Form, Input, Select } from "antd";
+import { App, Button, Form, Input, Select } from "antd";
 import { SyncOutlined } from "@ant-design/icons";
 import type { HomeConfig, HomeGroupOption } from "../../../../shared/channels/home.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { logLocal } from "../../stores/task.ts";
 import { useHostStatus } from "../../stores/host-status.ts";
+import { Panel, Section } from "../../components/Section.tsx";
 
 export interface ConfigCardProps {
   groupOptions: HomeGroupOption[];
@@ -103,29 +105,31 @@ export function ConfigCard(props: ConfigCardProps): ReactElement {
   });
 
   return (
-    <Card title="创建参数配置" size="small">
-      <Form layout="inline" style={{ rowGap: 12 }}>
-        <Form.Item label="模板窗口ID">
-          <Input placeholder="请输入模板窗口ID（可选）" style={{ width: 200 }} {...bind("templateId")} />
-        </Form.Item>
-        <Form.Item label="窗口前缀">
-          <Input placeholder="可选，默认按模板名命名" style={{ width: 200 }} {...bind("namePrefix")} />
-        </Form.Item>
-        <Form.Item label="目标分组">
-          <Select
-            style={{ width: 220 }}
-            value={props.groupId ?? undefined}
-            options={props.groupOptions.map((g) => ({ value: g.id, label: g.label }))}
-            onChange={(v: number) => props.onGroupChange(v)}
-            loading={props.groupsLoading}
-          />
-        </Form.Item>
-        <Form.Item>
-          <Button type="text" icon={<SyncOutlined />} onClick={props.onRefreshGroups} loading={props.groupsLoading}>
-            刷新
-          </Button>
-        </Form.Item>
-      </Form>
-    </Card>
+    <Panel>
+      <Section first title="创建参数" description="根据模板创建窗口时使用；模板窗口ID和前缀离开输入框后自动保存">
+        <Form layout="inline" style={{ rowGap: 12 }}>
+          <Form.Item label="模板窗口ID">
+            <Input placeholder="请输入模板窗口ID（可选）" style={{ width: 200 }} {...bind("templateId")} />
+          </Form.Item>
+          <Form.Item label="窗口前缀">
+            <Input placeholder="可选，默认按模板名命名" style={{ width: 200 }} {...bind("namePrefix")} />
+          </Form.Item>
+          <Form.Item label="目标分组">
+            <Select
+              style={{ width: 220 }}
+              value={props.groupId ?? undefined}
+              options={props.groupOptions.map((g) => ({ value: g.id, label: g.label }))}
+              onChange={(v: number) => props.onGroupChange(v)}
+              loading={props.groupsLoading}
+            />
+          </Form.Item>
+          <Form.Item>
+            <Button type="text" icon={<SyncOutlined />} onClick={props.onRefreshGroups} loading={props.groupsLoading}>
+              刷新分组
+            </Button>
+          </Form.Item>
+        </Form>
+      </Section>
+    </Panel>
   );
 }
