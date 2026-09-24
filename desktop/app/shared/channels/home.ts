@@ -24,6 +24,8 @@ export const HOME_INVOKE = {
   homeOpenBrowsers: "abb/home/openBrowsers",
   /** 批量删除选中窗口（后台任务；原版 :456 为 TODO 桩） */
   homeDeleteBrowsers: "abb/home/deleteBrowsers",
+  /** 按模板窗口批量创建窗口（后台任务；原版 :427 为 TODO 桩） */
+  homeCreateBrowsers: "abb/home/createBrowsers",
 } as const;
 
 // ==================== 数据类型 ====================
@@ -88,7 +90,32 @@ export interface HomeBatchResult {
 export const HOME_TASK_TYPES = {
   open: "home_open_browsers",
   delete: "home_delete_browsers",
+  create: "home_create_browsers",
 } as const;
+
+/** 一次最多创建多少个窗口（防误操作；名字与分组都会真的落到 ixBrowser） */
+export const MAX_CREATE_COUNT = 20;
+
+/** 「根据模板创建窗口」的入参 */
+export interface HomeCreateSpec {
+  /** 模板窗口 ID（必填，正整数） */
+  templateId: number;
+  /** 创建个数，1..MAX_CREATE_COUNT */
+  count: number;
+  /** 名称前缀；空串表示用模板窗口的名字 */
+  namePrefix: string;
+  /** 目标分组；null / 省略表示沿用模板窗口的分组 */
+  groupId?: number | null;
+}
+
+/** 创建结果：逐窗口的成败与最终名字 */
+export interface HomeCreateResult {
+  total: number;
+  success_count: number;
+  failed_count: number;
+  created: Array<{ profile_id: number; name: string }>;
+  failed_names: string[];
+}
 
 // ==================== 通道 → 类型 ====================
 
@@ -99,4 +126,5 @@ export interface HomeInvokeMap {
   "abb/home/listBrowsers": { args: []; result: HomeBrowserTree };
   "abb/home/openBrowsers": { args: [profileIds: number[]]; result: TaskInfo };
   "abb/home/deleteBrowsers": { args: [profileIds: number[]]; result: TaskInfo };
+  "abb/home/createBrowsers": { args: [spec: HomeCreateSpec]; result: TaskInfo };
 }

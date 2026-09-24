@@ -196,6 +196,31 @@ export class IxBrowserClient {
     return data.profile_id;
   }
 
+  /**
+   * 以某个窗口为模板创建新窗口（ixBrowser 官方的「复制窗口」），返回新窗口 ID。
+   *
+   * 为什么用官方复制而不是自己把模板字段读出来再 profile-create：
+   * 服务端自己知道一个「复制」要带哪些东西，手工映射字段只会漏（漏掉的字段会静默变成默认值，
+   * 产出一个「看起来像模板、实际不同」的窗口）。我们只决定名字与分组，其余交给服务端。
+   * 参数定义对齐官方 SDK ixbrowser_local_api.client.create_profile_by_copying
+   * （ACTION_FOR_PROFILE_COPY = "profile-copy"，可选 name / group_id / site_id / site_url）。
+   */
+  async copyProfile(profileId: number, fields: { name?: string; groupId?: number } = {}): Promise<number> {
+    const params: Record<string, unknown> = { profile_id: profileId };
+    if (fields.name !== undefined) params["name"] = fields.name;
+    if (fields.groupId !== undefined) params["group_id"] = fields.groupId;
+
+    // 真机实测（2026-09-24）：profile-copy 的 data 是**裸数字**（{"data":835}），
+    // 与 profile-create 的 {"data":{"profile_id":N}} 不是同一个形状。
+    // 官方 SDK 用 isinstance(result, dict) 分流，这里两种都认，认不出就报错（绝不能静默返回 undefined）。
+    const data = await this.call<number | { profile_id?: number }>("profile-copy", params);
+    const id = typeof data === "number" ? data : data && typeof data === "object" ? data.profile_id : undefined;
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+      throw new IxUnexpectedError(`profile-copy 未返回可用的新窗口 ID: ${JSON.stringify(data)}`);
+    }
+    return id;
+  }
+
   /** 删除窗口 */
   async deleteProfile(profileId: number): Promise<boolean> {
     await this.call("profile-delete", { profile_id: profileId });

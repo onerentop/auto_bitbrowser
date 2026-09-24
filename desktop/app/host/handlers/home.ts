@@ -11,16 +11,24 @@ import type { HostHandlerTable } from "../dispatch.ts";
 import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
   HOME_TASK_TYPES,
+  MAX_CREATE_COUNT,
   type HomeBatchResult,
   type HomeBrowserTree,
   type HomeConfig,
   type HomeConfigPatch,
+  type HomeCreateResult,
+  type HomeCreateSpec,
   type HomeGroupListResult,
 } from "../../shared/channels/home.ts";
 import type { TaskApi } from "../task-runner.ts";
 import type { TaskInfo } from "../../shared/ipc.ts";
-import { deleteBrowserById, getBrowserList, openBrowserById } from "../../../src/ixbrowser/window.ts";
+import { deleteBrowserById, getBrowserList, getNextWindowName, openBrowserById } from "../../../src/ixbrowser/window.ts";
 import { getGroupList } from "../../../src/ixbrowser/groups.ts";
+import {
+  createWindowsFromTemplate,
+  resolveNamePrefix,
+  type CreateWindowsDeps,
+} from "../../../src/application/create-windows.ts";
 import { buildBrowserTree, buildGroupOptions, defaultGroupOptions } from "../../../src/application/home-tree.ts";
 
 /** 配置键（对标 home_interface.py:471 / :475） */
@@ -75,6 +83,39 @@ export function parseProfileIds(args: unknown[]): number[] {
     if (!ids.includes(v)) ids.push(v);
   }
   return ids;
+}
+
+/** 校验「根据模板创建窗口」的入参（界面上模板 ID 是文本框，必须是正整数） */
+export function parseCreateSpec(args: unknown[]): HomeCreateSpec {
+  if (args.length !== 1) throw invalid("需要 1 个参数：创建参数对象");
+  const raw = args[0];
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw invalid("创建参数必须是对象");
+  const o = raw as Record<string, unknown>;
+
+  const templateId = o["templateId"];
+  if (typeof templateId !== "number" || !Number.isSafeInteger(templateId) || templateId <= 0) {
+    throw invalid(`模板窗口 ID 必须是正整数: ${String(templateId)}`);
+  }
+
+  const count = o["count"];
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > MAX_CREATE_COUNT) {
+    throw invalid(`创建个数必须是 1-${MAX_CREATE_COUNT} 的整数`);
+  }
+
+  const prefixRaw = o["namePrefix"] ?? "";
+  if (typeof prefixRaw !== "string") throw invalid("窗口前缀必须是字符串");
+  if (prefixRaw.length > 100) throw invalid("窗口前缀过长");
+
+  const groupRaw = o["groupId"];
+  let groupId: number | null = null;
+  if (groupRaw !== undefined && groupRaw !== null) {
+    if (typeof groupRaw !== "number" || !Number.isSafeInteger(groupRaw) || groupRaw < 0) {
+      throw invalid(`分组 ID 必须是非负整数: ${String(groupRaw)}`);
+    }
+    groupId = groupRaw;
+  }
+
+  return { templateId, count, namePrefix: prefixRaw, groupId };
 }
 
 function configString(value: unknown): string {
@@ -207,6 +248,39 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       const ids = parseProfileIds(args);
       return ctx.tasks.start(HOME_TASK_TYPES.delete, `删除 ${ids.length} 个窗口`, (api) =>
         runBrowserBatch(api, ids, "删除", (id, log) => deleteBrowserById({ client: ctx.ix(), log }, id)),
+      );
+    },
+
+    /**
+     * 按模板窗口批量创建窗口（原版 :427 _onCreateClicked 只有 TODO 桩）。
+     *
+     * 模板不存在时**直接拒绝**（不启动任务）——避免任务跑起来才一个个失败。
+     * 名字由 getNextWindowName 按当前窗口列表算，前缀为空时用模板窗口名。
+     */
+    "abb/home/createBrowsers": async (...args: unknown[]): Promise<TaskInfo> => {
+      const spec = parseCreateSpec(args);
+      const template = await ctx.ix().getProfileInfo(spec.templateId);
+      if (!template) throw invalid(`模板窗口不存在: ${spec.templateId}`);
+      const namePrefix = resolveNamePrefix(spec.namePrefix, template.name ?? "");
+
+      return ctx.tasks.start(
+        HOME_TASK_TYPES.create,
+        `按模板创建 ${spec.count} 个窗口`,
+        (api): Promise<HomeCreateResult> =>
+          createWindowsFromTemplate({
+            templateId: spec.templateId,
+            count: spec.count,
+            namePrefix,
+            groupId: spec.groupId,
+            deps: {
+              copy: (templateId, fields) => ctx.ix().copyProfile(templateId, fields),
+              nextName: (prefix) => getNextWindowName({ client: ctx.ix(), log: api.log }, prefix),
+              shouldStop: api.shouldStop,
+              log: api.log,
+              progress: (current) => api.progress(current, spec.count),
+              item: api.item,
+            } satisfies CreateWindowsDeps,
+          }),
       );
     },
   };

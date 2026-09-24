@@ -6,9 +6,15 @@
  * 页面切走不卸载，因此挂载时的自动加载只发生一次（对应 :90-91 的 QTimer.singleShot）。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { App, Button, Space, Tooltip } from "antd";
+import { App, Button, InputNumber, Space, Tooltip } from "antd";
 import { AppstoreAddOutlined, PauseOutlined, PlusOutlined } from "@ant-design/icons";
-import { HOME_TASK_TYPES, type HomeGroupNode, type HomeGroupOption } from "../../../shared/channels/home.ts";
+import {
+  HOME_TASK_TYPES,
+  MAX_CREATE_COUNT,
+  type HomeConfig,
+  type HomeGroupNode,
+  type HomeGroupOption,
+} from "../../../shared/channels/home.ts";
 import { IPC, describeError, invoke } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
@@ -28,6 +34,11 @@ export function HomePage(): ReactElement {
 
   const [tree, setTree] = useState<HomeGroupNode[]>([]);
   const [listLoading, setListLoading] = useState(false);
+
+  // 「创建参数配置」卡片自己持有模板 ID / 前缀的输入状态；这里只保留一份最新值，
+  // 好让创建按钮用**刚输入**的值（不然要点一下别处触发失焦写回，容易读到旧配置）
+  const config = useRef<HomeConfig>({ templateId: "", namePrefix: "" });
+  const [createCount, setCreateCount] = useState(1);
   // 只采纳最近一次刷新的结果（对标 :254-265 清理旧线程）
   const listSeq = useRef(0);
   // 分组刷新同理：连点「刷新」时，先发后到的旧结果不能覆盖新结果
@@ -134,6 +145,40 @@ export function HomePage(): ReactElement {
     });
   };
 
+  /** 按模板窗口创建 N 个窗口（原版 :427 _onCreateClicked 只有 TODO 桩） */
+  const onCreate = (): void => {
+    const templateId = Number.parseInt(config.current.templateId.trim(), 10);
+    if (!Number.isInteger(templateId) || templateId <= 0) {
+      void message.warning("请先在上方填写模板窗口ID");
+      return;
+    }
+    const prefix = config.current.namePrefix.trim();
+    modal.confirm({
+      title: "确认创建",
+      content: (
+        <div style={{ whiteSpace: "pre-line" }}>{`将按模板窗口 ${templateId} 创建 ${createCount} 个窗口。\n命名：${
+          prefix ? `${prefix}_序号` : "按模板窗口名 + 序号"
+        }\n目标分组：${groupId === null ? "沿用模板窗口" : groupId}`}</div>
+      ),
+      okText: "创建",
+      cancelText: "取消",
+      onOk: async () => {
+        logLocal(`开始按模板 ${templateId} 创建 ${createCount} 个窗口...`);
+        try {
+          const info = await invoke(IPC.invoke.homeCreateBrowsers, {
+            templateId,
+            count: createCount,
+            namePrefix: prefix,
+            groupId,
+          });
+          markTaskStarted(info);
+        } catch (e) {
+          void message.error(describeError(e));
+        }
+      },
+    });
+  };
+
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <ConfigCard
@@ -142,17 +187,30 @@ export function HomePage(): ReactElement {
         onGroupChange={setGroupId}
         onRefreshGroups={() => void refreshGroups()}
         groupsLoading={groupsLoading}
+        onValuesChange={(v) => (config.current = v)}
       />
 
-      {/* 对标 :139-161：三个按钮在原版是 TODO 桩，这里保持禁用 */}
-      <Space>
-        <Tooltip title="原版未实现">
+      {/* 对标 :139-161：三个按钮在原版都是 TODO 桩。「根据模板创建窗口」已接上真实实现；
+          「使用默认模板创建」与「停止任务」保持禁用（停止用底部任务坞的按钮） */}
+      <Space wrap>
+        <Tooltip title="按上方「模板窗口ID」创建，名字为「前缀_序号」">
           <span>
-            <Button type="primary" icon={<PlusOutlined />} disabled>
+            <Button type="primary" icon={<PlusOutlined />} disabled={running !== null} onClick={onCreate}>
               根据模板创建窗口
             </Button>
           </span>
         </Tooltip>
+        <Space size={4}>
+          <span>个数</span>
+          <InputNumber
+            min={1}
+            max={MAX_CREATE_COUNT}
+            value={createCount}
+            onChange={(v) => setCreateCount(typeof v === "number" ? v : 1)}
+            disabled={running !== null}
+            style={{ width: 80 }}
+          />
+        </Space>
         <Tooltip title="原版未实现">
           <span>
             <Button icon={<AppstoreAddOutlined />} disabled>
@@ -160,7 +218,7 @@ export function HomePage(): ReactElement {
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title="原版未实现">
+        <Tooltip title="用底部任务坞的「停止」">
           <span>
             <Button icon={<PauseOutlined />} disabled>
               停止任务

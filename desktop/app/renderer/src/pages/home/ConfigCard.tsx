@@ -20,13 +20,26 @@ export interface ConfigCardProps {
   onGroupChange: (id: number) => void;
   onRefreshGroups: () => void;
   groupsLoading: boolean;
+
+  /**
+   * 输入值变化时上报（含首次加载后的值）。
+   * 创建按钮靠它拿到**刚输入**的模板 ID / 前缀：如果只依赖「失焦写回配置」，
+   * 用户在输入框里改完直接点创建（点击会让输入框失焦，写回是异步的）会读到旧值。
+   */
+  onValuesChange?: (values: HomeConfig) => void;
 }
 
 type ConfigField = keyof HomeConfig;
 
+
 export function ConfigCard(props: ConfigCardProps): ReactElement {
   const { message } = App.useApp();
   const [values, setValues] = useState<HomeConfig>({ templateId: "", namePrefix: "" });
+
+  // 每次渲染同步一份最新输入值：加载回填要用「现在」的值判断哪些字段被用户改过，
+  // 直接用 effect 闭包里的 values 会拿到后端就绪那一刻的旧值，把用户刚输入的内容覆盖掉
+  const valuesRef = useRef(values);
+  valuesRef.current = values;
   // 最近一次与后端一致的值：失焦时对比它决定是否写回
   const saved = useRef<HomeConfig>({ templateId: "", namePrefix: "" });
 
@@ -46,10 +59,13 @@ export function ConfigCard(props: ConfigCardProps): ReactElement {
         if (!alive) return;
         loaded.current = true;
         saved.current = cfg;
-        setValues((v) => ({
-          templateId: dirty.current.templateId ? v.templateId : cfg.templateId,
-          namePrefix: dirty.current.namePrefix ? v.namePrefix : cfg.namePrefix,
-        }));
+        const current = valuesRef.current;
+        const next: HomeConfig = {
+          templateId: dirty.current.templateId ? current.templateId : cfg.templateId,
+          namePrefix: dirty.current.namePrefix ? current.namePrefix : cfg.namePrefix,
+        };
+        props.onValuesChange?.(next);
+        setValues(next);
       },
       // 对标 :478-479：加载失败只记录，不打断界面
       (e) => {
@@ -60,7 +76,6 @@ export function ConfigCard(props: ConfigCardProps): ReactElement {
       alive = false;
     };
   }, [hostReady]);
-
   const persist = useCallback(
     async (field: ConfigField) => {
       const value = values[field].trim();
@@ -80,7 +95,9 @@ export function ConfigCard(props: ConfigCardProps): ReactElement {
     value: values[field],
     onChange: (e: { target: { value: string } }) => {
       dirty.current[field] = true;
-      setValues((v) => ({ ...v, [field]: e.target.value }));
+      const next = { ...values, [field]: e.target.value };
+      props.onValuesChange?.(next);
+      setValues(next);
     },
     onBlur: () => void persist(field),
   });

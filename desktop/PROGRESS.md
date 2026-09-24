@@ -97,7 +97,7 @@ node scripts/verify-prompts.mjs "$env:PI_SCRATCH_DIR\ops_spec.json"
 ```powershell
 cd desktop
 pnpm typecheck          # tsc strict 零错误
-pnpm test               # 521/521 通过
+pnpm test               # 534/534 通过
 pnpm typecheck:app      # Electron 骨架两套 tsconfig 零错误
 pnpm verify:prompts "$env:PI_SCRATCH_DIR\ops_spec.json"
                         # 覆盖率 94.7%：12 条（6 modify_2sv + 6 kick_devices）改写提示词已登记「有意不比对」，
@@ -571,6 +571,38 @@ Get a verification code from the Google Authenticator app」，而 `LoginOperati
 > 注：本次提交的 `desktop/src/engine/operations/login.ts` 里同时包含**登录轮此前未提交**的 TS 移植内容
 > （HEAD 版是 327 行的旧实现，工作区是重写后的版本），提交信息里已写明这一点。
 
+### 从模板创建窗口（F3，2026-09-24）
+
+首页「根据模板创建窗口」：选模板窗口 → 建 N 个 → 名字为「前缀_序号」→ 归入目标分组。
+原版这两个按钮是 TODO 桩（`gui/home_interface.py:427/:436`），但 `services/ix_window.py:442` 里
+早已实现「复制窗口」这个动作，本次把它补成可用的批量任务。
+
+| 文件 | 作用 |
+|---|---|
+| `src/ixbrowser/client.ts` | `copyProfile()`——官方「复制窗口」（action `profile-copy`） |
+| `src/application/create-windows.ts` | 批量编排 + 前缀回落（空前缀用模板窗口名） |
+| `app/shared/channels/home.ts` | 通道 `abb/home/createBrowsers`、任务类型 `home_create_browsers`、`MAX_CREATE_COUNT = 20` |
+| `app/host/handlers/home.ts` | 入参校验 + 模板存在性检查 + 后台任务 |
+| `app/renderer/.../HomePage.tsx`、`home/ConfigCard.tsx` | 按钮接实现 + 个数输入 + 确认框；配置卡片新增 `onValuesChange` 上报（按钮要拿到**刚输入**的模板 ID） |
+
+关键取舍：
+
+- **用官方 `profile-copy` 而不是手工映射字段再 `profile-create`**：服务端自己知道一次复制要带哪些东西；
+  手工映射漏掉的字段会**静默**变成默认值，产出「看着像模板、其实不一样」的窗口。我们只决定名字与分组。
+- **命名**：`{前缀}_{序号}`，序号每建一个都按当前窗口列表重算（同前缀最大序号 + 1），
+  因此不会撞名、中断后再跑能接着编号；前缀为空用模板窗口名。
+- 模板不存在**直接拒绝**（不启动任务）；一次最多 20 个；界面上有确认框（这是真实副作用）。
+
+真机暴露并修掉的缺陷：**`profile-copy` 的 `data` 是裸数字**（`{"data":835}`），
+而 `profile-create` 是 `{"data":{"profile_id":N}}`。TS 版只按对象解包 → 新窗口 ID 变成 `undefined`
+且被 `JSON.stringify` 静默丢掉，任务报成功但拿不到 ID（后续删除无从下手，测试窗口留在库里）。
+修法：两种形状都认，认不出来就抛错。真机第二轮：创建 → 12 项配置与模板逐字段一致 →
+列表可见 → 删除 → 窗口 id 集合与创建前完全相同、无残留。
+详见 `.trellis/tasks/09-24-create-windows-real-run/real-run-log.md`。
+
+未覆盖：没有真的打开克隆出的窗口（只核对配置与列表可见性）；一次建多个未真机（单测覆盖）；
+GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩按钮仍禁用。
+
 ### Electron 骨架的架构约定与审查修正
 
 - **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
@@ -619,6 +651,10 @@ pnpm verify:selectors
      并写回 `login_status` / `last_error`；真机（窗口 7）真实邮箱 → `ok`、不匹配邮箱 → `need_login`，
      只读审计证明没有调用任何写操作。顺带修掉登录卡在「选择验证方式」页的既存缺陷（验证码一直没被填），
      详见 `.trellis/tasks/09-24-health-check-real-run/real-run-log.md`
+   - **从模板创建窗口（F3）**：首页「根据模板创建窗口」接上真实实现（官方 `profile-copy` + 「前缀_序号」命名 +
+     目标分组，界面带个数输入与确认框）；真机创建 → 12 项配置与模板一致 → 列表可见 → 删除 → 窗口列表恢复原状。
+     真机暴露并修掉「新窗口 ID 丢失」（`profile-copy` 的 `data` 是裸数字，不是 `{profile_id:N}`），
+     详见 `.trellis/tasks/09-24-create-windows-real-run/real-run-log.md`
 
 ## 六、Python 侧现状（勿动）
 
