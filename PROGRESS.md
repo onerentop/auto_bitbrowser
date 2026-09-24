@@ -2,7 +2,7 @@
 
 > 最后更新：2026-09-24 ｜ 分支 `dev_ai`
 
-> **当前架构与协作准则以 `CLAUDE.md` 为准。** 本文件只记录：关键决策与坑、各功能的真机验证记录、下一步。
+> **架构以根目录 `ARCHITECTURE.md` 为准，AI 协作准则见 `CLAUDE.md`。** 本文件只记录：关键决策与坑、各功能的真机验证记录、下一步。
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -11,7 +11,7 @@
 把下面这段直接粘给新会话：
 
 ```
-读 CLAUDE.md 与 PROGRESS.md 恢复上下文。
+读 ARCHITECTURE.md、CLAUDE.md 与 PROGRESS.md 恢复上下文。
 
 这是 Electron + TypeScript 的 ixBrowser 自动化工具（Google 账号批量管理），代码在仓库根（`app/` + `src/`）。
 当前状态：业务后端与全部界面已完成，真实账号逐项验证进行中。
@@ -29,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 548/548 通过
+pnpm test              # 应 549/549 通过
 pnpm run typecheck:app # 应无输出
 ```
 
@@ -39,11 +39,12 @@ pnpm run typecheck:app # 应无输出
 
 | 位置 | 内容 |
 |---|---|
-| `CLAUDE.md` | 项目架构、通道约定、协作准则（**权威指引**） |
+| `ARCHITECTURE.md` | 架构规范：进程职责、依赖规则、IPC、数据与配置、门禁（**权威依据**） |
+| `CLAUDE.md` | AI 协作准则、目录速查、易踩的坑 |
 | `PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `src/` | 业务库（不依赖 Electron，可单独单测） |
 | `app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `test/` | 单测（548 个，含 `app-*.test.mjs`） |
+| `test/` | 单测（549 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -63,7 +64,7 @@ pnpm run typecheck:app # 应无输出
 
 ```powershell
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 548/548 通过
+pnpm test               # 549/549 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 ```
 

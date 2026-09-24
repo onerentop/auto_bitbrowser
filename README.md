@@ -63,8 +63,10 @@ pnpm run dev
 pnpm run typecheck       # 类型检查
 pnpm test                # 单元测试
 pnpm run typecheck:app   # Electron 骨架（主进程 + 渲染层）类型检查
-pnpm run build:app       # 打包
+pnpm run build:app       # 构建到 out/（本项目没有打包配置）
 ```
+
+架构与分层规范见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
 
 ## ⚙️ 配置说明 (Configuration)
 
@@ -95,7 +97,7 @@ pnpm run build:app       # 打包
 * **accounts.db**: SQLite 数据库（账号、代理、任务历史的唯一存储）。
 * **config.json**: 配置（敏感字段加密；已被 `.gitignore` 忽略，不要提交）。
 * **已修改密钥.txt**: 「修改验证器」写入的新密钥备份。
-* **failed_tasks.json**: 失败任务队列（用于断点重试）。
+* **failed_tasks.json**: 旧版失败任务队列的遗留文件，当前版本不再读写（可删除）。
 
 > 窗口**备注（note）字段由用户自己维护**，所有自动化任务都不会读写它。
 

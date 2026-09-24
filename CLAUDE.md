@@ -8,6 +8,7 @@
 
 | Date | Changes |
 | ---- | --------- |
+| 2026-09-24 | **架构规范化**：新增根目录 `ARCHITECTURE.md` 作为架构唯一权威依据（进程职责与安全基线、依赖规则、各层职责、IPC、数据与配置、引擎、测试与门禁、当前偏差）；本文件的架构章节改为摘要 + 链接 |
 | 2026-09-24 | **清理无用代码**：删除 17 个产品里没有任何入口的源文件（迁移期对拍 / 切片探针脚本、`operations/index.ts` 汇总导出、无调用方的 Playwright 选择器版替换流程、账号文本解析与导入导出仓储、邮箱验证码读取、辅助邮箱池）及对应 16 个单测；删除迁移期报告 `POC_REPORT.md` / `ENGINE_SLICE_REPORT.md`；`PROGRESS.md` 删去移植期历史章节 |
 | 2026-09-24 | **移除 Python 侧**：`core/` `services/` `automation/` `application/` `gui/` `web_admin/` `tests/`、`main.py`、`pytest.ini`、`requirements*.txt`、`.venv/`、`dist/` 全部删除；随之删掉 `verify:prompts` / `verify:selectors` 两个以 Python 源码为基准的校验脚本；本文件重写为桌面端（Electron + TypeScript）架构 |
 | 2026-09-24 | 桌面端承接全部功能：窗口管理、账号管理（批量登录 / 绑定 / 健康巡检）、6 个 AI 批量任务、导入 TOTP、设置与任务历史 |
@@ -52,7 +53,7 @@ pnpm run dev                        # 启动应用（需 ixBrowser 已运行在 
 pnpm run typecheck                  # 业务库类型检查
 pnpm run typecheck:app              # 主进程 + 渲染层类型检查
 pnpm test                           # 单元测试（node:test）
-pnpm run build:app                  # 打包
+pnpm run build:app                  # 构建到 out/（本项目没有打包配置）
 ```
 
 真机诊断（需 ixBrowser 已启动）：
@@ -64,70 +65,15 @@ pnpm run probe:db                   # 数据库探针
 
 ---
 
-## 架构总览
+## 架构
 
-```mermaid
-graph TB
-    subgraph R["app/renderer/ — React 界面"]
-        PAGES["pages/ — 首页 / 账号管理 / AI 任务 ×6 / 导入TOTP / 设置 / 状态"]
-        STORES["stores/ — 后端状态、任务坞"]
-    end
+**完整规范见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)**（唯一权威依据；本节只是速记）。
 
-    subgraph M["app/main/ — Electron 主进程（薄壳）"]
-        WIN["window.ts / navigation.ts"]
-        HOSTC["host/host-client.ts — 后端生命周期"]
-        IPC["ipc/registrar.ts — 来源校验"]
-    end
-
-    subgraph H["app/host/ — 业务后端（utilityProcess）"]
-        DISP["dispatch.ts — 通道分发"]
-        TR["task-runner.ts — 任务坞（进度 / 停止 / 逐条目）"]
-        HANDLERS["handlers/ — 各通道处理逻辑"]
-    end
-
-    subgraph LIB["src/ — 业务库（不依赖 Electron）"]
-        ENG["engine/ — StagehandGoogleEngine + operations/"]
-        AUTO["automation/ — auto-* 业务流程"]
-        APP["application/ — 用例编排"]
-        DB["db/ — SQLite + repository"]
-        IX["ixbrowser/ — ixBrowser 客户端"]
-        CORE["core/ — 配置 / 重试 / 随机密码"]
-    end
-
-    IXB[("ixBrowser :53200")]
-    LLM[("OpenAI / Anthropic / Gemini")]
-    SQL[("accounts.db")]
-
-    PAGES --> STORES -->|IPC| WIN
-    WIN --> IPC --> HOSTC
-    HOSTC -->|postMessage| DISP
-    DISP --> HANDLERS --> TR
-    HANDLERS --> APP --> AUTO --> ENG
-    APP --> DB --> SQL
-    ENG -.CDP.-> IX --> IXB
-    ENG --> LLM
-```
-
-### 分层约定
-
-```text
-app/renderer/  ──IPC──▶  app/main/  ──▶  app/host/handlers/  ──▶  src/application/  ──▶  src/automation/  ──▶  src/engine/
-                                                                        │
-                                                                        └──▶  src/db/ · src/ixbrowser/ · src/core/
-```
-
-- **主进程是薄壳**：不 import `src/` 任何模块（`pnpm run build:app` 后 `out/main/index.js` 里不应出现
-  IxBrowserClient / stagehand / playwright）。
-- **业务后端跑在 `utilityProcess`**：崩溃只影响后端，窗口不受影响。
-- **界面不直连底层**：一律经 `app/shared/channels/` 定义的通道 → `app/host/handlers/`。
-- **`src/` 不依赖 Electron**：因此可以用 `node --test` 直接单测。
-
-### 通道与 IPC 约定
-
-- 通道名形如 `abb/<域>/<动作>`，**第二段必须小写**（否则渲染层订阅收不到，F4 踩过）。
-- 信封：`{ok, data} | {ok:false, error:{code,message}}`；错误码
-  `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`。
-- 通道定义在 `app/shared/channels/*.ts`，**主进程 / 后端 / 渲染层共用同一份**。
+- 进程：`app/main`（主进程，只转发）→ `app/host`（业务后端，跑在 `utilityProcess`）→ `src/`（业务库，不依赖 Electron）；界面 `app/renderer` 只经 IPC 与后端通信。
+- `app/shared` 是三端共用的**共享内核**：IPC 契约（`channels/`）与两端共用的纯函数（`logic/`），不依赖任何其它目录。
+- 依赖只能向内：`application → automation → engine`，旁路 `db` / `ixbrowser` / `services` / `core`；逐条规则与规则名见 `ARCHITECTURE.md` §3。
+- 通道名 `abb/<域>/<动作>`，**第二段必须小写**；信封 `{ok, data} | {ok:false, error:{code,message}}`（`ARCHITECTURE.md` §5）。
+- 现有代码与规范不符之处登记在 `ARCHITECTURE.md` §9「当前偏差」，改动涉及其中条目时顺手核对。
 
 ---
 
@@ -168,6 +114,7 @@ auto_bitbrowser2/
 ├── data/config.example.json          # 配置模板
 ├── accounts.db                       # 运行时数据（gitignore）
 ├── config.json                       # 配置，敏感字段加密（gitignore）
+├── ARCHITECTURE.md                   # 架构规范（唯一权威依据）
 ├── CLAUDE.md  README.md  LICENSE
 └── .trellis/  .pi/                   # AI 协作工具目录（gitignore）
 ```
@@ -196,8 +143,9 @@ auto_bitbrowser2/
 ## 数据与文件
 
 - **数据库优先**：账号状态改动走 `src/db/` 的 repository，不要直接写文本文件。
-- **运行时数据**（`accounts.db` / `config.json` / `已修改密钥.txt` / `failed_tasks.json`）都在数据根目录，
-  开发时是仓库根目录；均已在 `.gitignore` 中，**不要提交**。
+- **运行时数据**（`accounts.db` / `config.json` / `已修改密钥.txt`）都在数据根目录（见 `ARCHITECTURE.md` §6），
+  开发时是仓库根目录；均已在 `.gitignore` 中，**不要提交**。`failed_tasks.json` 是旧版失败任务队列的遗留文件，
+  当前没有代码读写它（见 `ARCHITECTURE.md` §9 D4）。
 - 工作目录里的 `accounts.db`、`已修改密钥.txt` 是**明文真实数据**，不要外泄到日志或输出。
 
 ### ⚠️ 窗口备注（note）字段的约定
@@ -215,7 +163,7 @@ auto_bitbrowser2/
 
 ```powershell
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
-pnpm test                   # 全量单测（当前基线 548 通过 / 0 失败）
+pnpm test                   # 全量单测（当前基线 549 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
 ```
@@ -231,13 +179,13 @@ pnpm run build:app          # 构建
 
 ## AI 协作准则
 
-1. **遵循分层**：renderer → main(IPC) → host/handlers → application → automation/engine，不要跨层直连。
+1. **遵循分层**：依赖方向与逐条规则见 `ARCHITECTURE.md` §3；renderer → main(IPC) → host/handlers → application → automation/engine，不要跨层直连。
 2. **新增通道**走 `app/shared/channels/`，动作名第二段小写；handler 里不要塞业务逻辑，放 `src/application/`。
 3. **数据访问**写 `src/db/` 的 repository，不要绕过它直接写 SQL 或写文本文件。
 4. **配置读写**一律经 `src/core/config-manager.ts`（敏感字段依赖它的加解密）。
 5. **易失败操作**用 `src/core/retry-helper.ts`。
 6. **不要碰窗口备注**（见上文约定）。
-7. **改动后必须跑门禁**：`typecheck` + `pnpm test` + `typecheck:app`，三者全绿再提交。
+7. **改动后必须跑门禁**：见上文「测试与门禁」（`typecheck` + `typecheck:app` + `pnpm test` + `build:app`），全部通过再提交。
 8. **真机验证的规矩**（本项目一直在用）：
    - 先只读探针确认真实页面形态，再写代码；
    - **先红后绿**：先写能复现缺陷的测试，再修；
