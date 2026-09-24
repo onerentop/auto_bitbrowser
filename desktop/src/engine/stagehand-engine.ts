@@ -2,7 +2,7 @@
  * StagehandGoogleEngine
  *
  * 管道层：CDP 接管 ixBrowser 窗口 + navigate / act / extract / observe 四原语。
- * 已由 ENGINE_SLICE_REPORT.md 的真机切片验证通过。
+ * 已在 ixBrowser 真机切片中验证通过。
  *
  * 两个必须遵守的约束（切片实测得出）：
  *   1. Stagehand 必须锁 3.7.3 —— 4.x 依赖 Extensions.* CDP 域，ixBrowser 不支持
