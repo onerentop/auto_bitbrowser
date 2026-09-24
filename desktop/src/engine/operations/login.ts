@@ -227,15 +227,22 @@ export class LoginOperation {
       await this.engine.bringToFront();
       let stage = await this.waitForStage(["unknown"], 15_000);
 
-      // 3. 账号选择页：点「使用其他账号」回到邮箱输入
-      if (stage === "chooser") {
-        log("检测到账号选择页，点击「使用其他账号」");
-        await this.engine.act("点击使用其他账号或添加其他账号");
-        stage = await this.waitForStage(["chooser", "unknown"], 15_000);
-      }
+      /**
+       * 3+4. 账号选择页 → 邮箱输入。
+       *
+       * 真机（2026-09-24）：**登出之后再登录**，Google 会先把人送到账号选择页（列表里那个账号显示
+       * 「已退出」）；提交一次邮箱后还可能**又被送回**选择页。原实现只在一开始处理 chooser，
+       * 提交邮箱后再落到 chooser 就被后面的 myaccount 验证判成含糊的「登录验证失败」。
+       * 这里最多走两轮：落到 chooser 就点「使用其他账号」，再重走邮箱输入。
+       */
+      for (let round = 1; round <= 2; round++) {
+        if (stage === "chooser") {
+          log(`检测到账号选择页（第 ${round} 轮），点击「使用其他账号」`);
+          await this.engine.act("点击使用其他账号或添加其他账号");
+          stage = await this.waitForStage(["chooser", "unknown"], 15_000);
+        }
+        if (stage !== "email") break;
 
-      // 4. 邮箱
-      if (stage === "email") {
         log(`输入邮箱: ${email}`);
         if (!(await this.fillFirst(LoginSelectors.EMAIL, email))) {
           const r = await this.engine.act(`在邮箱或电话号码输入框中输入: ${email}`);
@@ -244,9 +251,15 @@ export class LoginOperation {
         await this.engine.wait(Timeouts.AFTER_INPUT);
         log("提交邮箱");
         stage = await this.submitAndWait(LoginSelectors.EMAIL_NEXT, "点击下一步按钮", ["email", "unknown"], 20_000);
-        if (stage === "email") return fail("logged_out", "email_submit_failed", "提交邮箱后页面没有跳转");
+        if (stage !== "chooser") break;
+        log("提交邮箱后又被送回账号选择页，重试一次");
       }
+      if (stage === "email") return fail("logged_out", "email_submit_failed", "提交邮箱后页面没有跳转");
 
+      // 重试一轮后仍停在账号选择页：给明确结论，不要落到 myaccount 验证去报含糊的失败
+      if (stage === "chooser") {
+        return fail("logged_out", "chooser_stuck", "账号选择页没有放行（重试一次后仍停在选择页）");
+      }
       const blocked = this.blockedResult(stage, totpSecret, fail);
       if (blocked) return blocked;
 

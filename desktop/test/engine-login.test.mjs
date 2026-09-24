@@ -132,6 +132,8 @@ class FakeGoogle {
       accountExists: true,
       secondFactor: "totp",
       captchaAt: null,
+      /** 真机（2026-09-24）：登出后再登录，提交第一次邮箱会被送回账号选择页 */
+      chooserAfterEmail: false,
       signinPage: "email",
       afterTotp: "myaccount",
       fillWorks: true,
@@ -156,6 +158,7 @@ class FakeGoogle {
     this.navs = [];
     this.submits = [];
     this.textClicks = [];
+    this.chooserUsed = false;
     this.fronted = 0;
   }
   get def() {
@@ -269,6 +272,11 @@ class FakeGoogle {
   }
 
   submitEmail() {
+    // 真机形态：登出后第一次提交邮箱会被送回账号选择页（chooserAlways 用于模拟「一直不放行」）
+    if (this.opts.chooserAfterEmail && (this.opts.chooserAlways || !this.chooserUsed)) {
+      this.chooserUsed = true;
+      return this.go("chooser");
+    }
     if (this.opts.captchaAt === "email") return this.go("captcha");
     if (!this.opts.accountExists) {
       this.error = "Couldn’t find your Google Account";
@@ -599,4 +607,26 @@ test("失败：验证器验证码被拒绝", async () => {
   assert.equal(result.success, false);
   assert.equal(result.error_type, "totp_failed");
   assert.match(result.error, /被拒绝/);
+});
+
+test("真机回归：登出后提交邮箱被送回账号选择页时，点「使用其他账号」重试并登录成功", async () => {
+  // 真机（2026-09-24）：登出后 Google 会把账号放进选择页（显示「已退出」），
+  // 第一次提交邮箱又被送回这一页；原实现会走到 myaccount 验证然后报含糊的「登录验证失败」。
+  const g = new FakeGoogle({ chooserAfterEmail: true });
+  const { result, logs } = await run(g);
+
+  assert.equal(result.success, true);
+  assert.equal(result.login_state, "logged_in");
+  assert.ok(logs.some((m) => m.includes("检测到账号选择页")), `应处理过账号选择页，实际日志=${JSON.stringify(logs)}`);
+  assert.ok(logs.some((m) => m.includes("又被送回账号选择页")));
+  assert.equal(g.values['input[name="Passwd"]'], PASSWORD);
+});
+
+test("回归：账号选择页始终不放行时，给明确结论（不再报含糊的「登录验证失败」）", async () => {
+  // 一直被送回选择页（第二次也不放行）：最多重试一轮，然后明确报出来
+  const g = new FakeGoogle({ chooserAfterEmail: true });
+  g.opts.chooserAlways = true;
+  const { result } = await run(g);
+  assert.equal(result.success, false);
+  assert.match(result.error, /账号选择页没有放行/);
 });
