@@ -1,12 +1,8 @@
-# Node/TypeScript 重写进度
+# 开发进度与真机验证记录
 
 > 最后更新：2026-09-24 ｜ 分支 `dev_ai`
 
-> **Python 侧已于 2026-09-24 整体移除**：`core/` `services/` `automation/` `application/` `gui/`
-> `web_admin/` `tests/`、`main.py`、`pytest.ini`、`requirements*.txt`、`.venv/`、`dist/`，
-> 以及以 Python 源码为基准的 `verify:prompts` / `verify:selectors` 两个校验脚本都已删除。
-> 本文件下方历史章节里凡出现「Python / 对标 xxx.py」字样的，都是移植期的工程记录。
-> **当前架构与协作准则以 `CLAUDE.md` 为准。**
+> **当前架构与协作准则以 `CLAUDE.md` 为准。** 本文件只记录：关键决策与坑、各功能的真机验证记录、下一步。
 
 ## 零、接续开发指引（清空上下文后先读这里）
 
@@ -21,7 +17,7 @@
 当前状态：业务后端与全部界面已完成，真实账号逐项验证进行中。
 
 注意事项：
-- Stagehand 必须锁 3.7.3，不可升级（原因见第三章）
+- Stagehand 必须锁 3.7.3，不可升级（原因见第二章）
 - 窗口备注（note）字段由用户自己维护，自动化任务一律不读写它
 - 引擎判定必须锚定真实页面文本 / DOM / URL，不要相信 act() 的成功返回
 - 改动后必须跑：npm run typecheck + npm test + npm run typecheck:app
@@ -33,7 +29,7 @@
 cd D:\workspace\projects\auto_bitbrowser2\desktop
 pnpm install           # 若 node_modules 丢失
 pnpm run typecheck     # 应无输出
-pnpm test              # 应 563/563 通过
+pnpm test              # 应 547/547 通过
 pnpm run typecheck:app # 应无输出
 ```
 
@@ -47,7 +43,7 @@ pnpm run typecheck:app # 应无输出
 | `desktop/PROGRESS.md` | 本文件 —— 进度、决策、真机验证记录 |
 | `desktop/src/` | 业务库（不依赖 Electron，可单独单测） |
 | `desktop/app/` | Electron：`main/`（薄壳）、`host/`（后端）、`renderer/`（React）、`shared/` |
-| `desktop/test/` | 单测（563 个，含 `app-*.test.mjs`） |
+| `desktop/test/` | 单测（547 个，含 `app-*.test.mjs`） |
 | `.trellis/tasks/*/real-run-log.md` | 各项功能的真机验证记录（含证据日志） |
 
 ---
@@ -68,177 +64,11 @@ pnpm run typecheck:app # 应无输出
 ```powershell
 cd desktop
 pnpm run typecheck      # tsc strict 零错误
-pnpm test               # 563/563 通过
+pnpm test               # 547/547 通过
 pnpm run typecheck:app  # 主进程 + 渲染层两套 tsconfig 零错误
 ```
-## 二、已完成部分
 
-### 1. services 层（全部）
-
-| 模块 | 说明 |
-|---|---|
-| `ixbrowser/client.ts` | ixBrowser HTTP 协议，含 CDP 端点获取 |
-| `db/connection.ts` | 用 Node 内置 `node:sqlite`（免原生编译、免 electron-rebuild） |
-| `db/*-repository.ts` × 5 | 账号 / 代理 / 历史 / 邮箱池 / IO（刷新任务仓储已随会员刷新删除） |
-| `core/data-parser.ts` | 账号行解析（URL 提取 + 多分隔符探测） |
-| `services/email-code-reader.ts` | Gmail 验证码（提取逻辑为纯函数） |
-| `services/proxy-allocator.ts` / `data-store.ts` | 代理分配与缓存 |
-| `services/recovery-email-manager.ts` | 辅助邮箱池策略 |
-
-**对拍验证**：综合查询 8008 个字段与 Python 逐字段零差异。
-
-### 2. engine 层（Stagehand，全部）
-
-| 模块 | 说明 |
-|---|---|
-| `stagehand-engine.ts` | CDP 接管 + 四原语 + 12 个 operation 门面 |
-| `constants.ts` | 35 URL / 12 超时 / 41 组关键词（**脚本自动生成**） |
-| `types.ts` | 5 枚举 + 18 结果类型 + 工厂函数（自动生成） |
-| `totp.ts` | RFC 6238 自研实现 |
-| `playwright-compat.ts` | 把 V3 Page 适配成 Playwright 接口 |
-| `operations/*.ts` × 12 | 全部 operation |
-
-**提示词一致性**：92/92 与 Python 逐字一致。
-
-### 3. browseruse 层 —— 🗑️ 已删除
-
-曾完整移植 `core/browseruse_engine/`（26 文件 / 5713 行），只服务于 Pro 检测、会员刷新与家庭组加入。
-这些功能按用户要求删除后已无调用方，整个 `src/browseruse/` 连同测试一并删除（见第 8 节）。
-
-### 4. automation 层（12/15）
-
-| 文件 | 状态 |
-|---|---|
-| `shared.ts` | ✅ 共享样板 |
-| `auto-google-login.ts` | ✅ |
-| `auto-kick-devices.ts` | ✅ |
-| `auto-modify-2sv-phone.ts` | ✅ |
-| `auto-modify-authenticator.ts` | ✅（含密钥三处保存） |
-| `auto-replace-recovery-email.ts` / `-phone.ts` | ✅ |
-| `auto-enable-family-sharing.ts` / `auto-unlock-403.ts` / `auto-antigravity-oauth.ts` / `pro-status-detector.ts` | 🗑️ 已删除（用户要求） |
-| `auto-replace-email.ts` / `auto-replace-phone.ts` | ✅（Playwright 选择器直连） |
-| `auto-join-family.ts` | ❌ 用户确认不需要，不移植 |
-| `batch/types.ts` | ✅ 只剩 `BatchResult` |
-| `batch/pro-detection.ts` / `batch/membership-detect.ts` | 🗑️ 已删除（用户要求） |
-| `batch-account-processor.ts` | ✅ 只保留 `batchLogin`（其余五个 batch_* 入口已删除） |
-
-### 5. core 层（本轮新增）
-
-| 文件 | 说明 |
-|---|---|
-| `config-manager.ts` | 对标 `core/config_manager.py`；敏感字段加解密与 Python **字节级互通**（18 组对拍） |
-| `retry-helper.ts` | 对标 `core/retry_helper.py`；`execute_sync` 未移植（Node 无同步阻塞） |
-| `semaphore.ts` | `asyncio.Semaphore` / `gather(return_exceptions=True)` 的 Node 等价物 |
-| `data-parser.ts` | 账号行解析（早先已完成） |
-
-### 6. Electron 骨架（本轮新增，`desktop/app/`）
-
-对标 PI-Desktop：薄壳主进程 + `utilityProcess` 后端进程 + 单表 IPC。不含业务页面。
-
-| 目录 | 说明 |
-|---|---|
-| `app/shared/` | `ipc.ts` 通道表（`abb/领域/动作`）+ 白名单 + `InvokeMap` 类型；`envelope.ts` 信封与 `wrap()`。纯 TS |
-| `app/main/` | 生命周期、单实例、窗口安全选项、导航守卫、IPC 注册器、后端路由、`host-client`（请求 id 配对 / 30s 超时 / 崩溃检测 / 串行生命周期） |
-| `app/host/` | 后端进程入口（`parentPort` 收发）+ 纯函数分发表；`handlers/health.ts` 实现 `host/ping`、`ixbrowser/ping` |
-| `app/preload/` | `contextBridge` 暴露 `window.abb`，invoke/event 通道分别校验白名单；打包为 `.cjs`（开 sandbox 必需） |
-| `app/renderer/` | React 19 + antd 5 状态页：版本、后端状态（订阅事件）+ Ping / 重启、ixBrowser 可达性 |
-
-运行：
-```powershell
-cd desktop
-pnpm dev            # 开发（HMR）
-pnpm build:app      # 产出 out/main/{index,host}.js、out/preload/index.cjs、out/renderer/index.html
-pnpm preview:app    # 以生产产物启动
-pnpm typecheck:app  # tsconfig.node.json + tsconfig.web.json
-```
-
-实机验证（Electron 44.4.5 / Chrome 152 / Node 24.21）：窗口「ixBrowser 窗口管理工具」打开，后端 `starting → ready`，
-ping 往返 2–9 ms，ixBrowser 已连接；「重启后端」得 `stopped → starting → ready` 且 PID 更换；关窗后无残留 electron 进程。
-
-### 7. 业务页面（第一批完成，计划见 `.pi/plan/第一批业务页面-*.md`）
-
-**阶段 0 后端基建 ✅**
-
-| 文件 | 说明 |
-|---|---|
-| `src/db/schema.ts` | `init_db` 逐字移植（5 表 + 22 列迁移）；与 Python 在临时库上对拍 `sqlite_master` **8/8 一致**。差异：只吞「列已存在」错误，其它错误照常抛 |
-| `app/main/data-root.ts` | 数据根目录：`ABB_DATA_ROOT` > 打包时 exe 目录 > 开发时仓库根；经 env 传给后端进程 |
-| `app/host/context.ts` | 后端单例容器，DB / 配置**惰性**打开（首次访问执行 `initDb`） |
-| `app/host/task-runner.ts` | 全局单任务互斥（`TASK_BUSY`）、协作式停止钩子、日志→进度解析照搬 orchestrator.py:417-424 |
-| `app/shared/ipc.ts` | 路由改为「`LOCAL_CHANNELS` 之外全部转后端」；新增 `task/getCurrent`、`task/stop` 与三个任务事件 |
-| 渲染层 | 左导航外壳（首页 / 账号管理 / 设置 / 运行状态）、底部 `TaskDock`（进度 + 停止 + 日志抽屉 + 结果弹窗）、深浅色主题 store |
-
-**阶段 1-3 页面 ✅**（三页由子代理并行实现，之后各做一轮只读审查并修复）
-
-| 页面 | 通道（`abb/<领域>/*`） | 后台任务 |
-|---|---|---|
-| 设置（配置 / 代理 / 账号数据） | `settings/load·save·setDataDir·getTheme·testAi`、`proxies*`（增删改查、导入、绑定详情、解绑）、`accounts*`（增改查、导入） | `settings_delete_accounts`（逐个找窗口→删窗口→删账号） |
-| 首页（ixBrowser 窗口管理） | `home/getConfig·saveConfig·listGroups·listBrowsers` | `home_open_browsers`、`home_delete_browsers` |
-| 账号管理 | `accounts/list·getDefaults·precheck·start·bindCandidates·bind·unbind·deleteOne` | `login` `batch_bind` `batch_delete`（OAuth / Pro / 家庭组 / 共享 / 403 已删除） |
-
-新增后端模块：`src/application/{settings-service,settings-data,test-ai-connection,home-tree,account-manager-service,account-task-orchestrator}.ts`、`src/ixbrowser/{window,groups}.ts`、`src/engine/stagehand-config.ts`。
-
-**与 Python 的有意偏差**（代码里均有注释）：
-- 首页「打开 / 删除选中」接上真实实现（原版 TODO 桩）；「创建窗口」「停止任务」保持禁用
-- 账号管理「绑定窗口」改为下拉选择未被占用的窗口（原版总是绑第一个）
-- 删除 / 登录等所有批量操作的窗口 ID **以数据库为准**，界面数据过期时跳过并提示刷新，不误删他人窗口
-- 批量绑定：同一窗口一批内只绑第一个匹配账号，执行时再查一次占用；写库返回 false 计为失败
-- 批量删除改为先删账号、成功后再删窗口；非数字窗口 ID 不调用 ixBrowser
-- 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）
-- 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖 Python 同时写入的其它键）；越界数值加载时夹紧（对标 QSpinBox）
-- `data_dir` 用输入框 +「应用」（尚无文件夹对话框通道）；测试 AI 连接 HTTP 超时 25s（避开主进程 30s 转发超时）
-- 代理详情显示 browser_id + 邮箱、解绑用 `unbind_window`（原版读不存在的字段 / 调不存在的方法）；同批导入按 host:port 去重
-- 首页配置失焦即写回（原版关窗时写）；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层
-- Stagehand 模型配置补上 `get_stagehand_config` 的回落链（显式参数 → 配置 → 环境变量 → 默认模型），由后端启动时注册 ConfigManager 来源
-- 页面自动加载等后端首次 ready；任务结束事件可能先于启动返回值到达，store 用已结束 id 集合防止界面卡在「运行中」
-
-**实机验证**（`ABB_DATA_ROOT=scratch`）：运行状态页显示 scratch 路径；首页读取真实 ixBrowser 列表（15 组 / 374 窗口，只读）；设置→账号数据批量导入 2 个测试账号成功，账号管理页列出这 2 个；关窗后无残留 electron 进程。
-
-**第二批页面 ✅**（5 个 AI 批量任务页 + 导入 TOTP）
-
-| 页面 | 通道 | 后台任务 |
-|---|---|---|
-| 替换手机号 / 替换辅助邮箱 / 修改 2SV 手机 / 修改验证器 / 踢出设备（一个通用 `AiTaskPage` 按 `kind` 驱动） | `abb/aitasks/load`（分组→窗口树 + 数据库状态，只读）、`abb/aitasks/start` | `ai_replace_phone` `ai_replace_email` `ai_modify_2sv` `ai_modify_auth` `ai_kick_devices` |
-| 导入 TOTP（QR / 文本） | `abb/totp/parseUris·parseText·match·import` | `import_totp` |
-
-- 新增事件 `abb/task/event/item`（`TaskApi.item()`），对标 Python AI Worker 的 `progress(email, status, message)`，逐行更新「状态 / 消息」列
-- 新增模块：`src/application/{ai-task-runner,totp-import}.ts`、`src/core/totp-extractor/*`（migration protobuf 手写解析，零依赖）；渲染层二维码识别用 `jsqr`（canvas 取像素）
-- **与 Python 对拍**：`test/fixtures/totp-parity-vectors.json` 由 Python 生成（migration 4 组覆盖多账号 / SHA256·512 / 8 位 / HOTP / 中文名 / 未知字段号 / 去填充 base64，标准 URI 6 组），另 6 组异常输入逐条比对，全部一致
-
-**与 Python 的有意偏差**：
-- AI 任务**执行前按 profileId 重新读取窗口名，必须等于 email 才执行**，否则跳过记失败（Python 的 email 就是窗口名，二者天然绑定；这里防止界面数据过期时用 A 的密码操作 B 的窗口）
-- 并发数照搬 Python：界面可调但**串行执行**（Python 5 个 Worker 从不读该值）；`modify_2sv` 照搬 `close_after=True`（任务结束关闭窗口）
-- 停止后「开始」要等任务真正结束才可用（修 Python 基类立即复位的缺陷）；开始前加确认框（原版直接执行，但均为破坏性操作）；Python 从不自动加载，这里也不自动加载
-- `modify_auth` 的「已修改密钥.txt」写到数据根目录
-- TOTP：二维码在渲染层异步识别（Python 在 UI 线程同步识别会卡死）；jsQR 每张图只识别一个码（pyzbar 可多个）；导入支持停止（Python 无）；导入以数据库当前状态重新匹配，库中无该账号记失败；写库返回 false 计失败
-- `generateTotp` 先去掉密钥中的全部空白（真机测试发现：Google 设置页显示的密钥为每 4 位空格分隔的小写形式，pyotp 对此抛 `Non-base32 digit found`，Python 版登录直接失败）
-
-**实机验证**（`ABB_DATA_ROOT=scratch`）：导航顺序 / 文案与 Python 一致，6 个新页面均渲染；AI 页「加载数据」读到真实 ixBrowser 374 个窗口（只读，未点「开始」）；TOTP 文本模式解析 2 条 → 匹配 scratch 库测试账号 → 导入成功（密钥、密码写入，设置→账号数据可见）；关窗无残留。
-
-> ⚠️ **实机验证一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
-> 「运行状态」页会显示当前数据目录，启动后先确认。
-
-### 8. 按用户要求删除的功能（2026-09-23）
-
-只删 desktop，Python 侧保持原样；数据库表结构与 `config.json` 默认配置树不变（与 Python 版共用同一份数据）。
-
-| 删除项 | 界面 | 后端 / 底层 |
-|---|---|---|
-| 批量 OAuth、一键登录+OAuth、单个 OAuth（行内按钮与右键菜单）、「自动绑定代理」 | 账号管理 | `batchOauth` / `batchLoginAndOauth`、`auto-antigravity-oauth.ts`、`engine/operations/oauth.ts`、`services/proxy-smart-allocator.ts` |
-| 检测 Pro、刷新家庭组 | 账号管理 | `batchDetectPro` / `batchRefreshMembershipInfo`、`pro-status-detector.ts`、`batch/{pro-detection,membership-detect}.ts`、`engine/operations/{pro-status,family}.ts`、`db/account-refresh-repository.ts`、登录后的 `detectPro` 钩子 |
-| 开启共享 | 账号管理 | `auto-enable-family-sharing.ts`、`engine/operations/enable-sharing.ts` |
-| 检测 403、批量解锁 403 | 账号管理 | `executeDetect403`、`auto-unlock-403.ts`、`engine/operations/unlock-403.ts`、`services/sms-bus-client.ts` |
-| Sub2API 关联 | 账号管理（Sub2API 列、「已关联」统计） | `services/sub2api-client.ts` |
-| Pro / Sub2API / 解锁状态三列及 10 个相关筛选项 | 账号管理（筛选只剩 全部 / 未登录 / 已登录 / 登录失败） | — |
-| 家庭组加入后端 | （界面早已移除） | `src/browseruse/` 整个目录、`engine/operations/join-family.ts`、`services/invite-lock.ts` |
-
-- 账号管理保留：批量登录 / 单个登录、批量绑定窗口、右键绑定 / 解绑 / 删除、删除选中、删除+窗口
-- 已删除的操作名（`oauth` `detect_pro` `unlock_403` 等）传到 `abb/accounts/precheck|start` 一律返回 `INVALID_ARGUMENT`
-- 表格「操作」列：已登录账号原本显示「OAuth」，现在留空
-- `ConfigManager` 删掉 Sub2API / SMS-Bus / OAuth 超时的专用读写方法；这些键仍在默认配置树里，通用 `get/set` 照常加解密，设置页保存时原样保留
-- `package.json` 里 `playwright-core` 与 `@ai-sdk/*` 已无直接引用，但它们分别是 Stagehand 3.7.3 的 peer / optional 依赖，**暂不移除**（移除前需真机确认 Stagehand 加载 Gemini provider 不受影响）
-
-## 三、关键决策与坑（重要，勿改）
+## 二、关键决策与坑（重要，勿改）
 
 ### 依赖版本必须锁死
 
@@ -253,98 +83,85 @@ Extensions.getExtensions     不支持 ('wasn't found')
 Extensions.loadUnpacked      不支持 (Method not available)
 ```
 
-### 早期引入的依赖
+### 无直接引用、但暂不移除的依赖
 
-| 依赖 | 用途 |
+| 依赖 | 原因 |
 |---|---|
-| `playwright-core` | 原为 BrowserUse 的 CDP 连接（已删除）；现只作为 Stagehand 3.7.3 的 peer 依赖保留 |
-| `ai` + `@ai-sdk/openai` / `@ai-sdk/anthropic` / `@ai-sdk/google` | 原为 BrowserUse LLM 适配层（已删除）；Stagehand 把 `@ai-sdk/*` 列为 optional 依赖，暂保留 |
+| `playwright-core` | Stagehand 3.7.3 的 peer 依赖 |
+| `ai` + `@ai-sdk/openai` / `@ai-sdk/anthropic` / `@ai-sdk/google` | Stagehand 把 `@ai-sdk/*` 列为 optional 依赖；移除前需真机确认 Stagehand 加载 Gemini provider 不受影响 |
 
 ### 自研 TOTP 而非 otplib
 
 otplib 13.x 的导出结构与 12.x 完全不同（`TOTP` 类与 functional API 并存），且该库有跨版本破坏先例。
-TOTP 是标准算法，`totp.ts` 40 行即可对齐 `pyotp`，已对拍 24 组零差异。
+TOTP 是标准算法（RFC 6238），`totp.ts` 约 40 行即可实现，由 `test/engine-totp.test.mjs` 覆盖。
 
-**当时的坑**：第一版误用 `Buffer.from(s, "base64")` 解码 base32，对拍才发现。
+**当时的坑**：第一版误用 `Buffer.from(s, "base64")` 解码 base32，单测才发现。
 
-### Stagehand API 差异（Python 3.5.0 → Node 3.7.3）
+### Stagehand 3.7.3 的 API 要点
 
 - **没有 `sh.page`** —— act/extract/observe 在 V3 顶层，页面对象走 `sh.context.awaitActivePage()`
 - **`model.clientOptions.apiKey` 不生效** —— 必须设 provider 环境变量（`GOOGLE_GENERATIVE_AI_API_KEY`）
 
 ### 行为修正：getPageContent 用 innerText 而非 HTML
 
-关键词检测（Pro 状态、家庭组角色）依赖可见文本做子串匹配。原先用 `page.content()` 返回 HTML
-会导致误命中（`class="upgrade-banner"` 让页面被判为非订阅），且跨标签文本匹配不到。
-已改为 `evaluate("document.body.innerText")`，与 Python 的 `page.inner_text("body")` 语义一致。
+关键词检测依赖可见文本做子串匹配。原先用 `page.content()` 返回 HTML
+会导致误命中（class 名、属性值里的词也会被匹配到），且跨标签文本匹配不到。
+已改为 `evaluate("document.body.innerText")`。
 
-### BrowserUse 移植的取舍（本轮）
+### 判定顺序不可调换
 
-| 决策 | 说明 |
-|---|---|
-| Page 抽象 | 不 import playwright 类型，声明结构化子集 `BrowserPageLike`（字段名对齐 Playwright JS API），真实 Page 可直接赋值，测试用假 Page |
-| CDP 连接 | 抽成 `CdpConnector` 接口，默认实现惰性 `import("playwright-core")` |
-| LLM 调用 | 抽成 `LlmTransport` 接口，默认实现惰性加载 ai-sdk；三家的**消息格式转换是导出的纯函数**，可离线断言 |
-| `create_llm_from_config` | Python 依赖 `ConfigManager`；Node 侧改为注入 `LlmConfigProvider`，传 null 等价 Python 的 ImportError 分支（回退环境变量） |
-| 同步 `invoke()` | 不移植（Python 是 `asyncio.run`，Node 无等价物），只保留 `ainvoke` |
-| `ProDetectEngine` 接口 | `data?: T` 放宽为 `data?: T | null`，让照搬 Python `Optional` 的 BrowserUse 结果类型能被直接接纳；Stagehand 侧不受影响 |
-| 计时 | Python `time.time()*1000` → `Date.now()`，字段名保持 `duration_ms` |
+- `engine/operations/modify-auth.ts` 的 `parseSecret`：先匹配裸 Base32，再匹配带标签形式
 
-### 判定顺序不可调换的三处
+### 界面与任务的行为约定（代码里均有注释）
 
-| 位置 | 约束 |
-|---|---|
-| `engine/operations/unlock-403.ts` | `disabled` 必须排在 `sign in` 之前——封号页面通常也含 "sign in" |
-| `engine/operations/modify-auth.ts` | 密钥解析先匹配裸 Base32，再匹配带标签形式 |
-| `browseruse/types.ts` 的 `ACTION_TYPE_ORDER` | 动作类型检测顺序与 Python `get_action_type()` 的列表一致 |
+- **AI 任务执行前按 profileId 重新读取窗口名，必须等于 email 才执行**，否则跳过记失败——防止界面数据过期时用 A 的密码操作 B 的窗口（`ai-task-runner.ts`）
+- 删除 / 登录等批量操作的窗口 ID **以数据库为准**，与界面行不一致时跳过并提示「数据已变化，请刷新后重试」，不误删他人窗口
+- 批量删除先删账号、成功后再删窗口；`deleteAccount` 返回 false 计失败且不删窗口；非数字窗口 ID 不调用 ixBrowser
+- 批量绑定：同一窗口一批内只绑第一个匹配账号，执行时再查一次占用；写库返回 false 计失败
+- 批量操作两步走：`precheck`（候选筛选 + 确认文案）→ `start`（重新筛选后启动任务）；开始前有确认框
+- AI 任务界面上的并发数只记录不使用，**串行执行**；`modify_2sv` 任务结束关闭窗口；停止后「开始」要等任务真正结束才可用
+- 设置保存：先 `reload()` 再深拷贝、只落盘一次（不覆盖其它键）；越界数值加载时夹紧；启动读主题走只返回 theme 的 `getTheme`，不把密钥传到渲染层
+- 导入 TOTP：二维码在渲染层异步识别（jsQR 每张图只识别一个码）；导入以数据库当前状态重新匹配，库中无该账号记失败
+- `generateTotp` 先去掉密钥中的全部空白：Google 设置页显示的密钥是每 4 位空格分隔的小写形式
+- 「已修改密钥.txt」写到数据根目录；数据根目录：`ABB_DATA_ROOT` > 打包时 exe 目录 > 开发时仓库根
 
-### Playwright 兼容层的一个细节
+> ⚠️ **实机验证界面时一律用 `ABB_DATA_ROOT=<scratch>`**，不要让开发中的界面碰仓库根的真实 `accounts.db` / `config.json`。
+> 「运行状态」页会显示当前数据目录，启动后先确认。
 
-Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisible`（对应 Python 的 `.last`）。
+### Electron 骨架的架构约定与审查修正
 
-### batch 移植的审查修正（3 处严重 + 2 处能力缺口）
+- **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
+- **业务后端跑在 `utilityProcess`**（`out/main/host.js`），崩溃只影响后端，窗口不受影响；目前无自动重启，只有手动「重启后端」
+- 信封 `{ok,data} | {ok:false,error:{code,message}}`；错误码 `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`
+- `ixbrowser/ping` 只走 HTTP，不碰 `node:sqlite`（`node:sqlite` 已确认可在 Electron 主进程与 utilityProcess 中直接使用）
 
-代码审查发现「依赖注入的默认值把 Python 必走分支静默跳过」，已逐条修掉：
-
-| 问题 | 后果 | 修法 |
-|---|---|---|
-| `accountRepo` / `refreshTaskRepo` 默认 null，而 Python 的 `DBManager` 是无条件调用 | `batchLoginAndOauth` 的「按 login_status 筛选」永远筛不出账号 → **阶段 2 永不执行**；「已关联则跳过」失效；Pro 与解锁状态不落库 | 新增 `deps.db` 注入口（给了就自动构造两个仓储）；两者都缺时构造函数打 `⚠️ 未注入` 告警，不再静默 |
-| 三个默认适配器漏传 `accountRepo` | 下游 `auto_*` 的 `login_status` / `sub2api_status` / `unlock_status` 永远不写库 | 改成 `makeDefaultLoginFn(repo)` 等工厂，构造时绑定 |
-| `AccountRepository.updateMembershipInfo` Node 侧缺失 | 会员信息刷新的写库整块被跳过 | 补齐该方法（SQL 与 Python 逐字一致），接口从可选改必需 |
-| `Sub2ApiClient.testAccountConnection` Node 侧缺失 | 403 解锁的「重新检测拿最新 validation_url」整段被跳过，已解锁账号会被推进解锁流程并计入失败 | 补齐该方法及 `parseSseEvents` / `extractValidationUrlFromError`，恢复 Python 的原始控制流 |
-
-> ⚠️ Node 侧**没有** Python 那种 `DBManager` 全局单例（打开哪个库必须由调用方决定），
-> 所以仓储不能在构造函数里默认 `openDb()`。生产路径请注入 `deps.db`。
-
-### 本轮代码审查修掉的 4 处（对照 Python 后修正）
+代码审查后修掉的问题：
 
 | 位置 | 问题 | 修法 |
 |---|---|---|
-| `browseruse/types.ts` 的 `normalizeActionModel` | 只认严格类型，而 Python 的 pydantic 走 **lax 模式**会把 `"3"` 强制成 `3`；更糟的是 `wait.milliseconds="5000"` 会被静默换成默认值 1000 | 补 `coerceNum` / `coerceBool`，字段存在但不可转换时返回 null（等价 ValidationError） |
-| `browseruse/types.ts` 的 `formatActionParams` | 用 `JSON.stringify` 输出 `{"url":"x"}`，与 Python dict repr `{'url': 'x'}` **字节不同**，而这段文本会进 `<agent_history>` 提示词 | 新增 `pythonRepr()` 复刻 dict repr |
-| `browseruse/playwright-cdp.ts` 的 `connect()` | `connectOverCDP` 成功但取页面失败时，browser 句柄没交出去也没关掉 → ixBrowser 窗口被占死 | 取页面包 try/catch，失败就地 `browser.close()` 后 rethrow |
-| `browseruse/engine.ts` 的 `start()` / `withEngine()` | `start()` 被写成「有 page 就不拉浏览器」，而 Python 是**无条件** launch；`withEngine` 又漏了 `__aenter__` 的初始化 | `start()` 改回无条件；新增 `enter()` 对标 `__aenter__`，`withEngine` 先调它 |
+| `main/host/host-client.ts` | 并发 stop/restart 竞态；停止中迟到的 ready 会把状态改回 ready；退出时可能被重新拉起 | 生命周期串行队列 `enqueue`、每代独立 `GenerationState`、`shutdown()` 后拒绝 start、超时 `forceKill`；`HostStatus` 新增单调 `seq` |
+| `main/window.ts` 导航守卫 | `startsWith("file:")` 放行任意本地 html，该页面会拿到 `window.abb` | 新增 `navigation.ts` `isAppUrl`：dev 同源 / 生产精确匹配渲染层入口；禁 webview |
+| `main/ipc/registrar.ts` | IPC 不校验来源 frame | `isTrustedSender` + `senderFrameUrl`，拒绝返回 `FORBIDDEN` |
+| `main/host/spawn-utility.ts` | 子进程 `error` 事件无监听会让主进程崩溃 | 加 `child.on("error")` |
+| `host/index.ts` | 返回值不可结构化克隆时 postMessage 抛错，请求永远挂起 | 捕获后回 `INTERNAL` 信封 |
+| 渲染层 CSP | 含 `script-src 'unsafe-inline'` | 移除，补 `object-src/base-uri/form-action 'none'`；仅 dev 由 `devRelaxCsp()` 放宽 |
+| `renderer/stores/host-status.ts` | 按 `since` 墙钟去重，时钟回拨会丢状态 | 改按 `seq` |
 
-### 刻意保留的可疑行为（照搬 Python，勿"顺手修")
+## 三、真机验证记录
 
-- `engine/operations/login.ts` 的 `enterPassword`：`act()` 成功后仍执行键盘输入，密码可能被输两次
-- `browseruse/operations/join-family.ts` 的 `sendInvite`/`acceptInvite`：`timeout` 形参**未被函数体使用**
-- 同文件末尾两条返回分支都设 `invite_sent: true`，「没看到已发送关键词」也算已发送
-- `checkInviteSent` 把 `"pending"` 当作「邀请已发送」，无关页面可能误命中
-- `browseruse/agent/service.ts` 的 `run()` 入口会复位 `_stopRequested`，因此 `run()` 之前调 `stop()` 无效
-- `dom/service.ts` 的 `extractDom` 捕获异常后返回空树，但**不清空**上一次快照
+各功能在真实 ixBrowser 窗口 + 真实 Google 账号上的验证结论。完整证据在本地
+`.trellis/tasks/09-24-*-real-run/`（该目录不入库）。
 
 ### 替换手机号的真机缺陷与修复（2026-09-24）
 
-在真实 ixBrowser 窗口 + 真实 Google 账号（profile 7）上验证「替换手机号」AI 任务时，暴露两处 **Python 同源**缺陷；
-两处都只修 desktop，Python 保持原样（如需同步修 Python 请另行安排）。完整证据见
+在真实 ixBrowser 窗口 + 真实 Google 账号（profile 7）上验证「替换手机号」AI 任务时暴露的缺陷如下，完整证据见
 `.trellis/tasks/09-24-replace-phone-real-run/real-run-log.md`。
 
 | 缺陷 | 真机证据 | 修法 |
 |---|---|---|
-| `GoogleURLs.RECOVERY_PHONE`（`myaccount.google.com/recovery/phone`）已失效 | 真机打开是 `404. That's an error.`；完成身份重新验证后再访问**仍是 404**；同会话访问 `RECOVERY_PHONE_SETTINGS` 才是真实的辅助电话号码设置页。原实现整个流程（extract / act 全部提示词）都跑在 404 页上 | `operations/replace-phone.ts` 改用 `RECOVERY_PHONE_SETTINGS`（Python 的 `auto_replace_phone.py` 与 desktop 的 Playwright 版用的都是它） |
+| `GoogleURLs.RECOVERY_PHONE`（`myaccount.google.com/recovery/phone`）已失效 | 真机打开是 `404. That's an error.`；完成身份重新验证后再访问**仍是 404**；同会话访问 `RECOVERY_PHONE_SETTINGS` 才是真实的辅助电话号码设置页。原实现整个流程（extract / act 全部提示词）都跑在 404 页上 | `operations/replace-phone.ts` 改用 `RECOVERY_PHONE_SETTINGS` |
 | 该页面要求「请先验证您的身份」，其 URL 是 `accounts.google.com/v3/signin/challenge/pwd`，正好命中登录态判定 `url.includes("accounts.google.com") && url.includes("signin")` | 任务会以 `success=false / message="需要先登录账号" / error="未登录"` 直接失败——**假失败**，账号其实已登录。且该要求**每次导航都会重新出现**，而该 operation 有两次导航（开头一次、核对替换结果时一次） | 新增 `passReauthIfRequired` / `completeReauth`（`fill` 密码 → 提交 → 若出现验证码框则 `fill` TOTP → 提交 → 等回到设置页）；凭据经 `execute(..., credentials)` 由 automation 层从账号行传入，门面 `replaceRecoveryPhone` 同步加参数 |
-| 点完「下一步 / 获取验证码」后从不点最终的保存 | 真机端到端运行：流程全部走到（点编辑 → 清空 → 输入新号 → 下一步），但**账号上的号码没变**、核对仍读到旧号；补上保存后一次运行即替换成功，独立复查确认页面显示新号 | 在核对之前补一次保存点击（`点击 '保存' 或 'Save' 或 '完成' 或 'Done' 或 '确认' 或 'Confirm' 按钮…`）。旁证：无调用方的 Playwright 版里有 `PHONE_SAVE_SELECTORS`（「最终保存」），Stagehand 版从未移植 |
+| 点完「下一步 / 获取验证码」后从不点最终的保存 | 真机端到端运行：流程全部走到（点编辑 → 清空 → 输入新号 → 下一步），但**账号上的号码没变**、核对仍读到旧号；补上保存后一次运行即替换成功，独立复查确认页面显示新号 | 在核对之前补一次保存点击（`点击 '保存' 或 'Save' 或 '完成' 或 'Done' 或 '确认' 或 'Confirm' 按钮…`） |
 
 - 凭据处理与 `login.ts` 一致：**只经 `fill` 写入，不进 AI 指令**（AI 指令里出现密码即为泄漏点），回归用例对此有断言
 - 回归用例 `desktop/test/engine-replace-phone.test.mjs`（5 条）：缺陷 1/2 在修复前把 operation 换回 HEAD 版本时为 3 红 1 绿；缺陷 3 在移掉保存步骤时单独变红；修复后 **5/5 绿**
@@ -352,7 +169,7 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 
 ### 替换辅助邮箱的真机缺陷与修复（2026-09-24）
 
-在同一个测试号上验证「替换辅助邮箱」（新邮箱 `renw93606@gmail.com`）时又暴露两处 **Python 同源**缺陷，均已修复并真机跑通。
+在同一个测试号上验证「替换辅助邮箱」（新邮箱 `ren***@gmail.com`）时又暴露两处缺陷，均已修复并真机跑通。
 完整证据见 `.trellis/tasks/09-24-replace-email-real-run/real-run-log.md`。
 
 | 项 | 真机证据 | 处理 |
@@ -362,13 +179,13 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 | 「请输入新邮箱验证码」被当成失败 | 点完「下一步」后 Google 弹「请输入已发送至新邮箱的 6 位数验证码」；实测点「取消」后页面**已经显示新邮箱**（带一个可选的「验证辅助邮箱」入口）——即那是可选校验，不是没做完 | 没有取码服务时不再返回失败，改由 `verifyReplacement` 的结果核对定论（真没生效仍会如实报失败） |
 
 - 回归用例 `desktop/test/engine-replace-email.test.mjs`（6 条）：换回 HEAD 版时 3 红 2 绿；缺陷 2 的用例单独先红；修复后 6/6 绿
-- 复跑结果：一次运行成功（63.4s），独立只读复查显示「您的辅助邮箱 `renw93606@gmail.com`（上次更新：6 分钟前）」
+- 复跑结果：一次运行成功（63.4s），独立只读复查显示「您的辅助邮箱 `ren***@gmail.com`（上次更新：6 分钟前）」
 - 用户决定：**新邮箱的可选验证不做**（页面保留「验证辅助邮箱」入口）
-- 已知：AI 任务只改 Google 账号、不写库（`accounts.db.recovery_email` 仍为 `NULL`，与 Python 一致）；修改 2SV 手机 / 修改验证器仍未验证
+- 已知：AI 任务只改 Google 账号、不写库（`accounts.db.recovery_email` 仍为 `NULL`）
 
 ### 修改验证器的真机缺陷与修复（2026-09-24）
 
-在 profile 14（用户指定的测试号）上验证「修改验证器」时暴露三处 **Python 同源**缺陷；均已修复并真机跑通
+在 profile 14（用户指定的测试号）上验证「修改验证器」时暴露三处缺陷；均已修复并真机跑通
 （第 3 次运行 42.0s 成功）。完整证据见 `.trellis/tasks/09-24-modify-auth-real-run/real-run-log.md`。
 
 | 缺陷 | 真机证据 | 修法 |
@@ -378,14 +195,14 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 | 成功文案「身份验证器应用已更改」不在成功词表 | 第 2 次运行**真的把验证器改掉了**，但词表只有「已添加/added/成功/完成」→ 判「无法确定设置结果」；因 `saveNewSecret` 只在 success 时调用，**新密钥不落盘而账号已被改掉** → 会导致登录失败（本次已按产品同一条保存路径恢复，再复跑通过） | 成功词表补上 `已更改 / 更改 / changed` |
 
 - 回归用例 `desktop/test/engine-modify-auth.test.mjs`（7 条）：换回 HEAD 版 → 3 红 2 绿；只保留缺陷 1 修复 → 3 红 3 绿；临时还原旧词表 → 4 红 3 绿；修复后 **7/7 绿**
-- 新密钥四处落点一致：`accounts.db.secret_key` / `authenticator_modification_history` / `已修改密钥.txt` / ixBrowser 窗口备注第 4 段 + `tfa_secret`（同一指纹）
+- 新密钥落点一致：`accounts.db.secret_key` / `authenticator_modification_history` / `已修改密钥.txt` / 窗口 `tfa_secret`（同一指纹）；
+  当时还会写窗口备注第 4 段，现已取消（见「修改账号密码」一节末尾）
 - 诚实记录：缺陷 3 的第一版回归用例**没红**——假引擎的成功标记当时写成英文 `Authenticator app added`，正好命中旧词表；改成真机文案后才成立
-- 提醒：窗口备注是 fire-and-forget 异步写入，短命进程会丢（本次真机驱动就遇到，已补写）；Python 版是同步阻塞写
-
+- 提醒：当时窗口信息是 fire-and-forget 异步写入，短命进程会丢（本次真机驱动就遇到，已补写）
 
 ### 修改 2SV 手机的真机缺陷与修复（2026-09-24）
 
-在 profile 7（`arroyovanessa87@gmail.com`）上验证「修改 2SV 手机」；第二轮用只读探针拿到真实 DOM 后定位到两个
+在 profile 7（`arr***@gmail.com`）上验证「修改 2SV 手机」；第二轮用只读探针拿到真实 DOM 后定位到两个
 根因级缺陷，修完真机端到端跑通（`operation.success=true`，独立复核确认 2SV 电话号码列表出现新号
 `****4886`）。完整证据见 `.trellis/tasks/09-24-modify-2sv-real-run/real-run-log.md`。
 
@@ -403,7 +220,7 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
   均已修并补「先红后绿」用例（修前 6 红 → 修后绿）
 - 真机链路的坑（未修，记入待办）：`connect()` 对「窗口已打开」不容错（111003），而**关掉窗口会丢 Google 会话**
   → 端到端验证只能塞进单进程；另外 Google 对频繁登录做风控后，登录页会先要求「选择验证方式」
-  （`/v3/signin/challenge/selection`），而 `LoginOperation` 只认「直接出现的验证器输入框」→ 报 `need_2fa`
+  （`/v3/signin/challenge/selection`），而 `LoginOperation` 只认「直接出现的验证器输入框」→ 报 `need_2fa`（后者已修，见下文「登录『选择验证方式』页的修复」）
 - 账号状态：2SV 电话号码 = 旧号 `****4348` + 新号 `****4886`（仍是「添加」，未删旧号）
 
 ### 踢出设备的真机缺陷与修复（2026-09-24）
@@ -425,7 +242,7 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 「已退出账号」。点条目必须用坐标点击（页面内 `el.click()` 在该页面上无效）。
 
 - 回归用例 `desktop/test/engine-kick-devices.test.mjs`（10 条；假引擎按真机页面序列建模）+ 引擎新增 `evaluateScript()`
-- 6 条改写后的 `kick_devices` 提示词登记进 `verify-prompts` 的 `REMOVED_PROMPTS`（附真机理由）
+
 ### 导入 TOTP 密钥的修复（2026-09-24）
 
 这个功能不驱动 Google 页面（解析密钥 → 匹配数据库 → 写库 + 更新 ixBrowser 窗口信息），所以验证方式是
@@ -434,21 +251,21 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
 
 | 缺陷 | 真机证据 | 修法 |
 |---|---|---|
-| **导入只写窗口备注、不写窗口 `tfa_secret`** → ixBrowser 侧的 2FA 密钥一直为空，与「修改验证器」「批量绑定窗口」两处落点不一致 | 导入成功（备注更新成功、`ix_update_count=1`）后 `窗口 tfa_secret = (空)`，而 DB 与备注里都有密钥 | `runTotpImport` 的 `updateProfileNote(id, note)` 改为 `updateProfile(id, { note, tfa_secret })`；handler 装配同步改。真机复跑：`tfa_secret` 由空 → `len=32 前4=R2TQ…`，`窗口 tfa_secret == DB 密钥: true` |
+| **导入只写窗口备注、不写窗口 `tfa_secret`** → ixBrowser 侧的 2FA 密钥一直为空，与「修改验证器」「批量绑定窗口」两处落点不一致 | 导入成功（备注更新成功、`ix_update_count=1`）后 `窗口 tfa_secret = (空)`，而 DB 与备注里都有密钥 | `runTotpImport` 的 `updateProfileNote(id, note)` 改为 `updateProfile(id, { note, tfa_secret })`（后来按「自动化不碰备注」的约定收窄为只写 `tfa_secret`）；handler 装配同步改。真机复跑：`tfa_secret` 由空 → `len=32 前4=R2TQ…`，`窗口 tfa_secret == DB 密钥: true` |
 
 - 回归用例 `desktop/test/app-totp.test.mjs`：修前 4 红 → 修后 **15/15 绿**
-- 本轮**未**改动（记在任务待办）：窗口备注整条覆盖（`recovery_email` 为空会把备注第 3 段写空）、
-  覆盖已有密钥不写 `authenticator_modification_history`、导入密钥无格式校验、前端 UI 层未做真机操作
+- 本轮**未**改动（记在任务待办）：覆盖已有密钥不写 `authenticator_modification_history`、导入密钥无格式校验、
+  前端 UI 层未做真机操作（「窗口备注整条覆盖」已随「自动化不碰备注」的约定消除）
 
 ### 任务结果持久化与导出（F4，2026-09-24）
 
-本地新增能力，Python 侧没有对应实现（批量任务结果只打在界面日志里，关掉就没了）。产品背景是第七轮评估：
+新增能力（此前批量任务结果只打在界面日志里，关掉就没了）。产品背景是第七轮评估：
 「Google 账号管理系统」需要能回答「上一次批量任务哪几个账号成了、哪几个败了、为什么」。
 
 - 新表 `task_run_history`（任务级）+ `task_run_items`（逐条目），`initDb` 由 5 张表变 7 张
 - 新仓储 `src/db/task-history-repository.ts`：`record()` 按条目状态统计 total / 成功 / 失败，另有 `listRuns` / `listItems` / `exportText()`
 - `TaskRunner` 收尾时用 `TaskRunnerOptions.onRecord` 把结果交出去落库（`try/catch` 兜住，写库失败不影响任务本身的结果）
-- 刻意**不复用** Python 遗留的 `account_refresh_tasks` / `_items`（语义是「刷新家庭组信息」，混用会让两边含义都变模糊）
+- 刻意**不复用** 旧的 `account_refresh_tasks` / `_items`（语义是「刷新家庭组信息」，混用会让两边含义都变模糊）
 - 通道 `abb/taskhistory/list|items|export`，渲染层 `TaskHistoryTab.tsx`（设置页新增「任务历史」页签）
   - 通道第二段必须小写（测试正则是 `abb/<小写>/...`），所以是 `taskhistory` 而不是 `taskHistory`
   - `app/shared/channels/task-history.ts` 自己声明行类型 —— 直接 import 仓储会把 `node:sqlite` 拖进 web 构建
@@ -474,12 +291,12 @@ Google 验证弹窗里 `Verify` 按钮在**右侧**，必须用 `clickLastVisibl
   全部逐行一致，只多了两张新表 → PASS（加固后复跑再过一次）
 - 遗留：「跳过」条目不计入成功 / 失败两列（页面说明已写明）；不保存任务级 `result`（「删除了几个
   窗口」这类数字不在历史里）；历史时间取本地时间而其它表是 UTC（有意不一致）；落库失败只在后端
-  日志可见（与 Python 共用库、`openDb` 无 `busy_timeout` 时会 `SQLITE_BUSY`，属既有全局条件）；
+  日志可见（`openDb` 无 `busy_timeout`，多个进程同时写库时会 `SQLITE_BUSY`，属既有全局条件）；
   批量登录 / 绑定 / 删除的条目上报目前只有单测覆盖，未上真机
 
 ### 账号健康巡检（F2，2026-09-24）
 
-本地新增能力：Python 侧没有对应实现 —— 想知道「这批号还有多少能用」，原版只能真的跑一次批量登录
+新增能力：想知道「这批号还有多少能用」，以前只能真的跑一次批量登录
 （会改动会话、耗时，还容易触发风控）。本功能只读访问 `myaccount.google.com`，按落点判定：
 
 | 结论 | 判定依据 | 写回 |
@@ -515,15 +332,14 @@ Get a verification code from the Google Authenticator app」，而 `LoginOperati
 
 排查顺序与结论：
 
-1. 先排除算码算法：用独立实现（Python `hmac` + `base64.b32decode`）对同一密钥、4 个固定时间点比对，
+1. 先排除算码算法：用独立实现（标准 HMAC + base32 解码）对同一密钥、4 个固定时间点比对，
    全部一致；带空格 / 小写的密钥也能正确生成 → 不是 TOTP 的问题
 2. 只读 DOM 探测该页：可点元素是 `<div role="link" jsname="EBHGs" tabindex="0">Get a verification code
    from the Google Authenticator app</div>`（内层），而 `clickByText("Google Authenticator app")` 返回 `null`
 3. **根因**：`textClickScript` 用 `label(el).startsWith(want)` 匹配，而这一项的文本以
    「Get a verification code from the …」开头，永远匹配不上（之前的临时绕过脚本用的是「包含」匹配，所以能过）
 
-修法（**有意偏离 Python 版**：Python 的 `operations/login.py` 同样只处理直接出现的 TOTP 框，遇到这一页会失败；
-本轮没动 Python 侧。没有新增 AI 提示词，因此不需要登记进 `REMOVED_PROMPTS`）：
+修法：
 
 - `stagehand-engine.ts`：`textClickScript(text, mode)` 增加 `contains` 模式（默认仍 `prefix`，
   不影响「保存 / 下一步」这类按钮的精确匹配）；命中元素打 `data-abb-text-hit="1"` 标记供坐标点击兜底
@@ -534,14 +350,10 @@ Get a verification code from the Google Authenticator app」，而 `LoginOperati
 - 测试：`engine-click-by-text.test.mjs` 增 2 条、`engine-login.test.mjs` 增 3 条（先红 4 → 全绿）
 - 真机复跑：同一账号 `execute: success=true state=logged_in`（修复前每次都停在 `need_2fa`）
 
-> 注：本次提交的 `desktop/src/engine/operations/login.ts` 里同时包含**登录轮此前未提交**的 TS 移植内容
-> （HEAD 版是 327 行的旧实现，工作区是重写后的版本），提交信息里已写明这一点。
-
 ### 从模板创建窗口（F3，2026-09-24）
 
 首页「根据模板创建窗口」：选模板窗口 → 建 N 个 → 名字为「前缀_序号」→ 归入目标分组。
-原版这两个按钮是 TODO 桩（`gui/home_interface.py:427/:436`），但 `services/ix_window.py:442` 里
-早已实现「复制窗口」这个动作，本次把它补成可用的批量任务。
+原先这两个按钮是 TODO 桩，本次基于 ixBrowser 官方的「复制窗口」动作把它补成可用的批量任务。
 
 | 文件 | 作用 |
 |---|---|
@@ -629,48 +441,16 @@ GUI 按钮未真点；「使用默认模板创建」「停止任务」两个桩�
 「点击后二次确认弹层」没有任何真机证据，真机没出现过；「修改验证器不再写备注」只有代码改动 +
 grep 复核，未真机跑（验证它要真的改一次验证器）。
 
-### Electron 骨架的架构约定与审查修正
+## 四、下一步
 
-- **主进程是薄壳**：不 import `desktop/src/` 任何模块（build 后检查 `out/main/index.js` 不含 IxBrowserClient/stagehand/playwright）
-- **业务后端跑在 `utilityProcess`**（`out/main/host.js`），崩溃只影响后端，窗口不受影响；本轮无自动重启，只有手动「重启后端」
-- 信封 `{ok,data} | {ok:false,error:{code,message}}`；错误码 `HOST_UNAVAILABLE` / `TIMEOUT` / `UNKNOWN_CHANNEL` / `INTERNAL` / `FORBIDDEN`
-- `ixbrowser/ping` 只走 HTTP，刻意没碰 `node:sqlite`（其在 Electron 中的兼容性留到业务页面阶段验证）
+- **仍欠真机验证**：设置页的账号与代理导入导出、批量登录的多账号 / 异常账号边界、各页 GUI 按钮的真点击
+- **已真机回归**：打开窗口 / 批量绑定 / 批量登录 / 替换手机号 / 替换辅助邮箱 / 修改验证器 / 修改 2SV 手机 /
+  踢出设备 / 导入 TOTP / 任务历史（F4）/ 健康巡检（F2）/ 从模板创建窗口（F3）/ 修改密码（F1）——
+  各自独立复跑成功，并与账号真实状态只读核对一致
+- **用户确认不做 / 已删除**：家庭组加入；AI 页接入 SMS-Bus / IMAP 验证码（触发验证码即判失败）；
+  OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 解锁 / Sub2API；辅助邮箱池与邮箱验证码读取（无产品入口）
 
-代码审查后修掉的问题：
-
-| 位置 | 问题 | 修法 |
-|---|---|---|
-| `main/host/host-client.ts` | 并发 stop/restart 竞态；停止中迟到的 ready 会把状态改回 ready；退出时可能被重新拉起 | 生命周期串行队列 `enqueue`、每代独立 `GenerationState`、`shutdown()` 后拒绝 start、超时 `forceKill`；`HostStatus` 新增单调 `seq` |
-| `main/window.ts` 导航守卫 | `startsWith("file:")` 放行任意本地 html，该页面会拿到 `window.abb` | 新增 `navigation.ts` `isAppUrl`：dev 同源 / 生产精确匹配渲染层入口；禁 webview |
-| `main/ipc/registrar.ts` | IPC 不校验来源 frame | `isTrustedSender` + `senderFrameUrl`，拒绝返回 `FORBIDDEN` |
-| `main/host/spawn-utility.ts` | 子进程 `error` 事件无监听会让主进程崩溃 | 加 `child.on("error")` |
-| `host/index.ts` | 返回值不可结构化克隆时 postMessage 抛错，请求永远挂起 | 捕获后回 `INTERNAL` 信封 |
-| 渲染层 CSP | 含 `script-src 'unsafe-inline'` | 移除，补 `object-src/base-uri/form-action 'none'`；仅 dev 由 `devRelaxCsp()` 放宽 |
-| `renderer/stores/host-status.ts` | 按 `since` 墙钟去重，时钟回拨会丢状态 | 改按 `seq` |
-
-## 四、已移除的校验工具
-
-原来的 `verify:prompts` / `verify:selectors` 两个脚本以 **Python 源码为基准**（提示词逐条对拍、选择器提取）。
-Python 侧删除后，前者再也生成不出 `ops_spec.json`、后者会退化成「0 个选择器」的**假绿**，因此一并删除
-（`desktop/scripts/` 整个目录已移除）。
-
-现在新增或修改 `src/engine/operations/` 里的选择器与提示词时，靠 `test/engine-*.test.mjs` 的真机回归用例兜底。
-## 五、下一步
-
-1. **`auto-join-family.ts`** —— ❌ 用户确认不需要（界面入口与后端代码均已删除）
-2. **`batch-account-processor.ts`** —— ✅ 已完成
-3. **前端界面** —— ✅ 全部页面已完成（首页 / 账号管理 / AI 任务页 / 导入 TOTP / 设置 / 状态）
-   - AI 页接入 SMS-Bus / IMAP 验证码：**用户确认不需要**（触发验证码即判失败）
-   - 家庭组加入：**用户确认不需要**
-   - OAuth / 检测 Pro / 刷新家庭组 / 开启共享 / 403 / Sub2API：**用户要求删除**，已从 desktop 移除
-   - `node:sqlite` 已确认可在 Electron 主进程与 utilityProcess 中直接使用
-   - **真机回归已完成**：打开窗口 / 批量绑定 / 批量登录 / 替换手机号 / 替换辅助邮箱 / 修改验证器 /
-     修改 2SV 手机 / 踢出设备 / 导入 TOTP / 任务历史（F4）/ 健康巡检（F2）/ 从模板创建窗口（F3）/
-     修改密码（F1）—— 各自独立复跑成功，并与账号真实状态只读核对一致。
-     详见 `.trellis/tasks/09-24-*-real-run/real-run-log.md`
-   - **仍欠真机验证**：设置页的账号与代理导入导出、批量登录的多账号边界、各页 GUI 按钮的真点击
-
-## 六、环境备忘
+## 五、环境备忘
 
 | 项 | 值 |
 |---|---|

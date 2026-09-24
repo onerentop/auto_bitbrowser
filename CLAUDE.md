@@ -8,6 +8,7 @@
 
 | Date | Changes |
 | ---- | --------- |
+| 2026-09-24 | **清理无用代码**：删除 17 个产品里没有任何入口的源文件（迁移期对拍 / 切片探针脚本、`operations/index.ts` 汇总导出、无调用方的 Playwright 选择器版替换流程、账号文本解析与导入导出仓储、邮箱验证码读取、辅助邮箱池）及对应 16 个单测；删除迁移期报告 `POC_REPORT.md` / `ENGINE_SLICE_REPORT.md`；`PROGRESS.md` 删去移植期历史章节 |
 | 2026-09-24 | **移除 Python 侧**：`core/` `services/` `automation/` `application/` `gui/` `web_admin/` `tests/`、`main.py`、`pytest.ini`、`requirements*.txt`、`.venv/`、`dist/` 全部删除；随之删掉 `verify:prompts` / `verify:selectors` 两个以 Python 源码为基准的校验脚本；本文件重写为桌面端（Electron + TypeScript）架构 |
 | 2026-09-24 | 桌面端承接全部功能：窗口管理、账号管理（批量登录 / 绑定 / 健康巡检）、6 个 AI 批量任务、导入 TOTP、设置与任务历史 |
 | 2026-02-02 | AI context 初始化（**此版本描述的架构已不存在**） |
@@ -160,8 +161,9 @@ auto_bitbrowser2/
 │   │   ├── db/
 │   │   │   ├── schema.ts connection.ts
 │   │   │   ├── account-repository.ts task-history-repository.ts …
-│   │   ├── ixbrowser/client.ts       # ixBrowser 本地 API 客户端
-│   │   └── core/                     # config-manager / retry-helper / random-password
+│   │   ├── ixbrowser/                # client.ts（ixBrowser 本地 API 客户端）/ window / groups / probe
+│   │   ├── services/                 # data-store（代理数据）/ proxy-allocator（代理分配）
+│   │   └── core/                     # config-manager / retry-helper / random-password / totp-extractor
 │   ├── test/                         # node:test 用例（*.test.mjs）
 │   └── PROGRESS.md                   # 开发进度 + 真机验证记录
 ├── data/config.example.json          # 配置模板
@@ -215,7 +217,7 @@ auto_bitbrowser2/
 ```powershell
 cd desktop
 pnpm run typecheck          # 业务库 tsc --noEmit，零错误
-pnpm test                   # 全量单测（当前基线 563 通过 / 0 失败）
+pnpm test                   # 全量单测（当前基线 547 通过 / 0 失败）
 pnpm run typecheck:app      # 主进程 + 渲染层两套 tsconfig，零错误
 pnpm run build:app          # 构建
 ```

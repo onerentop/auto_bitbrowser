@@ -2,9 +2,10 @@
  * 建表与列迁移
  *
  * SQL 语句：
- *   - 5 张表（accounts / proxies / proxy_window_bindings / account_refresh_tasks / account_refresh_task_items）
+ *   - 7 张表（accounts / proxies / proxy_window_bindings / account_refresh_tasks / account_refresh_task_items /
+ *     task_run_history / task_run_items）
  *   - accounts 的 22 个 `ALTER TABLE ADD COLUMN`，列已存在时吞掉错误
- * 历史表与辅助邮箱池表不在这里建，由各自仓储的 initTables 负责。
+ * 各类修改历史表不在这里建，由 HistoryRepository.initTable 按需创建。
  */
 import type { Db } from "./connection.ts";
 

@@ -8,14 +8,12 @@
  *   1. GoogleURLs.RECOVERY_PHONE（myaccount.google.com/recovery/phone）已失效：
  *      真机打开是 404 页（"404. That's an error."），完成身份验证后再访问仍是 404。
  *      这里改用同一份代码里指向该页面的 RECOVERY_PHONE_SETTINGS
- *      （myaccount.google.com/signinoptions/rescuephone）——desktop 的 Playwright 版
- *      auto-replace-phone.ts 用的就是这个地址。
+ *      （myaccount.google.com/signinoptions/rescuephone）。
  *   2. 真机上该页面会要求「请先验证您的身份」（密码 → 验证器验证码）；原实现把跳转后的
  *      accounts.google.com/v3/signin/challenge/pwd 判成「需要先登录账号」直接失败。
  *      这里新增 passReauthIfRequired 处理该验证后再继续。
  *   3. 填完号码并点「下一步」后，Google 的编辑框还停在待保存状态，**不点最终的保存按钮改动不生效**
- *      （原来的链路点完「下一步/获取验证码」就去做核对，账号上的号码始终没变；无调用方的
- *      Playwright 版 auto-replace-phone.ts 里有 PHONE_SAVE_SELECTORS，但从未被执行）。
+ *      （原来的链路点完「下一步/获取验证码」就去做核对，账号上的号码始终没变）。
  *      这里在核对之前补一次保存点击。
  */
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
