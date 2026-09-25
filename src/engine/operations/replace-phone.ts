@@ -1,7 +1,7 @@
 /**
  * 替换恢复手机号
  *
- * 与 replace-email 结构几乎一致，差异在 URL、按钮文案、以及验证时比对手机号后四位。
+ * 与 replace-email 结构几乎一致，差异在 URL、按钮文案、以及核对时在页面上找新号码（完整或后 7 位）。
  * operation_type 固定为 "recovery"。
  *
  * 真机（2026-09-24，ixBrowser profile 7 + 真实 Google 账号）暴露、并在此修正的缺陷：
@@ -19,7 +19,12 @@
 import type { StagehandGoogleEngine } from "../stagehand-engine.ts";
 import { GoogleURLs, Timeouts } from "../constants.ts";
 import { createModifyPhoneResult, type ModifyPhoneResult } from "../types.ts";
-import { GoogleReauth, type ReauthCredentials } from "./reauth.ts";
+import { GoogleReauth, REAUTH_STEP_TIMEOUT_MS, waitUntil, type ReauthCredentials } from "./reauth.ts";
+
+/** 点「下一步」后的确认框（真机：Confirm your phone number / Make sure … is the number you would like to save / Back / Save） */
+export const PHONE_CONFIRM_PATTERN = /Confirm your phone number|确认(您|你)的(电话号码|手机号)/i;
+/** 页面要求输入发到新号码的短信验证码 */
+export const PHONE_CODE_PROMPT_PATTERN = /Enter (the )?(verification )?code|输入验证码/i;
 
 /** 短信验证码服务接口（取码实现由调用方注入） */
 export interface SmsCodeService {
@@ -104,16 +109,6 @@ export class ReplacePhoneOperation {
     credentials: ReauthCredentials,
   ): Promise<StepOutcome> {
     try {
-      await this.engine.extract(
-        `
-                检查当前恢复手机设置页面：
-                1. 是否有现有的恢复手机号
-                2. 是否有 "Add recovery phone" 或 "添加恢复手机" 按钮
-                3. 是否有 "Edit" 或 "编辑" 按钮
-                4. 是否有 "Update" 或 "更新" 按钮
-                `,
-      );
-
       await this.engine.act(
         "点击 'Add recovery phone' 或 '添加恢复手机' 或 'Edit' 或 '编辑' 或 'Update' 或 '更新' 或铅笔图标按钮",
       );
@@ -128,47 +123,41 @@ export class ReplacePhoneOperation {
       await this.engine.act(
         "点击 'Next' 或 '下一步' 或 'Get code' 或 '获取验证码' 或 'Send' 或 '发送' 按钮",
       );
-      await this.engine.wait(3000);
 
-      const verifyCheck = await this.engine.extract(
-        `
-                检查页面是否显示：
-                1. 验证码输入框 - 需要输入发送到新手机的验证码
-                2. 成功消息 - 恢复手机已更新
-                3. 错误消息 - 无效的手机号等
-                `,
+      // 以真实页面文本判断下一步（真机 2026-09-25）：
+      //   - 「Confirm your phone number … Save」确认框 → 去点保存。确认框文案里也有 "codes will be sent"，所以先认它；
+      //   - 页面要求输入短信验证码 → 有短信服务就填，没有就如实报需要手动输入。
+      // 原实现看 AI 抽取的回答里有没有「验证码」二字：AI 答「页面未显示验证码输入框」也会命中，误报「需要手动输入验证码」。
+      // 两种页面都是点完「下一步」才渲染 → 轮询等它出现，不赌一次固定等待（同 modify-2sv）。
+      let page = "";
+      await waitUntil(
+        this.engine,
+        async () => {
+          page = await this.engine.getPageContent();
+          return PHONE_CONFIRM_PATTERN.test(page) || PHONE_CODE_PROMPT_PATTERN.test(page);
+        },
+        REAUTH_STEP_TIMEOUT_MS,
       );
-
-      if (verifyCheck.success && verifyCheck.data) {
-        const resultText = String(JSON.stringify(verifyCheck.data)).toLowerCase();
-
-        if (
-          resultText.includes("verification") ||
-          resultText.includes("验证码") ||
-          resultText.includes("code")
-        ) {
-          if (smsService) {
-            try {
-              const code = await smsService.getCode(newPhone);
-              if (code) {
-                await this.engine.act(`在验证码输入框中输入: ${code}`);
-                await this.engine.wait(Timeouts.AFTER_INPUT);
-                await this.engine.act("点击 'Verify' 或 '验证' 或 'Next' 或 '下一步' 按钮");
-                await this.engine.wait(3000);
-              }
-            } catch {
-              return createModifyPhoneResult({
-                success: false,
-                message: "需要手动输入验证码",
-                error: "短信验证码获取失败",
-              });
-            }
-          } else {
-            return createModifyPhoneResult({ success: false, message: "需要手动输入验证码", error: "未提供短信服务" });
+      if (!PHONE_CONFIRM_PATTERN.test(page) && PHONE_CODE_PROMPT_PATTERN.test(page)) {
+        if (!smsService) {
+          return createModifyPhoneResult({ success: false, message: "需要手动输入验证码", error: "未提供短信服务" });
+        }
+        try {
+          const code = await smsService.getCode(newPhone);
+          if (code) {
+            await this.engine.act(`在验证码输入框中输入: ${code}`);
+            await this.engine.wait(Timeouts.AFTER_INPUT);
+            await this.engine.act("点击 'Verify' 或 '验证' 或 'Next' 或 '下一步' 按钮");
+            await this.engine.wait(3000);
           }
+        } catch {
+          return createModifyPhoneResult({
+            success: false,
+            message: "需要手动输入验证码",
+            error: "短信验证码获取失败",
+          });
         }
       }
-
 
       // 真机：填完号码、点过「下一步」之后 Google 还会要求点一次保存，改动才会生效
       await this.engine.act(
@@ -181,49 +170,39 @@ export class ReplacePhoneOperation {
       return createModifyPhoneResult({ success: false, message: msg, error: msg });
     }
   }
-  /** 刷新后核对：手机号后四位出现即视为成功（页面通常做脱敏显示） */
+  /** 刷新后核对：以真实页面文本为准，页面上出现新号码（完整或后 7 位）才算成功 */
   private async verifyReplacement(
     newPhone: string,
     credentials: ReauthCredentials,
   ): Promise<StepOutcome> {
     try {
-      // 真机：再次导航到该页通常又会要求重新验证身份
-      await this.engine.navigate(GoogleURLs.RECOVERY_PHONE_SETTINGS, { timeoutMs: Timeouts.NAVIGATION });
+      // 审查：导航失败时页面停在原地（可能还是确认框，正文里就有完整新号码）→ 不查成败会假成功（同 modify-2sv）
+      const nav = await this.engine.navigate(GoogleURLs.RECOVERY_PHONE_SETTINGS, { timeoutMs: Timeouts.NAVIGATION });
+      if (!nav.success) {
+        return createModifyPhoneResult({ success: false, message: "无法核验：打开恢复手机设置页失败", error: nav.error ?? "导航失败" });
+      }
       await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+      // 真机：再次导航到该页通常又会要求重新验证身份
       const reauth = await this.reauth.passIfRequired(credentials);
       if (reauth && !reauth.success) return reauth;
-
-      const extracted = await this.engine.extract(
-        `
-                检查页面是否显示：
-                1. 新的恢复手机号（可能是部分隐藏的格式，如 ***1234）
-                2. "Recovery phone updated" 或 "恢复手机已更新" 消息
-                3. "Success" 或 "成功" 提示
-
-                也检查错误信息：
-                4. "Invalid phone" 或 "无效手机号"
-                5. "Error" 或 "错误"
-                `,
-      );
-
-      if (!extracted.success) return createModifyPhoneResult({ success: false, message: "无法验证替换结果" });
-
-      const resultText = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
-
-      if (newPhone.length >= 4) {
-        const lastFour = newPhone.slice(-4);
-        if (resultText.includes(lastFour)) return createModifyPhoneResult({ success: true });
+      const url = await this.engine.getCurrentUrl();
+      if (!url.includes("signinoptions/rescuephone")) {
+        return createModifyPhoneResult({ success: false, message: "无法核验：页面没有停在恢复手机设置页", error: url });
       }
 
-      const okWords = ["updated", "已更新", "success", "成功"];
-      if (okWords.some((k) => resultText.includes(k))) return createModifyPhoneResult({ success: true });
-
-      const badWords = ["invalid", "无效", "error", "错误"];
-      if (badWords.some((k) => resultText.includes(k))) {
+      // 不看 AI 的回答（真机上它答「未显示…已更新」这种否定句，按关键词会误判成功）；
+      // 只去空白不去其它符号，避免把相邻数字拼出页面上不存在的串；尾号至少 7 位，防止撞上旧号尾段等其它数字
+      const text = await this.engine.getPageContent();
+      const digits = newPhone.replace(/\D/g, "");
+      const compact = text.replace(/\s/g, "");
+      const tail = digits.slice(-7);
+      if (tail.length === 7 && (compact.includes(digits) || compact.includes(tail))) {
+        return createModifyPhoneResult({ success: true });
+      }
+      if (/invalid phone|无效的?手机号/i.test(text)) {
         return createModifyPhoneResult({ success: false, message: "手机号验证失败", error: "无效的手机号" });
       }
-
-      return createModifyPhoneResult({ success: false, message: "无法确定替换结果" });
+      return createModifyPhoneResult({ success: false, message: "保存后恢复手机设置页上没有看到新号码" });
     } catch (err) {
       return createModifyPhoneResult({ success: false, error: err instanceof Error ? err.message : String(err) });
     }
