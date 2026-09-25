@@ -12,8 +12,6 @@
 import type { TaskInfo } from "../ipc.ts";
 
 export const AI_TASKS_INVOKE = {
-  /** 读取账号 + 分组 + 窗口，组成平铺列表 */
-  aiTasksLoad: "abb/aitasks/load",
   /** 对选中账号逐个执行某一种 AI 任务（后台任务） */
   aiTasksStart: "abb/aitasks/start",
 } as const;
@@ -128,46 +126,6 @@ export const AI_TASK_ITEM_STATUS = {
 
 // ==================== 数据类型 ====================
 
-/**
- * 列表的一行：一个窗口（窗口名视为 email）+ 按 email 匹配到的数据库账号信息。
- * **只下发布尔值与登录状态**，不下发密码 / 2FA 密钥 / 辅助邮箱原文。
- */
-export interface AiTaskRow {
-  /** 行键：规则同首页（有效且不重复的窗口 ID 为 `b:{id}`） */
-  key: string;
-  /** 窗口 ID；原始数据缺失或非法时为 null（无法执行任务） */
-  profileId: number | null;
-  /** 窗口名原文，即 email（不清洗：执行前要与窗口当前名称逐字比对） */
-  email: string;
-  groupId: number;
-  groupName: string;
-  /** 是否匹配到数据库账号 */
-  inDb: boolean;
-  hasRecoveryEmail: boolean;
-  /** 数据库里是否有 2FA 密钥 */
-  hasSecret: boolean;
-  /** 数据库 login_status 原值；不在库或为空时为 "" */
-  loginStatus: string;
-  /** 数据库 last_login_at 原文（本地时间字符串）；没有为 null */
-  lastLoginAt: string | null;
-}
-
-/** 分组标签的一项：只列有窗口的分组 */
-export interface AiTaskGroupCount {
-  groupId: number;
-  groupName: string;
-  count: number;
-}
-
-export interface AiTaskLoadResult {
-  rows: AiTaskRow[];
-  /** 按分组 ID 升序 */
-  groups: AiTaskGroupCount[];
-  totalBrowsers: number;
-  /** 加载失败原因；此时 rows 为空 */
-  error: string | null;
-}
-
 /** start 的单个条目：界面只传 email 与窗口 ID，账号信息由后端按 email 从数据库重读 */
 export interface AiTaskStartItem {
   email: string;
@@ -194,7 +152,6 @@ export interface AiTaskRunResult {
 // ==================== 通道 → 类型 ====================
 
 export interface AiTasksInvokeMap {
-  "abb/aitasks/load": { args: []; result: AiTaskLoadResult };
   "abb/aitasks/start": {
     args: [kind: AiTaskKind, items: AiTaskStartItem[], params: AiTaskParams];
     result: TaskInfo;

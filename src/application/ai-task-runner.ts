@@ -2,8 +2,7 @@
  * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备 / 改密码）的执行逻辑
  * 每个账号执行前先只读检查登录（已登录直接执行，未登录才走登录流程，登录失败不执行）。
  *
- * 包含四部分：
- *   - buildAiTaskRows：窗口列表 + 数据库账号 → 平铺账号列表
+ * 包含三部分：
  *   - invokeAiTask：按任务类型分派到对应的 automation 函数
  *   - describeOutcome：把执行结果转成行状态与文案
  *   - runAiTask：串行执行整批任务并上报进度 / 日志
@@ -16,13 +15,10 @@ import {
   AI_TASK_KINDS,
   type AiTaskItemResult,
   type AiTaskKind,
-  type AiTaskLoadResult,
   type AiTaskParams,
-  type AiTaskRow,
   type AiTaskRunResult,
   type AiTaskStartItem,
 } from "../../app/shared/channels/ai-tasks.ts";
-import { buildBrowserList } from "../../app/shared/logic/home-list.ts";
 import type { AccountRepository } from "../db/account-repository.ts";
 import type { HistoryRepository } from "../db/history-repository.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
@@ -36,58 +32,6 @@ import { autoGoogleLogin, checkGoogleLogin } from "../automation/auto-google-log
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-// ==================== 加载：平铺列表 ====================
-
-function nonEmpty(value: unknown): boolean {
-  return typeof value === "string" && value.trim() !== "";
-}
-
-/**
- * 平铺账号列表：
- *   - 分组名、行 key、分组统计与首页同一规则（直接复用 buildBrowserList）
- *   - email 取窗口名**原文**（不清洗）：执行前要与窗口当前名称逐字比对，也用它按 email 匹配数据库账号
- *   - 只从账号里取布尔值 / 登录状态 / 最后登录时间，**不带出密码、密钥、辅助邮箱原文**
- */
-export function buildAiTaskRows(
-  accounts: readonly unknown[],
-  groups: readonly unknown[],
-  browsers: readonly unknown[],
-): Omit<AiTaskLoadResult, "error"> {
-  const accountByEmail = new Map<string, Record<string, unknown>>();
-  for (const raw of accounts) {
-    const acc = asRecord(raw);
-    if (acc && typeof acc["email"] === "string") accountByEmail.set(acc["email"], acc);
-  }
-
-  // buildBrowserList 与这里用同一个 asRecord 过滤，下标一一对应
-  const records = browsers.map(asRecord).filter((b): b is Record<string, unknown> => b !== null);
-  const list = buildBrowserList(groups, records);
-  const rows: AiTaskRow[] = list.browsers.map((node, i) => {
-    const email = String(records[i]?.["name"] ?? "");
-    const acc = accountByEmail.get(email);
-    const lastLogin = acc?.["last_login_at"];
-    return {
-      key: node.key,
-      profileId: node.profileId,
-      email,
-      groupId: node.groupId,
-      groupName: node.groupName,
-      inDb: acc !== undefined,
-      hasRecoveryEmail: nonEmpty(acc?.["recovery_email"]),
-      hasSecret: nonEmpty(acc?.["secret_key"]),
-      loginStatus: typeof acc?.["login_status"] === "string" ? acc["login_status"] : "",
-      lastLoginAt: nonEmpty(lastLogin) ? String(lastLogin) : null,
-    };
-  });
-  return { rows, groups: list.groups, totalBrowsers: rows.length };
 }
 
 // ==================== 分派注册表 ====================

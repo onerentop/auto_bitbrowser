@@ -1,6 +1,6 @@
 /**
  * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备）
- * 分派、accountInfo 取数、逐行事件、停止、结果形状、加载构树、参数校验。
+ * 分派、accountInfo 取数、逐行事件、停止、结果形状、参数校验。
  * 全部离线：automation 函数是假的，ixBrowser 客户端是假的，:memory: 库 + 临时数据根。
  */
 import { test } from "node:test";
@@ -16,7 +16,7 @@ import { AI_TASKS_INVOKE, AI_TASK_KINDS, AI_TASK_LOGIN_FILTERS } from "../app/sh
 import { createHostContext } from "../app/host/context.ts";
 import { createDispatcher } from "../app/host/dispatch.ts";
 import { createAiTasksHandlers, parseStartArgs } from "../app/host/handlers/ai-tasks.ts";
-import { buildAiTaskRows, describeOutcome } from "../src/application/ai-task-runner.ts";
+import { describeOutcome } from "../src/application/ai-task-runner.ts";
 import { HistoryRepository } from "../src/db/history-repository.ts";
 
 // ==================== 工具 ====================
@@ -190,7 +190,6 @@ function seed(ctx, rows) {
 }
 
 const START = AI_TASKS_INVOKE.aiTasksStart;
-const LOAD = AI_TASKS_INVOKE.aiTasksLoad;
 
 // ==================== 定义表 ====================
 
@@ -223,10 +222,9 @@ test("AI_TASK_KINDS：任务名 / 额外输入文案逐字照搬 Python 子类",
   );
 });
 
-test("通道登记：IPC 表包含两个通道，handler 表恰好实现它们", () => {
+test("通道登记：IPC 表包含通道，handler 表恰好实现它们", () => {
   const s = setup();
   try {
-    assert.equal(IPC.invoke.aiTasksLoad, "abb/aitasks/load");
     assert.equal(IPC.invoke.aiTasksStart, "abb/aitasks/start");
     assert.deepEqual(Object.keys(s.handlers).sort(), Object.values(AI_TASKS_INVOKE).sort());
   } finally {
@@ -776,142 +774,6 @@ test("全局单任务：已有任务时再启动 → TASK_BUSY", async () => {
     await s.finished();
     s.cleanup();
   }
-});
-
-// ==================== 加载 ====================
-
-test("load：平铺账号列表 + 分组统计；按 email 合并账号，只下发布尔值 / 登录状态，不含密码 / 密钥 / 辅助邮箱原文", async () => {
-  const s = setup({
-    groups: [
-      { id: 2, title: "组A" },
-      { id: 3, title: "\u0007" }, // 没有窗口，不显示
-      { id: 5, title: "" },
-    ],
-    windows: [
-      { profile_id: 11, name: "a@x.com", group_id: 2 },
-      { profile_id: 12, name: "b@x.com" }, // 无 group_id → 未分组
-      { profile_id: 13, name: "c@x.com", group_id: 9, group_name: "窗口里的组名" }, // group-list 里没有 → 用窗口自带组名
-      { profile_id: 14, name: "d@x.com", group_id: 5 },
-    ],
-  });
-  try {
-    s.ctx
-      .db()
-      .prepare(
-        "INSERT INTO accounts (email, password, secret_key, recovery_email, login_status, last_login_at) VALUES (?,?,?,?,?,?)",
-      )
-      .run("a@x.com", "PW-SECRET", "TOTPSECRETXYZ", "rec@y.com", "logged_in", "2026-09-23 16:14:36");
-    seed(s.ctx, [{ email: "d@x.com" }]);
-    /** @type {any} */
-    const res = await s.call(LOAD);
-    assert.equal(res.error, null);
-    assert.equal(res.totalBrowsers, 4);
-    assert.deepEqual(res.groups, [
-      { groupId: 0, groupName: "未分组", count: 1 },
-      { groupId: 2, groupName: "组A", count: 1 },
-      { groupId: 5, groupName: "分组 5", count: 1 },
-      { groupId: 9, groupName: "窗口里的组名", count: 1 },
-    ]);
-    assert.deepEqual(res.rows[0], {
-      key: "b:11",
-      profileId: 11,
-      email: "a@x.com",
-      groupId: 2,
-      groupName: "组A",
-      inDb: true,
-      hasRecoveryEmail: true,
-      hasSecret: true,
-      loginStatus: "logged_in",
-      lastLoginAt: "2026-09-23 16:14:36",
-    });
-    const b = res.rows[1];
-    assert.deepEqual([b.inDb, b.hasRecoveryEmail, b.hasSecret, b.loginStatus, b.lastLoginAt], [false, false, false, "", null]);
-    const d = res.rows[3];
-    assert.deepEqual([d.inDb, d.hasSecret, d.loginStatus], [true, false, "not_logged"], "schema 默认 not_logged");
-    const json = JSON.stringify(res);
-    for (const secret of ["PW-SECRET", "TOTPSECRETXYZ", "rec@y.com"]) assert.ok(!json.includes(secret), `不应下发 ${secret}`);
-  } finally {
-    s.cleanup();
-  }
-});
-
-test("load：分组与窗口列表并发请求，窗口列表按大页（≥1000）一次取完", async () => {
-  /** @type {any[]} */
-  const queries = [];
-  let profileCalledWhileGroupPending = false;
-  const s = setup({
-    ctxOverrides: {
-      ix: () => ({
-        async getGroupList() {
-          await new Promise((r) => setTimeout(r, 10));
-          profileCalledWhileGroupPending = queries.length > 0;
-          return [];
-        },
-        async getProfileList(q) {
-          queries.push(q);
-          return [{ profile_id: 1, name: "a@x.com" }];
-        },
-      }),
-    },
-  });
-  try {
-    /** @type {any} */
-    const res = await s.call(LOAD);
-    assert.equal(res.totalBrowsers, 1);
-    assert.ok(profileCalledWhileGroupPending, "窗口列表应与分组列表并发发出");
-    assert.equal(queries.length, 1);
-    assert.ok(queries[0].limit >= 1000, `limit 应 ≥ 1000，实际 ${queries[0].limit}`);
-  } finally {
-    s.cleanup();
-  }
-});
-
-test("load：读取失败时返回 error 字段而不抛异常", async () => {
-  const s = setup({
-    ctxOverrides: {
-      ix: () => {
-        throw new Error("ixBrowser 客户端创建失败");
-      },
-    },
-  });
-  try {
-    const res = await s.call(LOAD);
-    assert.deepEqual(res, { rows: [], groups: [], totalBrowsers: 0, error: "ixBrowser 客户端创建失败" });
-  } finally {
-    s.cleanup();
-  }
-});
-
-test("load：带参数 → INVALID_ARGUMENT", async () => {
-  const s = setup();
-  try {
-    await assert.rejects(s.call(LOAD, 1), (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT);
-  } finally {
-    s.cleanup();
-  }
-});
-
-test("load：非法窗口 ID 为 null，重复 ID 退回序号 key（规则同首页）", () => {
-  const t = buildAiTaskRows([], [], [
-    { profile_id: "x", name: "a" },
-    { profile_id: 1, name: "b" },
-    { profile_id: 1, name: "c" },
-    null,
-  ]);
-  assert.deepEqual(
-    t.rows.map((r) => [r.key, r.profileId, r.email]),
-    [
-      ["b:0:0", null, "a"],
-      ["b:1", 1, "b"],
-      ["b:0:2", 1, "c"],
-    ],
-  );
-});
-
-test("load：email 取窗口名原文（不清洗），与数据库按原文匹配", () => {
-  const t = buildAiTaskRows([{ email: "a@x.com\u200b" }], [], [{ profile_id: 1, name: "a@x.com\u200b" }]);
-  assert.equal(t.rows[0]?.email, "a@x.com\u200b");
-  assert.equal(t.rows[0]?.inDb, true);
 });
 
 // ==================== 参数校验 ====================

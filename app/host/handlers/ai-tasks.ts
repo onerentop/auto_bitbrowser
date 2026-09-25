@@ -1,7 +1,6 @@
 /**
  * 6 个 AI 批量任务页（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备 / 改密码）的后端 handler
  *
- * - load：读取账号 + 分组 + 窗口，只读，做成普通请求（分组与窗口并发、窗口大页，同 home.ts 的 listBrowsers）
  * - start：逐个账号跑 AI 自动化，耗时不定，必须走后台任务
  * 执行逻辑见 src/application/ai-task-runner.ts。
  */
@@ -14,21 +13,17 @@ import {
   AI_TASK_KINDS,
   isAiTaskKind,
   type AiTaskKind,
-  type AiTaskLoadResult,
   type AiTaskParams,
   type AiTaskStartItem,
 } from "../../shared/channels/ai-tasks.ts";
-import { getBrowserInfo, getBrowserList } from "../../../src/ixbrowser/window.ts";
-import { getGroupList } from "../../../src/ixbrowser/groups.ts";
+import { getBrowserInfo } from "../../../src/ixbrowser/window.ts";
 import {
   DEFAULT_AI_TASK_AUTOMATION,
-  buildAiTaskRows,
   runAiTask,
   type AiTaskAutomation,
   type ModifyAuthDeps,
   type ChangePasswordDeps,
 } from "../../../src/application/ai-task-runner.ts";
-import { HOME_LIST_PAGE_SIZE } from "./home.ts";
 
 /** 单次批量上限：防止误传超大数组 */
 const MAX_ITEMS = 10_000;
@@ -36,10 +31,6 @@ const MAX_ITEMS = 10_000;
 const MAX_PARAM_LENGTH = 200;
 /** email 长度上限（RFC 5321 为 254，这里放宽） */
 const MAX_EMAIL_LENGTH = 320;
-
-function errText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function invalid(message: string): CodedError {
   return new CodedError(ERROR_CODES.INVALID_ARGUMENT, message);
@@ -114,26 +105,6 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
   const automation = options.automation ?? DEFAULT_AI_TASK_AUTOMATION;
 
   return {
-    /**
-     * 加载分组与窗口，组装平铺账号列表。
-     * 分组与窗口并发请求、窗口每页 HOME_LIST_PAGE_SIZE 条（同首页：ixBrowser 每次请求约 3.3s 固定开销）。
-     * 任何一步抛错都返回 error 字段，不抛异常。
-     */
-    "abb/aitasks/load": async (...args: unknown[]): Promise<AiTaskLoadResult> => {
-      if (args.length > 0) throw invalid("该通道不接受参数");
-      try {
-        const accounts = ctx.accountRepo().getAllAccounts();
-        const deps = { client: ctx.ix(), log: ctx.log };
-        const [groups, browsers] = await Promise.all([
-          getGroupList(deps),
-          getBrowserList(deps, { fetchAll: true, limit: HOME_LIST_PAGE_SIZE }),
-        ]);
-        return { ...buildAiTaskRows(accounts, groups, browsers), error: null };
-      } catch (error) {
-        return { rows: [], groups: [], totalBrowsers: 0, error: errText(error) };
-      }
-    },
-
     "abb/aitasks/start": (...args: unknown[]): TaskInfo => {
       const parsed = parseStartArgs(args);
       const def = AI_TASK_KINDS[parsed.kind];
