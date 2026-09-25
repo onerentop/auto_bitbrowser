@@ -40,6 +40,7 @@ const SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
  *   saveDoesNothing?: boolean,
  *   navigateFails?: boolean,
  *   nextDoesNothing?: boolean,
+ *   english?: boolean,
  * }} [options]
  */
 function fakeEngine({
@@ -56,6 +57,8 @@ function fakeEngine({
   navigateFails = false,
   /** 点「下一步」不生效（弹层仍在）→ 钉住「确认页判定过宽会在弹层上盲点保存」 */
   nextDoesNothing = false,
+  /** 英文界面（真机 2026-09-25：GoRosaura803 等账号的 Google 页面是英文） */
+  english = false,
 } = {}) {
   /** @type {{ navigate: any[], fill: any[], act: any[], click: any[], jsClick: any[], clickByText: any[], totpSubmits?: number }} */
   const calls = { navigate: [], fill: [], act: [], click: [], jsClick: [], clickByText: [] };
@@ -112,6 +115,17 @@ function fakeEngine({
         return urls[state];
       },
       async getPageContent() {
+        if (english) {
+          if (confirmOpen)
+            return "2-Step Verification phones\nConfirm your phone number\nMake sure\n+86 138 0000 1234\nis the number you would like to save. When you need to use your phone number to verify it's you signing in, codes will be sent to this number by text message.\nBack\nSave";
+          if (dialogOpen)
+            return "2-Step Verification phones\nAdd a phone number\nA phone number can be used to verify it’s you when signing in\nReceive codes by text message\nReceive codes by voice message\nCancel\nNext";
+          if (state === "phone_page")
+            return `2-Step Verification phones\nYou can receive sign-in codes at these numbers.\nManage recovery phones\n07521 000100\n${
+              listHasNewPhone ? "+86 138 0000 1234\n" : ""
+            }Add a backup 2-Step Verification phone`;
+          if (state === "settings") return "2-Step Verification\nSecond steps\nPhone\n07521 000100";
+        }
         if (confirmOpen)
           return "确认您的电话号码\n请确认 +8613800001234 是您要保存的号码。\n上一步\n保存";
         if (dialogOpen)
@@ -154,21 +168,34 @@ function fakeEngine({
        */
       async clickByText(text) {
         calls.clickByText.push(text);
-        if (state === "settings" && text === "电话号码") state = "phone_page";
-        else if (state === "phone_page" && text === "添加两步验证备用电话号码") dialogOpen = true;
-        else if (dialogOpen && text === "下一步") {
+        // 英文界面的按钮文字（真机 2026-09-25 探针原文）；中文界面沿用原来的文字
+        const L = english
+          ? { entry: null, add: "Add a backup 2-Step Verification phone", next: "Next", save: "Save" }
+          : { entry: "电话号码", add: "添加两步验证备用电话号码", next: "下一步", save: "保存" };
+        let hit = false;
+        if (state === "settings" && text === L.entry) {
+          state = "phone_page";
+          hit = true;
+        } else if (state === "phone_page" && !dialogOpen && !confirmOpen && text === L.add) {
+          dialogOpen = true;
+          hit = true;
+        } else if (dialogOpen && text === L.next) {
+          hit = true;
           // 真机：点「下一步」只是进入「确认您的电话号码」页，还要再点「保存」才真正写入
           if (!nextDoesNothing) {
             dialogOpen = false;
             confirmOpen = true;
           }
-        } else if (confirmOpen && text === "保存") {
+        } else if (confirmOpen && text === L.save) {
+          hit = true;
           // 真机因果：只有「保存」真正生效，2SV 电话号码列表里才会出现新号码
           if (!saveDoesNothing) {
             listHasNewPhone = true;
             confirmOpen = false;
           }
         }
+        // 英文模式如实返回「没点中」（页面上没有这段文字时引擎返回 null）；中文模式保持原来的行为
+        if (english) return hit ? { tag: "BUTTON", href: null } : null;
         return { tag: "A", href: null };
       },
       async wait(ms) {
@@ -357,6 +384,20 @@ test("回归（真机 2026-09-24）：点「下一步」后还必须点「保存
   assert.ok(
     calls.clickByText.indexOf("下一步") < calls.clickByText.indexOf("保存"),
     `必须先点「下一步」再点「保存」: ${JSON.stringify(calls.clickByText)}`,
+  );
+});
+
+test("真机回归（2026-09-25）：英文界面（2-Step Verification phones / Confirm your phone number / Save）同样能加号并保存", async () => {
+  const { engine, calls } = fakeEngine({ english: true });
+  const result = await new Modify2SVOperation(engine).execute(NEW_PHONE, null, {
+    password: PASSWORD,
+    totpSecret: SECRET,
+  });
+  assert.equal(result.success, true, result.message);
+  assert.ok(calls.clickByText.includes("Save"), `英文确认页没有点 Save: ${JSON.stringify(calls.clickByText)}`);
+  assert.ok(
+    calls.clickByText.indexOf("Next") < calls.clickByText.indexOf("Save"),
+    `必须先点 Next 再点 Save: ${JSON.stringify(calls.clickByText)}`,
   );
 });
 

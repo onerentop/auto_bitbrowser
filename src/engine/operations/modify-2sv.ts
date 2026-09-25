@@ -25,6 +25,16 @@ import { GoogleURLs, Timeouts } from "../constants.ts";
 import { createModifyPhoneResult, type ModifyPhoneResult } from "../types.ts";
 import { GoogleReauth, REAUTH_STEP_TIMEOUT_MS, waitUntil, type ReauthCredentials } from "./reauth.ts";
 
+/** 2SV 电话号码列表页（真机可直接打开） */
+export const PHONE_NUMBERS_URL = "https://myaccount.google.com/two-step-verification/phone-numbers";
+/**
+ * 各步页面判定：中文 / 英文两种界面都要认（真机 2026-09-25：GoRosaura803 等账号的 Google 页面是英文，
+ * 只认中文时确认页永远认不出、不点保存，号码加不上）。英文原文来自真机探针 2sv-en-probe.log。
+ */
+const PHONE_PAGE = /添加两步验证备用电话号码|管理辅助电话号码|删除电话号码|Add a backup 2-Step Verification phone/;
+const ADD_DIALOG = /添加的电话号码可用于|通过短信接收验证码|Add a phone number|Receive codes by text message/;
+const CONFIRM_PAGE = /确认您的电话号码|Confirm your phone number/;
+
 /** 短信验证码服务（取码实现由调用方注入） */
 export interface SmsCodeService {
   getCode(phone: string): Promise<string | null>;
@@ -44,6 +54,12 @@ export class Modify2SVOperation {
   constructor(engine: StagehandGoogleEngine) {
     this.engine = engine;
     this.reauth = new GoogleReauth(engine);
+  }
+
+  /** 按顺序尝试按文本点击（中文界面文字在前、英文在后），命中一个就停；都没命中返回 false */
+  private async clickFirst(texts: readonly string[]): Promise<boolean> {
+    for (const t of texts) if (await this.engine.clickByText(t)) return true;
+    return false;
   }
 
   async execute(
@@ -149,8 +165,7 @@ export class Modify2SVOperation {
       // 「电话号码 <号>」条目；点它才会进入「用于进行两步验证的电话号码」页。AI act 在该元素上
       // 会「报成功但没效果」，所以先做确定性点击，并用页面上的「添加两步验证备用电话号码」复核，
       // 都没生效再退回一次 AI act。
-      const onPhonePage = async (): Promise<boolean> =>
-        /添加两步验证备用电话号码|管理辅助电话号码|删除电话号码/.test(await this.engine.getPageContent());
+      const onPhonePage = async (): Promise<boolean> => PHONE_PAGE.test(await this.engine.getPageContent());
       if (!(await onPhonePage())) {
         // 真机（2026-09-24）：该条目是 <a href="two-step-verification/phone-numbers">，
         // 而 `:is(a, button, [role="button"]):has-text("电话号码")` 这类选择器在 stagehand 的
@@ -158,6 +173,16 @@ export class Modify2SVOperation {
         // click()/jsClick() 只会静默返回 false → 不要再用 :has-text()。
         await this.engine.clickByText("电话号码");
         await this.engine.wait(Timeouts.AFTER_CLICK * 3);
+      }
+      if (!(await onPhonePage())) {
+        // 真机（2026-09-25）：英文界面上这个条目不叫「电话号码」；直接打开电话号码列表页（真机可达），
+        // 进页后同样可能要求重新验证身份。
+        const nav = await this.engine.navigate(PHONE_NUMBERS_URL, { timeoutMs: Timeouts.NAVIGATION });
+        if (nav.success) {
+          await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+          const reauth = await this.reauth.passIfRequired(credentials);
+          if (reauth && !reauth.success) return reauth;
+        }
       }
       if (!(await onPhonePage())) {
         await this.engine.act(
@@ -169,10 +194,9 @@ export class Modify2SVOperation {
       // Step 2（真机修正）：不再先删旧号。旧实现用 observe + 模糊指令去点「删除电话号码：…」，
       // 真机上会弹出确认框并把后续 act 全部带偏（实测 act #6~#9 连续 success=false、
       // 最后还误报「需要手动输入验证码」）。改为直接走添加流程；旧号是否另行删除留待决策。
-      const addDialogOpen = async (): Promise<boolean> =>
-        /添加的电话号码可用于|通过短信接收验证码/.test(await this.engine.getPageContent());
+      const addDialogOpen = async (): Promise<boolean> => ADD_DIALOG.test(await this.engine.getPageContent());
       if (!(await addDialogOpen())) {
-        await this.engine.clickByText("添加两步验证备用电话号码");
+        await this.clickFirst(["添加两步验证备用电话号码", "Add a backup 2-Step Verification phone"]);
         await this.engine.wait(Timeouts.AFTER_CLICK * 2);
       }
       if (!(await addDialogOpen())) {
@@ -192,12 +216,11 @@ export class Modify2SVOperation {
       }
       await this.engine.wait(Timeouts.AFTER_INPUT);
       // Step 5: 发送验证码 / 下一步（真机：AI act 会「成功但弹层没动」→ 确定性点击 + 复核弹层是否关闭）
-      const dialogGone = async (): Promise<boolean> =>
-        !/通过短信接收验证码|添加的电话号码可用于/.test(await this.engine.getPageContent());
+      const dialogGone = async (): Promise<boolean> => !ADD_DIALOG.test(await this.engine.getPageContent());
       if (!(await dialogGone())) {
         // 真机（2026-09-24）：弹层里的「下一步」同样不吃 :has-text() 选择器，
         // 且 AI act 会「报成功但弹层没动」，所以用按文本点击 + 复核弹层是否关闭。
-        await this.engine.clickByText("下一步");
+        await this.clickFirst(["下一步", "Next"]);
         await this.engine.wait(3000);
       }
       if (!(await dialogGone())) {
@@ -207,16 +230,16 @@ export class Modify2SVOperation {
       await this.engine.wait(3000);
 
       // Step 5b（真机 2026-09-24 新增）：点「下一步」之后**不是**验证码页，而是「确认您的电话号码」页
-      //（真机页面文本：确认您的电话号码 / 请确认 +86 … 是您要保存的号码 / 上一步 / 保存）。
+      //（真机页面文本：确认您的电话号码 / 请确认 +86 … 是您要保存的号码 / 上一步 / 保存；
+      //  英文：Confirm your phone number / Make sure … is the number you would like to save / Back / Save）。
       // 不点「保存」的话 2SV 电话号码列表里根本不会出现新号码——真机探针实测（任务目录 add-probe-2.log）。
-      // 判定只锚定该页独有的「确认您的电话号码」：单凭「请确认」会把还开着弹层的页面也判成确认页。
-      const confirmPage = async (): Promise<boolean> =>
-        /确认您的电话号码/.test(await this.engine.getPageContent());
+      // 判定只锚定该页独有的标题：单凭「请确认」会把还开着弹层的页面也判成确认页。
+      const confirmPage = async (): Promise<boolean> => CONFIRM_PAGE.test(await this.engine.getPageContent());
       // 确认页是「下一步」之后渲染出来的 → 轮询等它出现，而不是赌一次 3 秒固定等待
       if (await waitUntil(this.engine, confirmPage, REAUTH_STEP_TIMEOUT_MS)) {
         // clickByText 未命中就**不再发 AI act**：在这个页面上让模型自由点「保存」，
         // 它可能点到「上一步 / 取消 / 删除电话号码」；点不到就交给结果核对如实报失败。
-        if (await this.engine.clickByText("保存")) {
+        if (await this.clickFirst(["保存", "Save"])) {
           await this.engine.wait(Timeouts.AFTER_CLICK * 3);
         }
       }
@@ -258,10 +281,9 @@ export class Modify2SVOperation {
     credentials: ReauthCredentials,
   ): Promise<StepOutcome> {
     try {
-      const phoneNumbersUrl = "https://myaccount.google.com/two-step-verification/phone-numbers";
       // 审查发现：导航失败时页面会停在原地（可能还停在「确认您的电话号码」页，而该页正文里本来就有
       // 完整新号码）→ 不检查导航成败就会把它读成「列表里有新号码」= 假成功。
-      const nav = await this.engine.navigate(phoneNumbersUrl, { timeoutMs: Timeouts.NAVIGATION });
+      const nav = await this.engine.navigate(PHONE_NUMBERS_URL, { timeoutMs: Timeouts.NAVIGATION });
       if (!nav.success) {
         return {
           success: false,
