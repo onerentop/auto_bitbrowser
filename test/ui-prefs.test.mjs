@@ -6,16 +6,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  ACCOUNT_PAGE_SIZES,
-  DEFAULT_ACCOUNT_PAGE_SIZE,
+  PAGE_SIZES,
+  DEFAULT_PAGE_SIZE,
+  pageSizeKey,
   parsePageSize,
   parseCollapsed,
   clampPage,
 } from "../app/renderer/src/lib/ui-prefs.ts";
 
 test("每页条数选项与默认值", () => {
-  assert.deepEqual([...ACCOUNT_PAGE_SIZES], [20, 50, 100, 200]);
-  assert.equal(DEFAULT_ACCOUNT_PAGE_SIZE, 50);
+  assert.deepEqual([...PAGE_SIZES], [20, 50, 100, 200]);
+  assert.equal(DEFAULT_PAGE_SIZE, 50);
+});
+
+test("pageSizeKey：按列表分别记，账号表沿用旧键", () => {
+  assert.equal(pageSizeKey("accounts"), "abb/accounts/pageSize");
+  assert.equal(pageSizeKey("home"), "abb/home/pageSize");
+  assert.equal(pageSizeKey("taskHistoryItems"), "abb/taskHistoryItems/pageSize");
 });
 
 test("parsePageSize：只接受选项里的整数，其余回落 50", () => {

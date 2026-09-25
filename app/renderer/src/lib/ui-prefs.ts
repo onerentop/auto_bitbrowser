@@ -4,21 +4,23 @@
  * 纯函数、不碰 DOM：读写 localStorage 由调用方做，这里只把读到的字符串变成合法值。
  */
 
-/** 账号表每页条数的可选值 */
-export const ACCOUNT_PAGE_SIZES = [20, 50, 100, 200] as const;
-/** 账号表默认每页条数 */
-export const DEFAULT_ACCOUNT_PAGE_SIZE = 50;
+/** 列表每页条数的可选值（所有列表一致） */
+export const PAGE_SIZES = [20, 50, 100, 200] as const;
+/** 列表默认每页条数 */
+export const DEFAULT_PAGE_SIZE = 50;
 
-/** localStorage 键：账号表每页条数 */
-export const ACCOUNT_PAGE_SIZE_KEY = "abb/accounts/pageSize";
+/** localStorage 键：某个列表的每页条数（按列表分别记，如 abb/accounts/pageSize） */
+export function pageSizeKey(list: string): string {
+  return `abb/${list}/pageSize`;
+}
 /** localStorage 键：侧栏是否收起（"1" = 收起） */
 export const SIDER_COLLAPSED_KEY = "abb/shell/siderCollapsed";
 
 /** 每页条数：必须是可选值之一（严格十进制整数写法），否则回落默认 */
 export function parsePageSize(raw: string | null): number {
-  if (raw === null || !/^\d+$/.test(raw)) return DEFAULT_ACCOUNT_PAGE_SIZE;
+  if (raw === null || !/^\d+$/.test(raw)) return DEFAULT_PAGE_SIZE;
   const n = Number(raw);
-  return (ACCOUNT_PAGE_SIZES as readonly number[]).includes(n) ? n : DEFAULT_ACCOUNT_PAGE_SIZE;
+  return (PAGE_SIZES as readonly number[]).includes(n) ? n : DEFAULT_PAGE_SIZE;
 }
 
 /** 侧栏收起：只有 "1" 表示收起 */

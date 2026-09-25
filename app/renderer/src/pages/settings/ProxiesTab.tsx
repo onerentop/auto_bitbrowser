@@ -30,6 +30,7 @@ import { BatchImportModal } from "../../components/BatchImportModal.tsx";
 import { Panel } from "../../components/Section.tsx";
 import { useTokens, type Palette } from "../../theme/tokens.ts";
 import { rowSelect } from "../../components/row-select.ts";
+import { usePagination } from "../../components/use-pagination.ts";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 
@@ -118,6 +119,8 @@ function ProxyDetailModal(props: { proxyId: number | null; onClose: () => void }
   const { message } = App.useApp();
   const [bindings, setBindings] = useState<ProxyBindingDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 分页：换一个代理时回到第 1 页
+  const bindingsPager = usePagination("proxyBindings", bindings?.length ?? 0, [props.proxyId]);
 
   useEffect(() => {
     if (props.proxyId === null) return;
@@ -155,6 +158,7 @@ function ProxyDetailModal(props: { proxyId: number | null; onClose: () => void }
           size="small"
           bordered
           dataSource={bindings}
+          pagination={bindingsPager.pagination}
           renderItem={(b) => (
             <List.Item
               actions={[
@@ -199,6 +203,8 @@ export function ProxiesTab(): ReactElement {
   const [importOpen, setImportOpen] = useState(false);
   const hostReady = useHostStatus()?.state === "ready";
   const t = useTokens();
+  // 分页：刷新不跳页（数据变少时夹到最后一页）
+  const pager = usePagination("proxies", items.length, []);
 
   /** 加载列表数据 */
   const load = useCallback(async () => {
@@ -351,7 +357,7 @@ export function ProxiesTab(): ReactElement {
         loading={loading}
         rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]) }}
         onRow={proxyRow}
-        pagination={{ defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200] }}
+        pagination={pager.pagination}
         locale={{ emptyText: <Empty description="暂无代理" /> }}
         style={{ marginTop: 12 }}
       />

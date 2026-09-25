@@ -11,6 +11,7 @@ import type { ColumnsType } from "antd/es/table";
 import type { TagRef } from "../../../../shared/channels/accounts.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { useTokens } from "../../theme/tokens.ts";
+import { usePagination } from "../../components/use-pagination.ts";
 
 export interface TagManagerModalProps {
   open: boolean;
@@ -30,6 +31,8 @@ export function TagManagerModal({ open, vocabulary, usage, onClose, onChanged }:
   /** 正在改名的标签 id → 草稿名字 */
   const [editing, setEditing] = useState<{ id: number; title: string } | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // 分页：每次打开从第 1 页开始
+  const pager = usePagination("tags", vocabulary.length, [open]);
 
   const create = async (): Promise<void> => {
     const title = newTitle.trim();
@@ -173,7 +176,7 @@ export function TagManagerModal({ open, vocabulary, usage, onClose, onChanged }:
         rowKey="id"
         columns={columns}
         dataSource={vocabulary as TagRef[]}
-        pagination={false}
+        pagination={pager.pagination}
         scroll={{ y: 360 }}
         locale={{
           emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有任何标签" />,

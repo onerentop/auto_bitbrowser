@@ -84,13 +84,7 @@ import { PageHeader } from "../components/PageHeader.tsx";
 import { Panel } from "../components/Section.tsx";
 import { useTokens } from "../theme/tokens.ts";
 import { rowSelect } from "../components/row-select.ts";
-import {
-  ACCOUNT_PAGE_SIZES,
-  ACCOUNT_PAGE_SIZE_KEY,
-  DEFAULT_ACCOUNT_PAGE_SIZE,
-  clampPage,
-  parsePageSize,
-} from "../lib/ui-prefs.ts";
+import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../components/use-pagination.ts";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_delete", "health_check"]);
@@ -99,10 +93,6 @@ const EXPORT_FILE_NAME = "accounts_export.txt";
 
 /** 表格外框与表头占用的高度（表体高度 = 容器高度 - 该值） */
 const TABLE_CHROME = 40;
-/** 分页器与表格之间的间距 */
-const PAGINATION_GAP = 12;
-/** 分页器占用的高度（small 分页器 24px + 间距） */
-const PAGINATION_HEIGHT = 24 + PAGINATION_GAP;
 
 const EMPTY_LIST: readonly AccountListRow[] = [];
 /** 列设置（显示哪些列）在 localStorage 里的键 */
@@ -134,24 +124,6 @@ function writeHiddenColumns(keys: string[]): void {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(keys));
   } catch {
     logLocal("列设置保存失败：localStorage 不可写");
-  }
-}
-
-/** 读每页条数（非法值 / 读不到时回落默认 50） */
-function readPageSize(): number {
-  try {
-    return parsePageSize(localStorage.getItem(ACCOUNT_PAGE_SIZE_KEY));
-  } catch {
-    return DEFAULT_ACCOUNT_PAGE_SIZE;
-  }
-}
-
-/** 写每页条数（写不进去也只是这次会话不记住） */
-function writePageSize(size: number): void {
-  try {
-    localStorage.setItem(ACCOUNT_PAGE_SIZE_KEY, String(size));
-  } catch {
-    logLocal("每页条数保存失败：localStorage 不可写");
   }
 }
 
@@ -268,9 +240,6 @@ export function AccountsPage(): ReactElement {
   const [tagFilter, setTagFilter] = useState<number[]>([]);
   // 自己勾选要显示哪些列（默认隐藏分组 / 辅助邮箱 / 最后登录），改动记在 localStorage
   const [hiddenColumns, setHiddenColumns] = useState<string[]>(readHiddenColumns);
-  // 分页：每页条数记在 localStorage；页码不记
-  const [pageSize, setPageSize] = useState<number>(readPageSize);
-  const [page, setPage] = useState(1);
 
   // ---------- 数据加载 ----------
 
@@ -341,9 +310,8 @@ export function AccountsPage(): ReactElement {
     () => filterAccounts(rows, { groupId, login, text: deferredSearch, sameNameOnly, tagIds: tagFilter }),
     [rows, groupId, login, deferredSearch, sameNameOnly, tagFilter],
   );
-  // 分页：任一筛选条件变化回到第 1 页；数据变少时页码夹到最后一页（按派生值算，不另存）
-  useEffect(() => setPage(1), [groupId, login, deferredSearch, sameNameOnly, tagFilter]);
-  const currentPage = clampPage(page, visible.length, pageSize);
+  // 分页：任一筛选条件变化回到第 1 页（每页条数记在 abb/accounts/pageSize）
+  const pager = usePagination("accounts", visible.length, [groupId, login, deferredSearch, sameNameOnly, tagFilter]);
   const loginCounts = useMemo(() => countLogin(rows), [rows]);
   const sameNameCount = useMemo(() => rows.filter(hasSameNameWindows).length, [rows]);
 
@@ -959,25 +927,7 @@ export function AccountsPage(): ReactElement {
             columns={visibleColumns}
             dataSource={visible as AccountListRow[]}
             loading={loading}
-            pagination={{
-              current: currentPage,
-              pageSize,
-              total: visible.length,
-              size: "small",
-              showSizeChanger: true,
-              pageSizeOptions: ACCOUNT_PAGE_SIZES.map(String),
-              showTotal: (n, [from, to]) => `第 ${from}-${to} 条，共 ${n} 条`,
-              style: { margin: `${PAGINATION_GAP}px 0 0` },
-              onChange: (p, size) => {
-                if (size !== pageSize) {
-                  setPageSize(size);
-                  writePageSize(size);
-                  setPage(1);
-                } else {
-                  setPage(p);
-                }
-              },
-            }}
+            pagination={pager.pagination}
             showSorterTooltip={false}
             // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，所以按可见列宽之和算（含勾选列），
             // 容器更宽时 antd 会让各列按容器宽度补齐
@@ -998,14 +948,11 @@ export function AccountsPage(): ReactElement {
               preserveSelectedRowKeys: true,
               onChange: (keys) => setChecked(keys.map(String)),
               // 表头勾选框只勾当前页；要跨页批量操作用这里的「勾选全部筛选结果」
-              selections: [
-                {
-                  key: "all-filtered",
-                  text: `勾选全部筛选结果（${visible.length}）`,
-                  onSelect: () => setChecked((prev) => [...new Set([...prev, ...visible.map((r) => r.email)])]),
-                },
-                { key: "none", text: "清空勾选", onSelect: () => setChecked([]) },
-              ],
+              selections: crossPageSelections(
+                visible.map((r) => r.email),
+                checked,
+                setChecked,
+              ),
             }}
             onRow={(record) => ({
               ...accountRow(record),

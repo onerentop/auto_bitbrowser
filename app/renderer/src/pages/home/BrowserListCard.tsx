@@ -23,6 +23,7 @@ import {
 import { Panel } from "../../components/Section.tsx";
 import { TfaCell, useTfaCodes } from "../../components/TfaCodeCell.tsx";
 import { rowSelect } from "../../components/row-select.ts";
+import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../../components/use-pagination.ts";
 import { IPC, invoke } from "../../lib/ipc.ts";
 
 export interface BrowserListCardProps {
@@ -60,6 +61,8 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
     () => filterBrowsers(all, { groupId, text: deferredSearch }),
     [all, groupId, deferredSearch],
   );
+  // 分页：分组 / 搜索变化回到第 1 页
+  const pager = usePagination("home", visible.length, [groupId, deferredSearch]);
 
   // 验证码：只要可见行里有密钥的
   const tfaIds = useMemo(
@@ -76,7 +79,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME));
+      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -221,7 +224,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
           columns={columns}
           dataSource={visible as HomeBrowserNode[]}
           loading={{ spinning: props.loading, tip: "正在加载窗口列表..." }}
-          pagination={false}
+          pagination={pager.pagination}
           showSorterTooltip={false}
           // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，容器更宽时各列按容器宽度补齐
           virtual
@@ -246,6 +249,12 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
             preserveSelectedRowKeys: true,
             onChange: (keys) => setChecked(keys.map(String)),
             getCheckboxProps: (b) => ({ disabled: b.profileId === null }),
+            // 表头勾选框只勾当前页；跨页全选走下拉里的「勾选全部筛选结果」（未绑定窗口的行不可选）
+            selections: crossPageSelections(
+              visible.filter((b) => b.profileId !== null).map((b) => b.key),
+              checked,
+              setChecked,
+            ),
           }}
         />
       </div>

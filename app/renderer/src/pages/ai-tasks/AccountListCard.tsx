@@ -19,6 +19,7 @@ import { isSelectable, loginStatusLabel, rowSorter, statusTone, type RowRuntime,
 import { Panel } from "../../components/Section.tsx";
 import { useTokens } from "../../theme/tokens.ts";
 import { rowSelect } from "../../components/row-select.ts";
+import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../../components/use-pagination.ts";
 
 export interface AccountListCardProps {
   list: AiTaskLoadResult | null;
@@ -68,6 +69,8 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
   const { runtime, visible } = props;
   const total = props.list?.totalBrowsers ?? 0;
   const t = useTokens();
+  // 分页：搜索 / 分组 / 登录状态 / 只看失败变化回到第 1 页（6 个 AI 任务页共用一个每页条数）
+  const pager = usePagination("aiTasks", visible.length, [props.search, props.groupId, props.login, props.failedOnly]);
 
   // 表格高度跟随容器（面板占满页面剩余高度）
   const boxRef = useRef<HTMLDivElement>(null);
@@ -76,7 +79,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME));
+      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -246,7 +249,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
           columns={columns}
           dataSource={visible as AiTaskRow[]}
           loading={{ spinning: props.loading, tip: "正在加载账号..." }}
-          pagination={false}
+          pagination={pager.pagination}
           showSorterTooltip={false}
           // 虚拟滚动：只渲染可视区域的行；虚拟表要求 scroll.x 是数字，容器更宽时各列按容器宽度补齐
           virtual
@@ -268,6 +271,12 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
             preserveSelectedRowKeys: true,
             onChange: (keys) => props.onCheckedChange(keys.map(String)),
             getCheckboxProps: (r) => ({ disabled: !isSelectable(r) }),
+            // 表头勾选框只勾当前页；跨页全选走下拉里的「勾选全部筛选结果」（只含可选的行）
+            selections: crossPageSelections(
+              visible.filter(isSelectable).map((r) => r.key),
+              props.checkedKeys,
+              props.onCheckedChange,
+            ),
           }}
           onRow={accountRow}
         />

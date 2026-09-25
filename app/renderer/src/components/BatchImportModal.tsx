@@ -15,6 +15,7 @@ import {
 } from "../../../shared/logic/settings-data.ts";
 import { describeError } from "../lib/ipc.ts";
 import { useTokens } from "../theme/tokens.ts";
+import { usePagination } from "./use-pagination.ts";
 
 export interface BatchImportModalProps<T> {
   open: boolean;
@@ -59,6 +60,8 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
       }),
     [rows, formatPreviewRow],
   );
+  // 分页：粘贴内容变化（预览重新解析）时回到第 1 页
+  const pager = usePagination("importPreview", preview.length, [preview]);
 
   const close = (): void => {
     setText("");
@@ -134,7 +137,7 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
           rowKey="key"
           columns={tableColumns}
           dataSource={preview}
-          pagination={preview.length > 100 ? { pageSize: 100, showSizeChanger: false } : false}
+          pagination={pager.pagination}
           scroll={{ y: 240 }}
         />
         <Typography.Text type="secondary">

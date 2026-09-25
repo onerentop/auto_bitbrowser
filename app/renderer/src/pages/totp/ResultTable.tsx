@@ -9,6 +9,7 @@ import { Empty, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { TOTP_STATUS_TEXT, type TotpEntry, type TotpMatchRow, type TotpMatchStatus } from "../../../../shared/channels/totp.ts";
 import { rowSelect } from "../../components/row-select.ts";
+import { PAGINATION_HEIGHT, usePagination } from "../../components/use-pagination.ts";
 
 export interface ResultRow {
   /** 在 entries 里的下标（行键） */
@@ -95,6 +96,8 @@ export interface ResultTableProps {
 const TABLE_CHROME = 40;
 
 export function ResultTable({ rows, selected, onSelectedChange }: ResultTableProps): ReactElement {
+  // 分页：结果重新解析 / 切换「只看匹配」时回到第 1 页
+  const pager = usePagination("totp", rows.length, [rows]);
   // 表格高度跟随容器（结果面板占满页面剩余高度）
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(360);
@@ -102,7 +105,7 @@ export function ResultTable({ rows, selected, onSelectedChange }: ResultTablePro
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setBodyHeight(Math.max(160, Math.floor(entry.contentRect.height) - TABLE_CHROME));
+      if (entry) setBodyHeight(Math.max(160, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -123,7 +126,7 @@ export function ResultTable({ rows, selected, onSelectedChange }: ResultTablePro
         rowKey="index"
         columns={columns}
         dataSource={rows}
-        pagination={false}
+        pagination={pager.pagination}
         scroll={{ y: bodyHeight }}
         locale={{
           emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据，先选择 QR 码截图或解析文本" />,

@@ -13,6 +13,7 @@ import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { onTaskFinished } from "../../stores/task.ts";
 import { Panel, Section } from "../../components/Section.tsx";
 import { rowSelect } from "../../components/row-select.ts";
+import { usePagination } from "../../components/use-pagination.ts";
 
 /** 任务结果的标签色：antd 语义色（主题里已映射到 ok / warn / bad 令牌） */
 function outcomeTag(outcome: string | null): ReactElement {
@@ -130,6 +131,10 @@ export function TaskHistoryTab(): ReactElement {
     mode: "always",
   });
 
+  // 分页：任务列表刷新不跳页（数据变少时夹到最后一页）；换一条任务时逐条目结果回到第 1 页
+  const runsPager = usePagination("taskHistory", runs.length, []);
+  const itemsPager = usePagination("taskHistoryItems", items.length, [selectedRunId]);
+
   return (
     <Panel>
       <Section
@@ -160,7 +165,7 @@ export function TaskHistoryTab(): ReactElement {
           dataSource={runs}
           loading={loading}
           locale={{ emptyText: <Empty description="还没有任务记录" /> }}
-          pagination={runs.length > 0 ? { pageSize: 20, size: "small" } : false}
+          pagination={runsPager.pagination}
           rowSelection={{
             type: "radio",
             selectedRowKeys: selectedRunId === null ? [] : [selectedRunId],
@@ -179,7 +184,7 @@ export function TaskHistoryTab(): ReactElement {
             size="small"
             columns={itemColumns}
             dataSource={items}
-            pagination={{ pageSize: 20, size: "small" }}
+            pagination={itemsPager.pagination}
           />
         )}
       </Section>
