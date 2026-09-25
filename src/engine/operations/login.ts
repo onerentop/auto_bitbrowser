@@ -226,6 +226,9 @@ export class LoginOperation {
       }
       if (pre.otherAccount) log("窗口当前登录的是其他账号，继续登录目标账号");
 
+      // 没登录又没有密码（数据库缺密码）：不去登录页提交空密码，直接说明原因
+      if (!password) return fail("logged_out", "no_password", "数据库里没有该账号的密码，无法登录");
+
       // 2. 打开登录页
       log("打开 Google 登录页");
       const nav = await this.engine.navigate(SIGNIN_URL, { timeoutMs: Timeouts.NAVIGATION });

@@ -1,5 +1,5 @@
 /**
- * 5 个 AI 批量任务页（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备） 的后端 handler
+ * 6 个 AI 批量任务页（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备 / 改密码）的后端 handler
  *
  * - load：读取账号 + 分组 + 窗口，只读，做成普通请求（分组与窗口并发、窗口大页，同 home.ts 的 listBrowsers）
  * - start：逐个账号跑 AI 自动化，耗时不定，必须走后台任务
@@ -7,7 +7,8 @@
  */
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
-import type { TaskInfo } from "../../shared/ipc.ts";
+import { IPC, type TaskInfo } from "../../shared/ipc.ts";
+import { MANUAL_LOGIN_STATUSES, type ManualLoginStatus } from "../../shared/channels/accounts.ts";
 import { CodedError, ERROR_CODES } from "../../shared/envelope.ts";
 import {
   AI_TASK_KINDS,
@@ -171,6 +172,18 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
             const info = await getBrowserInfo({ client: ctx.ix(), log: api.log }, profileId);
             return info ? String(info.name ?? "") : null;
           }),
+          // 执行前确认登录：结果写库，并广播给账号页 / AI 任务页就地刷新（同手动设置登录状态的事件）
+          loginSink: {
+            accountRepo: () => ctx.accountRepo(),
+            changed: (email, status, lastError) => {
+              if (!(MANUAL_LOGIN_STATUSES as readonly string[]).includes(status)) return;
+              ctx.emit(IPC.event.accountsLoginStatusChanged, {
+                emails: [email],
+                status: status as ManualLoginStatus,
+                lastError,
+              });
+            },
+          },
         }),
       );
     },

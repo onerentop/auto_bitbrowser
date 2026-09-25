@@ -1,5 +1,6 @@
 /**
- * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备）的执行逻辑
+ * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备 / 改密码）的执行逻辑
+ * 每个账号执行前先确认登录（已登录直接执行，未登录才登录，登录失败不执行）。
  *
  * 包含四部分：
  *   - buildAiTaskRows：窗口列表 + 数据库账号 → 平铺账号列表
@@ -31,6 +32,7 @@ import { autoModify2svPhone } from "../automation/auto-modify-2sv-phone.ts";
 import { autoModifyAuthenticator } from "../automation/auto-modify-authenticator.ts";
 import { autoKickDevices } from "../automation/auto-kick-devices.ts";
 import { autoChangePassword } from "../automation/auto-change-password.ts";
+import { autoGoogleLogin } from "../automation/auto-google-login.ts";
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -98,6 +100,8 @@ export interface AiTaskAutomation {
   autoModifyAuthenticator: typeof autoModifyAuthenticator;
   autoKickDevices: typeof autoKickDevices;
   autoChangePassword: typeof autoChangePassword;
+  /** 执行前确认登录（已登录直接返回，不再登录） */
+  autoGoogleLogin: typeof autoGoogleLogin;
 }
 
 export const DEFAULT_AI_TASK_AUTOMATION: AiTaskAutomation = {
@@ -107,6 +111,7 @@ export const DEFAULT_AI_TASK_AUTOMATION: AiTaskAutomation = {
   autoModifyAuthenticator,
   autoKickDevices,
   autoChangePassword,
+  autoGoogleLogin,
 };
 
 /** modify_auth 保存新密钥所需的依赖（不注入则 automation 不写库） */
@@ -145,6 +150,14 @@ export interface AiTaskRunnerDeps {
    * 不一致则跳过（见 runAiTask）。生产环境由 handler 注入；不提供则不校验（仅供测试）。
    */
   getWindowName?: (profileId: number) => Promise<string | null>;
+  /**
+   * 执行前确认登录的写库与通知：登录结果经 accountRepo 写入登录状态，
+   * 写完后调 changed（handler 用它广播 loginStatusChanged，账号页 / AI 任务页就地刷新）。
+   */
+  loginSink: {
+    accountRepo: () => Pick<AccountRepository, "updateLoginStatus">;
+    changed: (email: string, status: string, lastError: string | null) => void;
+  };
 }
 
 /** 窗口与账号对应关系已变化（跳过，不执行任何操作） */
@@ -298,8 +311,38 @@ export async function runAiTask(
       }
       const row = deps.getAccount(email);
       const accountInfo: Record<string, unknown> = row ? { ...row } : { email };
-      const outcome = await invokeAiTask(options.kind, String(profileId), accountInfo, options.params, deps);
-      ({ status, message } = describeOutcome(options.kind, outcome));
+
+      // 执行前确认登录：autoGoogleLogin 第一步打开 myaccount 检查，**显示该账号就直接返回、不再登录**；
+      // 没登录才用数据库账号信息登录。登录失败就不执行操作 —— 否则操作页会被跳到登录页，
+      // 报出含糊的「需要先登录账号」（真机 2026-09-25：数据库写已登录，窗口其实早已退出）。
+      let login: { success: boolean; message: string; loginStatus: string };
+      try {
+        login = await deps.automation.autoGoogleLogin(String(profileId), accountInfo, {
+          callback: api.log,
+          accountRepo: deps.loginSink.accountRepo(),
+        });
+      } catch (error) {
+        // autoGoogleLogin 正常会把异常折成返回值；万一漏出来，也按「登录失败，未执行」处理
+        login = { success: false, message: errText(error), loginStatus: "login_failed" };
+      }
+      // 写库只对数据库里有的账号生效；按写完后的库内值通知界面（与账号页显示的一致）
+      if (row) {
+        const after = deps.getAccount(email);
+        deps.loginSink.changed(email, String(after?.["login_status"] ?? login.loginStatus), textOf(after?.["last_error"]) || null);
+      }
+
+      if (!login.success) {
+        status = AI_TASK_ITEM_STATUS.failed;
+        message = `登录失败，未执行${def.taskName}：${login.message}`;
+      } else if (api.shouldStop()) {
+        // 登录耗时长（开窗 + 完整登录可达几十秒）：用户在这段时间点了停止，就不再执行会改账号的操作。
+        // 下一轮循环开头的停止检查会结束整个任务。
+        status = AI_TASK_ITEM_STATUS.failed;
+        message = `已停止，未执行${def.taskName}`;
+      } else {
+        const outcome = await invokeAiTask(options.kind, String(profileId), accountInfo, options.params, deps);
+        ({ status, message } = describeOutcome(options.kind, outcome));
+      }
     } catch (error) {
       status = error instanceof WindowMismatchError ? AI_TASK_ITEM_STATUS.failed : AI_TASK_ITEM_STATUS.error;
       message = errText(error);

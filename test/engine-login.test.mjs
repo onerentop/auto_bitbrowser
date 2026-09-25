@@ -542,6 +542,22 @@ test("窗口已以该账号登录：直接返回，不输入任何东西", async
   assert.ok(logs.some((l) => l.includes("已处于登录状态")));
 });
 
+test("未登录且没有密码（数据库缺密码）：不提交空密码，直接判失败并说明原因", async () => {
+  const g = new FakeGoogle();
+  const { result } = await run(g, { password: "" });
+  assert.equal(result.success, false);
+  assert.match(result.error ?? "", /没有该账号的密码/);
+  assert.deepEqual(g.writes, [], "不在登录页输入任何东西");
+  assert.ok(!g.navs.includes(SIGNIN_URL), "不打开登录页");
+});
+
+test("已登录但没有密码：照样判已登录（不需要密码）", async () => {
+  const g = new FakeGoogle({ signedInAs: EMAIL });
+  const { result } = await run(g, { password: "" });
+  assert.equal(result.success, true);
+  assert.equal(result.message, "已登录");
+});
+
 test("窗口登录的是其他账号：不算已登录，继续登录目标账号", async () => {
   const g = new FakeGoogle({ signedInAs: "someone.else@gmail.com" });
   const { result, logs } = await run(g);
