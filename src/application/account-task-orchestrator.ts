@@ -325,15 +325,14 @@ export async function executeAccountWorkerTask(params: {
     }
   };
 
-  // 进度回调：转发日志，并在收到日志时兜底检查停止请求
+  // 进度回调：转发日志，并在收到日志时兜底检查停止请求（只触发一次：
+  // processor.stop() 自己也会写日志回到这里，重复调用曾造成无限递归，见 BatchAccountProcessor.stop）
   const processorProgress = (message: string): void => {
     log(message);
-    if (shouldStop()) {
+    if (shouldStop() && !stopLogged) {
+      stopLogged = true;
+      log("用户停止任务");
       processor?.stop();
-      if (!stopLogged) {
-        stopLogged = true;
-        log("用户停止任务");
-      }
     }
   };
 

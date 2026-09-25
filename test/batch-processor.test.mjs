@@ -23,6 +23,7 @@ import {
   BatchAccountProcessor,
   quickBatchLogin,
 } from "../src/automation/batch-account-processor.ts";
+import { executeAccountWorkerTask } from "../src/application/account-task-orchestrator.ts";
 
 // ==================== 替身 ====================
 
@@ -482,4 +483,75 @@ test("onAccountDone: 未注入时不报错（其它调用方不受影响）", as
   const p = new BatchAccountProcessor({ concurrency: 1 }, makeDeps({ loginFn: async () => ok() }));
   const result = await p.batchLogin([acct("a@x.com")], ["1"]);
   assert.equal(result.success_count, 1);
+});
+
+// ==================== 停止：不能死循环（真机 2026-09-25） ====================
+
+test("stop(): 重复调用只生效一次、只记一条日志；日志回调里再调 stop() 也不会递归", () => {
+  /** @type {string[]} */
+  const msgs = [];
+  /** @type {BatchAccountProcessor | null} */
+  let ref = null;
+  const p = new BatchAccountProcessor(
+    {
+      callback: (m) => {
+        msgs.push(m);
+        ref?.stop(); // 编排层的日志回调就是这么做的
+      },
+    },
+    makeDeps({ accountRepo: fakeAccountRepo() }),
+  );
+  ref = p;
+  p.stop();
+  p.stop();
+  assert.equal(msgs.filter((m) => m.includes("收到停止信号")).length, 1);
+});
+
+test("真机回归：批量登录中点停止 → 只停一次、不死循环；正在登录的账号结束后任务按「已停止」收尾，后面的账号不再登录", async () => {
+  let stopRequested = false;
+  /** @type {(() => void) | null} */
+  let stopHook = null;
+  /** @type {string[]} */
+  const logs = [];
+  /** @type {string[]} */
+  const started = [];
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise((r) => (release = () => r(undefined)));
+  const run = executeAccountWorkerTask({
+    taskType: "login",
+    accounts: [acct("a@x.com"), acct("b@x.com")],
+    browserIds: ["1", "2"],
+    concurrency: 1,
+    llm: /** @type {any} */ ({}),
+    shouldStop: () => stopRequested,
+    onStop: (fn) => {
+      stopHook = fn;
+    },
+    log: (m) => logs.push(m),
+    // 与生产装配一致：批处理器的日志回调就是编排层的 processorProgress
+    createProcessor: (o) =>
+      new BatchAccountProcessor(
+        { concurrency: o.concurrency, callback: o.callback, onAccountDone: o.onAccountDone ?? null },
+        makeDeps({
+          accountRepo: fakeAccountRepo(),
+          config: fakeConfig({ maxRetries: 1 }),
+          loginFn: async ({ account }) => {
+            started.push(String(account.email));
+            await gate;
+            return ok();
+          },
+        }),
+      ),
+  });
+  await tick();
+  // 与 TaskRunner.stop() 一样：先置标志，再触发停止钩子
+  stopRequested = true;
+  /** @type {() => void} */ (/** @type {unknown} */ (stopHook))();
+  release();
+  const r = await run;
+  assert.equal(logs.filter((m) => m.includes("收到停止信号")).length, 1, "停止日志只能有一条");
+  assert.equal(logs.filter((m) => m === "用户停止任务").length, 1, "「用户停止任务」只记一次，不随后续每条日志重复");
+  assert.deepEqual(started, ["a@x.com"], "停止后不再开始下一个账号");
+  assert.equal(r["type"], "stopped");
 });

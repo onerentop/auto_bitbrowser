@@ -212,8 +212,15 @@ export class BatchAccountProcessor {
     if (this.callback) this.callback(msg);
   }
 
- /** 停止处理 */
+ /**
+   * 停止处理（幂等：只有第一次生效、只记一条日志）。
+   *
+   * 真机 2026-09-25：这里的日志会经 callback 回到编排层，而编排层收到日志时看到「已请求停止」
+   * 又会调 stop() —— 不幂等就会互相调用无限递归（日志里刷出几千条「收到停止信号」、
+   * 最终爆栈，界面被日志事件淹没卡死，停止按钮看起来「停不了」）。
+   */
   stop(): void {
+    if (this.stopFlag) return;
     this.stopFlag = true;
     this.log("收到停止信号");
   }
