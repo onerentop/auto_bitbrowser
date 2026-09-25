@@ -271,6 +271,50 @@ test("分派：replace_email 透传 newEmail；未传参数时为空串", async 
   }
 });
 
+test("真机回归（2026-09-25）：replace_email 成功后把新辅助邮箱写进数据库；失败不写、空参数不写", async () => {
+  const s = setup({ check: { "a@x.com": "in", "b@x.com": "in", "c@x.com": "in" }, behavior: { "b@x.com": "fail" } });
+  seed(s.ctx, [{ email: "a@x.com" }, { email: "b@x.com" }, { email: "c@x.com" }]);
+  s.ctx.accountRepo().upsertAccount({ email: "a@x.com", recovery_email: "old@y.com" });
+  s.ctx.accountRepo().upsertAccount({ email: "b@x.com", recovery_email: "old-b@y.com" });
+  s.ctx.accountRepo().upsertAccount({ email: "c@x.com", recovery_email: "old-c@y.com" });
+  try {
+    await s.call(
+      START,
+      "replace_email",
+      [
+        { email: "a@x.com", profileId: 1 },
+        { email: "b@x.com", profileId: 2 },
+      ],
+      { newEmail: " New@Y.com " },
+    );
+    await s.finished();
+    const repo = s.ctx.accountRepo();
+    assert.equal(repo.getAccountByEmail("a@x.com")?.recovery_email, "New@Y.com", "成功：写入新辅助邮箱（去首尾空白）");
+    assert.equal(repo.getAccountByEmail("b@x.com")?.recovery_email, "old-b@y.com", "失败：不动库里的辅助邮箱");
+
+    await s.call(START, "replace_email", [{ email: "c@x.com", profileId: 3 }], {});
+    await s.finished();
+    assert.equal(repo.getAccountByEmail("c@x.com")?.recovery_email, "old-c@y.com", "没给新邮箱：不写空值");
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("replace_email 成功但写库失败：行状态为失败并说明 Google 侧已改、库没写上（改动不能静默丢失）", async () => {
+  const s = setup({ check: { "a@x.com": "in" } });
+  seed(s.ctx, [{ email: "a@x.com" }]);
+  const repo = s.ctx.accountRepo();
+  repo.upsertAccount = () => false; // 模拟写库失败（仓储出错时返回 false）
+  try {
+    await s.call(START, "replace_email", [{ email: "a@x.com", profileId: 1 }], { newEmail: "n@y.com" });
+    const fin = await s.finished();
+    assert.equal(fin.result.results[0].status, "失败");
+    assert.match(fin.result.results[0].message, /已替换.*写入数据库失败/);
+  } finally {
+    s.cleanup();
+  }
+});
+
 test("分派：modify_2sv 不显式传 closeAfter（取函数默认值 true）", async () => {
   const s = setup();
   try {

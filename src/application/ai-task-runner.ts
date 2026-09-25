@@ -158,7 +158,7 @@ export interface AiTaskRunnerDeps {
    * 写完后调 changed（handler 用它广播 loginStatusChanged，账号页 / AI 任务页就地刷新）。
    */
   loginSink: {
-    accountRepo: () => Pick<AccountRepository, "updateLoginStatus">;
+    accountRepo: () => Pick<AccountRepository, "updateLoginStatus" | "upsertAccount">;
     changed: (email: string, status: string, lastError: string | null) => void;
   };
 }
@@ -361,6 +361,15 @@ export async function runAiTask(
       } else {
         const outcome = await invokeAiTask(options.kind, String(profileId), accountInfo, options.params, deps);
         ({ status, message } = describeOutcome(options.kind, outcome));
+        // 替换辅助邮箱成功：新邮箱写回数据库（真机 2026-09-25：原来只改了 Google 侧，库里还是旧邮箱）。
+        // 写库失败不能静默——Google 侧已经改了，行状态判失败并说明，方便人工补录。
+        const newEmail = (options.params.newEmail ?? "").trim();
+        if (options.kind === "replace_email" && outcome.ok && newEmail && row) {
+          if (!deps.loginSink.accountRepo().upsertAccount({ email, recovery_email: newEmail })) {
+            status = AI_TASK_ITEM_STATUS.failed;
+            message = `辅助邮箱已替换为 ${newEmail}，但写入数据库失败，请手动更新`;
+          }
+        }
       }
     } catch (error) {
       status = error instanceof WindowMismatchError ? AI_TASK_ITEM_STATUS.failed : AI_TASK_ITEM_STATUS.error;
