@@ -33,7 +33,8 @@ export interface ReauthOutcome {
 export type ReauthEngine = Pick<
   StagehandGoogleEngine,
   "getCurrentUrl" | "getPageContent" | "isVisible" | "fill" | "pressKey" | "click" | "jsClick" | "wait"
->;
+> &
+  Partial<Pick<StagehandGoogleEngine, "bringToFront">>;
 
 /** 验证页的输入框 / 按钮选择器（与 login.ts 同一套） */
 export const REAUTH_PASSWORD_SELECTORS: readonly string[] = ['input[name="Passwd"]', '#password input[type="password"]'];
@@ -138,6 +139,10 @@ export class GoogleReauth {
   private async complete(credentials: ReauthCredentials): Promise<ReauthOutcome> {
     const password = String(credentials.password ?? "");
     const secret = String(credentials.totpSecret ?? "").replace(/\s/g, "");
+
+    // 真机 2026-09-25（窗口 120，两个标签页）：验证页在后台标签页（document.hidden）时，
+    // 可见性检查把明明已渲染的密码框一律判成不可见，最后报「未找到输入框」。先切到前台（同 login.ts）。
+    await this.engine.bringToFront?.();
 
     for (let round = 1; round <= this.maxRounds; round++) {
       const totpSelector = await visibleSelector(this.engine, REAUTH_TOTP_SELECTORS);

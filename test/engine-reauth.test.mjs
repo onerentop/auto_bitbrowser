@@ -60,14 +60,15 @@ const WINDOW_START = 1_700_000_000_000 - (1_700_000_000_000 % 30_000);
  *   next[页面] = 在该页提交后去哪（留在原页 = 被拒）；
  *   pressKeyOk / clickOk / jsClickOk 控制三种提交方式是否生效。
  * @param {string} start 起始页面（PAGES 的键）
- * @param {{ next?: Record<string, string>, pressKeyOk?: boolean, clickOk?: boolean, jsClickOk?: boolean, onWait?: (n: number, setState: (s: string) => void) => void }} [options]
+ * @param {{ next?: Record<string, string>, pressKeyOk?: boolean, clickOk?: boolean, jsClickOk?: boolean, onWait?: (n: number, setState: (s: string) => void) => void, backgroundTab?: boolean }} [options]
  */
-function fakeEngine(start, { next = {}, pressKeyOk = true, clickOk = true, jsClickOk = true, onWait } = {}) {
+function fakeEngine(start, { next = {}, pressKeyOk = true, clickOk = true, jsClickOk = true, onWait, backgroundTab = false } = {}) {
   let clock = WINDOW_START;
   let state = start;
   let filled = false;
-  /** @type {{ fill: any[], press: number, click: any[], jsClick: any[], waits: any[], act: any[] }} */
-  const calls = { fill: [], press: 0, click: [], jsClick: [], waits: [], act: [] };
+  /** @type {{ fill: any[], press: number, click: any[], jsClick: any[], waits: any[], act: any[], front: number }} */
+  const calls = { fill: [], press: 0, click: [], jsClick: [], waits: [], act: [], front: 0 };
+  let background = backgroundTab;
   const submit = (ok) => {
     if (ok && filled) {
       state = next[state] ?? state;
@@ -83,6 +84,8 @@ function fakeEngine(start, { next = {}, pressKeyOk = true, clickOk = true, jsCli
       return PAGES[state].text;
     },
     async isVisible(selector) {
+      // 后台标签页（document.hidden）：Stagehand 的可见性检查一律判不可见（真机窗口 120）
+      if (background) return false;
       return PAGES[state].visible.includes(selector);
     },
     async fill(selector, value) {
@@ -107,6 +110,10 @@ function fakeEngine(start, { next = {}, pressKeyOk = true, clickOk = true, jsCli
       clock += ms;
       // 让用例可以在轮询途中改页面（模拟「Google 的 302 晚一拍才落地」）
       onWait?.(calls.waits.length, (s) => (state = s));
+    },
+    async bringToFront() {
+      calls.front += 1;
+      background = false;
     },
     async act(instruction) {
       calls.act.push(instruction);
@@ -231,6 +238,14 @@ test("验证页上一直没有输入框：等满一步的上限后报「未找�
   assert.equal(r.success, false);
   assert.equal(r.error, "未找到输入框");
   assert.deepEqual(fake.calls.fill, []);
+});
+
+test("真机回归（2026-09-25）：验证页在后台标签页（document.hidden）时输入框判不可见 → 先切到前台再找", async () => {
+  const fake = fakeEngine("pwd", { next: { pwd: "settings" }, backgroundTab: true });
+  const r = await withClock(fake, () => new GoogleReauth(fake.engine).passIfRequired(CREDS));
+  assert.deepEqual(r, { success: true }, "切到前台后应能找到密码框并通过");
+  assert.equal(fake.calls.front, 1);
+  assert.deepEqual(fake.calls.fill.map((f) => f.selector), [PWD]);
 });
 
 test("缺凭据：缺密码 / 缺密钥各自如实报错，不提交", async () => {
