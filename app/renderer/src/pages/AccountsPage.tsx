@@ -36,19 +36,23 @@ import {
   CloudDownloadOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  DownOutlined,
   EditOutlined,
   MinusCircleOutlined,
   PlusOutlined,
   SyncOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
-import type {
-  AccountListRow,
-  AccountsAction,
-  AccountsListResult,
-  AutoBindSummary,
-  ConfirmStep,
-  SelectedRow,
+import {
+  MANUAL_LOGIN_STATUSES,
+  MANUAL_LOGIN_STATUS_LABEL,
+  type AccountListRow,
+  type AccountsAction,
+  type AccountsListResult,
+  type AutoBindSummary,
+  type ConfirmStep,
+  type ManualLoginStatus,
+  type SelectedRow,
 } from "../../../shared/channels/accounts.ts";
 import {
   ACCOUNT_LOGIN_FILTERS,
@@ -58,6 +62,7 @@ import {
   hasSameNameWindows,
   autoBindNotice,
   applyLoginItem,
+  applyLoginStatusChange,
   applyNoteUpdate,
   applyTagsUpdate,
   type AccountLoginFilter,
@@ -68,7 +73,7 @@ import {
   formatAccountPreviewRow,
   parseAccountImportLine,
 } from "../../../shared/logic/settings-data.ts";
-import { IPC, describeError, invoke } from "../lib/ipc.ts";
+import { IPC, describeError, invoke, on } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { BatchImportModal } from "../components/BatchImportModal.tsx";
@@ -87,6 +92,9 @@ import { rowSelect } from "../components/row-select.ts";
 import { StatusDot } from "../components/StatusDot.tsx";
 import { accountLoginTone, railClass } from "../lib/list-tone.ts";
 import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../components/use-pagination.ts";
+
+/** 右键菜单「设置登录状态」子项的 key 前缀 */
+const LOGIN_STATUS_KEY_PREFIX = "loginStatus:";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
 const ACCOUNT_TASK_TYPES = new Set(["login", "batch_delete", "health_check"]);
@@ -305,6 +313,15 @@ export function AccountsPage(): ReactElement {
     [],
   );
 
+  // 登录状态被手动改了（可能来自本页，也可能来自别处）：就地改对应行，不重新拉列表
+  useEffect(
+    () =>
+      on(IPC.event.accountsLoginStatusChanged, (e) => {
+        setList((prev) => (prev ? { ...prev, rows: applyLoginStatusChange(prev.rows, e) as AccountListRow[] } : prev));
+      }),
+    [],
+  );
+
   // ---------- 筛选与勾选 ----------
 
   const rows = list?.rows ?? EMPTY_LIST;
@@ -464,6 +481,26 @@ export function AccountsPage(): ReactElement {
     }
   };
 
+  /** 手动设置登录状态（右键单个 / 工具栏批量）：写库后后端广播事件，本页与 AI 任务页一起就地更新 */
+  const setLoginStatus = async (emails: string[], status: ManualLoginStatus): Promise<void> => {
+    if (emails.length === 0) return;
+    const label = MANUAL_LOGIN_STATUS_LABEL[status];
+    try {
+      const n = await invoke(IPC.invoke.accountsSetLoginStatus, emails, status);
+      logLocal(`已将 ${n} 个账号设为「${label}」`);
+      void message.success(`已将 ${n} 个账号设为「${label}」`);
+    } catch (e) {
+      logLocal(`设置登录状态失败: ${describeError(e)}`);
+      notify("error", "错误", `设置登录状态失败:\n${describeError(e)}`);
+    }
+  };
+
+  /** 工具栏「设置登录状态」下拉的菜单项 */
+  const loginStatusItems: NonNullable<MenuProps["items"]> = MANUAL_LOGIN_STATUSES.map((s) => ({
+    key: s,
+    label: MANUAL_LOGIN_STATUS_LABEL[s],
+  }));
+
   const menuItems = (row: AccountListRow): MenuProps["items"] => {
     const hasBrowser = row.browser_profile_id !== "";
     // 没有「解绑」：解绑后账号无法登录 / 巡检，没有功能需要它；换窗口用「重新绑定」
@@ -475,6 +512,17 @@ export function AccountsPage(): ReactElement {
     items.push(
       { type: "divider" },
       { key: "login", label: "登录", disabled: busy },
+      {
+        key: "loginStatus",
+        label: "设置登录状态",
+        disabled: busy,
+        children: MANUAL_LOGIN_STATUSES.map((s) => ({
+          key: `${LOGIN_STATUS_KEY_PREFIX}${s}`,
+          label: MANUAL_LOGIN_STATUS_LABEL[s],
+          // 当前就是这个状态时不可选
+          disabled: row.login_status === s,
+        })),
+      },
       { type: "divider" },
       { key: "delete", label: "删除账号", danger: true, disabled: busy },
     );
@@ -500,6 +548,10 @@ export function AccountsPage(): ReactElement {
       case "deleteWithWindow":
         void runAction("delete_one_with_window", [toSelected(row)]);
         break;
+      default:
+        if (key.startsWith(LOGIN_STATUS_KEY_PREFIX)) {
+          void setLoginStatus([row.email], key.slice(LOGIN_STATUS_KEY_PREFIX.length) as ManualLoginStatus);
+        }
     }
   };
 
@@ -905,6 +957,20 @@ export function AccountsPage(): ReactElement {
                 </Checkbox>
               </Tooltip>
               {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
+              <Dropdown
+                disabled={busy || !hasChecked}
+                trigger={["click"]}
+                menu={{
+                  items: loginStatusItems,
+                  onClick: ({ key }) => void setLoginStatus(checked, key as ManualLoginStatus),
+                }}
+              >
+                <Tooltip title={hasChecked ? "把勾选的账号手动标记为某个登录状态（只改记录，不打开窗口）" : "先勾选账号"}>
+                  <Button disabled={busy || !hasChecked}>
+                    设置登录状态 <DownOutlined />
+                  </Button>
+                </Tooltip>
+              </Dropdown>
             </Space>
             <Space wrap>
               {actionBtn("删除选中", "delete", "只删除账号记录，不删浏览器窗口", { icon: <DeleteOutlined /> })}

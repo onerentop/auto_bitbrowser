@@ -13,6 +13,7 @@ import {
   type AiTaskRow,
   type AiTaskStartItem,
 } from "../channels/ai-tasks.ts";
+import type { LoginStatusChangedEvent } from "../channels/accounts.ts";
 
 /** 任务推送的逐行结果（key 为 email） */
 export interface RowRuntime {
@@ -122,4 +123,19 @@ export function loginStatusLabel(row: Pick<AiTaskRow, "inDb" | "loginStatus">): 
   if (row.loginStatus === LOGIN_FAILED) return "登录失败";
   if (row.loginStatus === "not_logged") return "未登录";
   return row.loginStatus || "未知";
+}
+
+/**
+ * 账号页手动设置了登录状态（abb/accounts/event/loginStatusChanged）后，就地改 AI 任务列表里对应的行。
+ * 不在库的行没有登录状态可改，保持不动；一个都没命中时原样返回同一个数组。
+ */
+export function applyAiLoginStatusChange(rows: readonly AiTaskRow[], e: LoginStatusChangedEvent): readonly AiTaskRow[] {
+  const hit = new Set(e.emails);
+  let changed = false;
+  const next = rows.map((r) => {
+    if (!r.inDb || !hit.has(r.email)) return r;
+    changed = true;
+    return { ...r, loginStatus: e.status };
+  });
+  return changed ? next : rows;
 }

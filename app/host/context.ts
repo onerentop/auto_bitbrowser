@@ -37,6 +37,8 @@ export interface HostContext {
   /** 批量任务运行结果历史（本地新增能力） */
   taskHistoryRepo(): TaskHistoryRepository;
   log(message: string): void;
+  /** 推送事件给界面（任务之外的广播，例如手动改了登录状态） */
+  emit: TaskEmit;
 }
 
 export interface HostContextOptions {
@@ -102,6 +104,7 @@ export function createHostContext(options: HostContextOptions): HostContext {
         }
       },
     }),
+    emit: options.emit,
     log,
   };
 }

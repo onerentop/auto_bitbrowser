@@ -21,6 +21,7 @@ import { createBatchResult } from "../src/automation/batch/types.ts";
 import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
 import {
   applyLoginItem,
+  applyLoginStatusChange,
   applyNoteUpdate,
   applyTagsUpdate,
   accountSorter,
@@ -1276,6 +1277,64 @@ test("updateNote：只写 note 一个字段；未绑定窗口 / 参数非法一�
   await assert.rejects(s.call(CH.accountsUpdateNote, "a@x.com", "x".repeat(2001)), bad, "太长");
   await assert.rejects(s.call(CH.accountsUpdateNote, "", "x"), bad);
   assert.equal(s.ix.calls.length, 1, "失败的调用不应碰到 ixBrowser");
+});
+
+test("setLoginStatus：批量写库（不动最后登录时间），失败记「手动标记」；写完广播事件；参数非法一律拒绝", async () => {
+  const s = setup();
+  seed(s.ctx, [
+    { email: "a@x.com", login_status: "login_failed", last_error: "旧错误" },
+    { email: "b@x.com", login_status: "not_logged" },
+    { email: "c@x.com", login_status: "logged_in" },
+  ]);
+  s.ctx.db().prepare("UPDATE accounts SET last_login_at = '2026-01-01 00:00:00'").run();
+  const state = () =>
+    s.ctx
+      .db()
+      .prepare("SELECT email, login_status, last_error, last_login_at FROM accounts ORDER BY email")
+      .all()
+      .map((r) => [r.email, r.login_status, r.last_error, r.last_login_at]);
+  const changes = () => s.events.filter(([c]) => c === IPC.event.accountsLoginStatusChanged).map(([, p]) => p);
+
+  assert.equal(await s.call(CH.accountsSetLoginStatus, ["a@x.com", "b@x.com", "ghost@x.com"], "logged_in"), 2);
+  assert.deepEqual(state(), [
+    ["a@x.com", "logged_in", null, "2026-01-01 00:00:00"],
+    ["b@x.com", "logged_in", null, "2026-01-01 00:00:00"],
+    ["c@x.com", "logged_in", null, "2026-01-01 00:00:00"],
+  ]);
+  assert.deepEqual(changes(), [{ emails: ["a@x.com", "b@x.com"], status: "logged_in", lastError: null }], "只广播真正改到的邮箱");
+
+  assert.equal(await s.call(CH.accountsSetLoginStatus, ["c@x.com"], "login_failed"), 1);
+  assert.deepEqual(state()[2], ["c@x.com", "login_failed", "手动标记", "2026-01-01 00:00:00"]);
+  assert.deepEqual(changes()[1], { emails: ["c@x.com"], status: "login_failed", lastError: "手动标记" });
+
+  assert.equal(await s.call(CH.accountsSetLoginStatus, ["c@x.com"], "not_logged"), 1);
+  assert.deepEqual(state()[2], ["c@x.com", "not_logged", null, "2026-01-01 00:00:00"]);
+
+  assert.equal(await s.call(CH.accountsSetLoginStatus, ["ghost@x.com"], "not_logged"), 0);
+  assert.equal(changes().length, 3, "一个都没改到时不广播");
+
+  const bad = (/** @type {any} */ e) => e.code === ERROR_CODES.INVALID_ARGUMENT;
+  await assert.rejects(s.call(CH.accountsSetLoginStatus, ["a@x.com"], "logging_in"), bad, "登录中只能由程序设置");
+  await assert.rejects(s.call(CH.accountsSetLoginStatus, ["a@x.com"], "weird"), bad);
+  await assert.rejects(s.call(CH.accountsSetLoginStatus, [], "logged_in"), bad, "空列表");
+  await assert.rejects(s.call(CH.accountsSetLoginStatus, "a@x.com", "logged_in"), bad, "不是数组");
+  await assert.rejects(s.call(CH.accountsSetLoginStatus, [42], "logged_in"), bad);
+  assert.equal(changes().length, 3, "被拒绝的调用不写库、不广播");
+});
+
+test("applyLoginStatusChange：账号行按邮箱改状态与失败原因，不动其它字段；无命中时原样返回", () => {
+  const rows = [row({ email: "a@x.com", login_status: "login_failed", last_error: "旧", last_login_at: "t1" }), row({ email: "b@x.com" })];
+  const next = applyLoginStatusChange(rows, { emails: ["a@x.com"], status: "logged_in", lastError: null });
+  assert.notEqual(next, rows);
+  assert.deepEqual(
+    next.map((r) => [r.email, r.login_status, r.last_error, r.last_login_at]),
+    [
+      ["a@x.com", "logged_in", null, "t1"],
+      ["b@x.com", "not_logged", null, null],
+    ],
+  );
+  assert.equal(next[1], rows[1], "没命中的行保持同一引用");
+  assert.equal(applyLoginStatusChange(rows, { emails: ["ghost@x.com"], status: "logged_in", lastError: null }), rows);
 });
 
 test("applyNoteUpdate：只改那一行；邮箱不在列表里时原样返回", () => {

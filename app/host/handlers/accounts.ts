@@ -24,8 +24,12 @@ import {
   type SelectedRow,
   type AccountsTfaCodes,
   type TagRef,
+  MANUAL_FAILED_REASON,
+  MANUAL_LOGIN_STATUSES,
+  MAX_SET_LOGIN_STATUS,
+  type ManualLoginStatus,
 } from "../../shared/channels/accounts.ts";
-import type { TaskInfo } from "../../shared/ipc.ts";
+import { IPC, type TaskInfo } from "../../shared/ipc.ts";
 import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
 import type { TaskApi } from "../task-runner.ts";
@@ -563,6 +567,25 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       const e = requireEmail(email);
       rejectIfBusy();
       return repo().deleteAccount(e);
+    },
+
+    /**
+     * 手动设置登录状态（用户在账号页操作；批量一个事务）。
+     * 只接受已登录 / 未登录 / 登录失败；失败时原因记「手动标记」，其余清空原因；不改最后登录时间。
+     * 写完广播 loginStatusChanged（只含真正改到的邮箱），账号页与 AI 任务页就地更新。返回改到的条数。
+     */
+    [ACCOUNTS_INVOKE.accountsSetLoginStatus]: (emails: unknown, status: unknown): number => {
+      const list = requireEmails(emails, MAX_SET_LOGIN_STATUS);
+      if (list.length === 0) throw invalid("emails 不能为空");
+      if (typeof status !== "string" || !(MANUAL_LOGIN_STATUSES as readonly string[]).includes(status)) {
+        throw invalid(`status 必须是 ${MANUAL_LOGIN_STATUSES.join(" / ")} 之一`);
+      }
+      const s = status as ManualLoginStatus;
+      rejectIfBusy();
+      const lastError = s === "login_failed" ? MANUAL_FAILED_REASON : null;
+      const changed = repo().setLoginStatusManual(list, s, lastError);
+      if (changed.length > 0) ctx.emit(IPC.event.accountsLoginStatusChanged, { emails: changed, status: s, lastError });
+      return changed.length;
     },
   };
 }

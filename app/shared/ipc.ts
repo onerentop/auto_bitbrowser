@@ -12,7 +12,7 @@
  * 本文件是纯 TS，不依赖 electron。
  */
 import type { Envelope } from "./envelope.ts";
-import { ACCOUNTS_INVOKE, type AccountsInvokeMap } from "./channels/accounts.ts";
+import { ACCOUNTS_INVOKE, type AccountsInvokeMap, type LoginStatusChangedEvent } from "./channels/accounts.ts";
 import { HOME_INVOKE, type HomeInvokeMap } from "./channels/home.ts";
 import { SETTINGS_INVOKE, type SettingsInvokeMap } from "./channels/settings.ts";
 import { AI_TASKS_INVOKE, type AiTasksInvokeMap } from "./channels/ai-tasks.ts";
@@ -56,6 +56,8 @@ export const IPC = {
     taskFinished: "abb/task/event/finished",
     /** 任务中单个条目的状态（逐行更新表格） */
     taskItem: "abb/task/event/item",
+    /** 账号登录状态被手动改了（账号页、AI 任务页就地更新） */
+    accountsLoginStatusChanged: "abb/accounts/event/loginStatusChanged",
   },
 } as const;
 
@@ -242,6 +244,7 @@ export interface EventMap {
   "abb/task/event/progress": TaskProgressEvent;
   "abb/task/event/finished": TaskFinishedEvent;
   "abb/task/event/item": TaskItemEvent;
+  "abb/accounts/event/loginStatusChanged": LoginStatusChangedEvent;
 }
 
 export type InvokeArgs<C extends InvokeChannel> = InvokeMap[C]["args"];

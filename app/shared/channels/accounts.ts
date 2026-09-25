@@ -58,6 +58,8 @@ export const ACCOUNTS_INVOKE = {
   accountsImport: "abb/accounts/import",
   /** 导出选中：后端生成导出文本 */
   accountsExportText: "abb/accounts/exportText",
+  /** 手动设置登录状态（批量；写库后广播 abb/accounts/event/loginStatusChanged） */
+  accountsSetLoginStatus: "abb/accounts/setLoginStatus",
 } as const;
 
 // ==================== 数据类型 ====================
@@ -269,6 +271,36 @@ export interface AccountsTfaCodes {
   periodEndsAt: number;
 }
 
+// ==================== 手动设置登录状态 ====================
+
+/** 可以手动设置的登录状态（「登录中」只由程序设置） */
+export const MANUAL_LOGIN_STATUSES = ["logged_in", "not_logged", "login_failed"] as const;
+export type ManualLoginStatus = (typeof MANUAL_LOGIN_STATUSES)[number];
+
+/** 界面文案 */
+export const MANUAL_LOGIN_STATUS_LABEL: Readonly<Record<ManualLoginStatus, string>> = {
+  logged_in: "已登录",
+  not_logged: "未登录",
+  login_failed: "登录失败",
+};
+
+/** 手动设为失败时写入的失败原因 */
+export const MANUAL_FAILED_REASON = "手动标记";
+
+/** 一次最多设置多少个账号 */
+export const MAX_SET_LOGIN_STATUS = 10_000;
+
+/**
+ * 登录状态被手动改了（abb/accounts/event/loginStatusChanged 的载荷）：
+ * 所有显示登录状态的页面（账号页、AI 任务页）收到后就地更新对应行。
+ * emails 只含真正改到的账号。
+ */
+export interface LoginStatusChangedEvent {
+  emails: string[];
+  status: ManualLoginStatus;
+  lastError: string | null;
+}
+
 // ==================== 通道 → 类型 ====================
 
 export interface AccountsInvokeMap {
@@ -293,4 +325,5 @@ export interface AccountsInvokeMap {
   "abb/accounts/createTag": { args: [title: string]; result: TagRef };
   "abb/accounts/updateTag": { args: [id: number, title: string]; result: boolean };
   "abb/accounts/deleteTag": { args: [id: number]; result: boolean };
+  "abb/accounts/setLoginStatus": { args: [emails: string[], status: ManualLoginStatus]; result: number };
 }

@@ -11,6 +11,7 @@ import {
   loginStatusLabel,
   rowSorter,
   selectedItems,
+  applyAiLoginStatusChange,
 } from "../app/shared/logic/ai-task-list.ts";
 
 /** @returns {import("../app/shared/channels/ai-tasks.ts").AiTaskRow} */
@@ -94,4 +95,25 @@ test("loginStatusLabel", () => {
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "login_failed" }), "登录失败");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "not_logged" }), "未登录");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "" }), "未知");
+});
+
+test("applyAiLoginStatusChange：按邮箱改 loginStatus；不在库的行不动；无命中时原样返回", () => {
+  const rows = [
+    row({ profileId: 1, email: "a@x.com", loginStatus: "login_failed" }),
+    row({ profileId: 2, email: "b@x.com", loginStatus: "logged_in" }),
+    row({ profileId: 3, email: "c@x.com", inDb: false, loginStatus: "" }),
+  ];
+  const next = applyAiLoginStatusChange(rows, { emails: ["a@x.com", "c@x.com"], status: "not_logged", lastError: null });
+  assert.notEqual(next, rows);
+  assert.deepEqual(
+    next.map((r) => [r.email, r.loginStatus]),
+    [
+      ["a@x.com", "not_logged"],
+      ["b@x.com", "logged_in"],
+      ["c@x.com", ""],
+    ],
+  );
+  assert.equal(next[1], rows[1]);
+  assert.equal(next[2], rows[2], "不在库的行没有登录状态可改");
+  assert.equal(applyAiLoginStatusChange(rows, { emails: ["ghost@x.com"], status: "logged_in", lastError: null }), rows);
 });

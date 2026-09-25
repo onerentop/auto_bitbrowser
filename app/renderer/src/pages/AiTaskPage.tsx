@@ -22,9 +22,15 @@ import {
   type AiTaskStartItem,
 } from "../../../shared/channels/ai-tasks.ts";
 import type { TaskFinishedEvent, TaskItemEvent } from "../../../shared/ipc.ts";
-import { filterRows, isFailedRuntime, selectedItems, type RowRuntime } from "../../../shared/logic/ai-task-list.ts";
+import {
+  applyAiLoginStatusChange,
+  filterRows,
+  isFailedRuntime,
+  selectedItems,
+  type RowRuntime,
+} from "../../../shared/logic/ai-task-list.ts";
 import { reconcileChecked, selectionSummary } from "../../../shared/logic/home-list.ts";
-import { IPC, describeError, invoke } from "../lib/ipc.ts";
+import { IPC, describeError, invoke, on } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, stopTask, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { AccountListCard } from "./ai-tasks/AccountListCard.tsx";
@@ -171,6 +177,15 @@ function AiTaskView({ kind }: { kind: AiTaskKind }): ReactElement {
         if (e.taskId === taskIdRef.current) applyFinished(e);
       }),
     [taskType, applyFinished],
+  );
+
+  // 账号页手动改了登录状态：就地改对应行（登录状态列与「账号状态」筛选随之更新），不重新拉列表
+  useEffect(
+    () =>
+      on(IPC.event.accountsLoginStatusChanged, (e) => {
+        setList((prev) => (prev ? { ...prev, rows: applyAiLoginStatusChange(prev.rows, e) as AiTaskLoadResult["rows"] } : prev));
+      }),
+    [],
   );
 
   const launch = async (items: AiTaskStartItem[]): Promise<void> => {

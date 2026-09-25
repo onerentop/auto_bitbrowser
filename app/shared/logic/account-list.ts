@@ -7,7 +7,7 @@
  * 勾选的「刷新后保留 / 隐藏计数」复用 home-list.ts 的 reconcileChecked / selectionSummary（行 key 为 email）。
  * 纯 TS，不依赖 node / DOM / electron。
  */
-import type { AccountListRow, AutoBindSummary, BindWindowOption, TagRef } from "../channels/accounts.ts";
+import type { AccountListRow, AutoBindSummary, BindWindowOption, LoginStatusChangedEvent, TagRef } from "../channels/accounts.ts";
 
 export type AccountLoginFilter = "all" | "logged_in" | "not_logged" | "login_failed";
 
@@ -206,6 +206,22 @@ export function applyTagsUpdate(rows: readonly AccountListRow[], email: string, 
     if (r.email !== email) return r;
     changed = true;
     return { ...r, tags };
+  });
+  return changed ? next : rows;
+}
+
+/**
+ * 手动设置登录状态后（abb/accounts/event/loginStatusChanged），就地改列表里对应的行：
+ * 只改 login_status 与 last_error，不动最后登录时间等其它字段。没有命中的行保持同一引用；
+ * 一个都没命中时原样返回同一个数组（调用方据此跳过重渲染）。
+ */
+export function applyLoginStatusChange(rows: readonly AccountListRow[], e: LoginStatusChangedEvent): readonly AccountListRow[] {
+  const hit = new Set(e.emails);
+  let changed = false;
+  const next = rows.map((r) => {
+    if (!hit.has(r.email)) return r;
+    changed = true;
+    return { ...r, login_status: e.status, last_error: e.lastError };
   });
   return changed ? next : rows;
 }

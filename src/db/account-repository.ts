@@ -233,6 +233,24 @@ export class AccountRepository {
     }
   }
 
+  /**
+   * 手动设置登录状态（用户在账号页操作，批量、一个事务）：
+   * 写 login_status 与 last_error，刷新 updated_at；**不动 last_login_at**（手动设置不算真的登录过）。
+   * 返回真正改到的邮箱（不存在的邮箱跳过），按传入顺序。出错时整批回滚并抛出。
+   */
+  setLoginStatusManual(emails: readonly string[], status: string, lastError: string | null): string[] {
+    const stmt = this.db.prepare(
+      "UPDATE accounts SET login_status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+    );
+    return this.transaction(() => {
+      const changed: string[] = [];
+      for (const email of emails) {
+        if (Number(stmt.run(status, lastError, email).changes ?? 0) > 0) changed.push(email);
+      }
+      return changed;
+    });
+  }
+
  /** 按邮箱删除账号。删到行返回 true，出错返回 false */
   deleteAccount(email: string): boolean {
     try {
