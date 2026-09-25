@@ -126,7 +126,10 @@ export function TagManagerModal({ open, vocabulary, usage, onClose, onChanged }:
       key: "usage",
       width: 100,
       align: "right",
-      render: (_, row) => <span className="abb-num">{usage.get(row.id) ?? 0}</span>,
+      render: (_, row) => {
+        const n = usage.get(row.id) ?? 0;
+        return <Typography.Text type={n > 0 ? undefined : "secondary"} className="abb-num">{n}</Typography.Text>;
+      },
     },
     {
       title: "操作",

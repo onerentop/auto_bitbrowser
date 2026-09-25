@@ -5,10 +5,12 @@
  * 「未匹配」行不可勾选。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Empty, Table, Tag, Tooltip, Typography } from "antd";
+import { Empty, Table, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { TOTP_STATUS_TEXT, type TotpEntry, type TotpMatchRow, type TotpMatchStatus } from "../../../../shared/channels/totp.ts";
+import { TOTP_STATUS_TEXT, type TotpEntry, type TotpMatchRow } from "../../../../shared/channels/totp.ts";
 import { rowSelect } from "../../components/row-select.ts";
+import { StatusDot } from "../../components/StatusDot.tsx";
+import { railClass, totpTone } from "../../lib/list-tone.ts";
 import { PAGINATION_HEIGHT, usePagination } from "../../components/use-pagination.ts";
 
 export interface ResultRow {
@@ -17,13 +19,6 @@ export interface ResultRow {
   entry: TotpEntry;
   match: TotpMatchRow;
 }
-
-/** 匹配状态 → antd 语义色（可导入绿、已有密钥橙、未匹配灰），颜色由主题令牌注入 */
-const STATUS_TAG_COLOR: Readonly<Record<TotpMatchStatus, string | undefined>> = {
-  can_import: "success",
-  has_secret: "warning",
-  no_match: undefined,
-};
 
 /** 密钥显示前 16 位 */
 function secretDisplay(secret: string): string {
@@ -61,7 +56,7 @@ const columns: ColumnsType<ResultRow> = [
     key: "matched",
     ellipsis: true,
     render: (_, r) =>
-      r.match.matchedEmail ? r.match.matchedEmail : <Typography.Text type="secondary">未匹配</Typography.Text>,
+      r.match.matchedEmail ? <span className="abb-id">{r.match.matchedEmail}</span> : <Typography.Text type="secondary">未匹配</Typography.Text>,
   },
   {
     title: "当前密钥",
@@ -78,11 +73,7 @@ const columns: ColumnsType<ResultRow> = [
     title: "状态",
     key: "status",
     width: 90,
-    render: (_, r) => (
-      <Tag bordered={false} color={STATUS_TAG_COLOR[r.match.status]}>
-        {TOTP_STATUS_TEXT[r.match.status]}
-      </Tag>
-    ),
+    render: (_, r) => <StatusDot tone={totpTone(r.match.status)} text={TOTP_STATUS_TEXT[r.match.status]} />,
   },
 ];
 
@@ -145,6 +136,7 @@ export function ResultTable({ rows, selected, onSelectedChange }: ResultTablePro
             onSelectedChange(next);
           },
         }}
+        rowClassName={(r) => railClass(totpTone(r.match.status))}
         onRow={resultRow}
       />
     </div>

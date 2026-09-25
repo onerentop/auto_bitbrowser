@@ -84,6 +84,8 @@ import { PageHeader } from "../components/PageHeader.tsx";
 import { Panel } from "../components/Section.tsx";
 import { useTokens } from "../theme/tokens.ts";
 import { rowSelect } from "../components/row-select.ts";
+import { StatusDot } from "../components/StatusDot.tsx";
+import { accountLoginTone, railClass } from "../lib/list-tone.ts";
 import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../components/use-pagination.ts";
 
 /** 任务结束后值得刷新账号列表的类型（health_check 会改动 login_status / last_error） */
@@ -511,20 +513,22 @@ export function AccountsPage(): ReactElement {
   // 列的定义：数组顺序就是显示顺序；每列都必须有数字 width（横向滚动宽度由可见列宽算出）
   const allColumns = useMemo<TableColumnsType<AccountListRow>>(
     () => [
-      { title: "邮箱", key: "email", width: 240, ellipsis: true, sorter: accountSorter("email"), render: (_, r) => r.email },
+      {
+        title: "邮箱",
+        key: "email",
+        width: 240,
+        fixed: "left",
+        ellipsis: true,
+        sorter: accountSorter("email"),
+        render: (_, r) => <span className="abb-id">{r.email}</span>,
+      },
       {
         title: "登录状态",
         key: "login",
         width: 170,
-        ellipsis: true,
         render: (_, r) => {
           const v = loginView(r);
-          const t = (
-            <Tag bordered={false} color={v.color}>
-              {v.text}
-            </Tag>
-          );
-          return v.tooltip ? <Tooltip title={v.tooltip}>{t}</Tooltip> : t;
+          return <StatusDot tone={v.tone} text={v.text} reason={v.reason} />;
         },
       },
       {
@@ -660,6 +664,7 @@ export function AccountsPage(): ReactElement {
         title: "操作",
         key: "action",
         width: 130,
+        fixed: "right",
         render: (_, r) => (
           <Space size={0}>
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => setEditEmail(r.email)}>
@@ -942,6 +947,8 @@ export function AccountsPage(): ReactElement {
               ),
             }}
             rowSelection={{
+              // 与固定在左的邮箱列一起固定：横向滚动时勾选框和行首状态条一直可见
+              fixed: "left",
               columnWidth: SELECTION_COLUMN_WIDTH,
               selectedRowKeys: checked,
               // 被筛选隐藏 / 在别的页的勾选也要保留（antd 默认会丢掉不在当前数据里的 key）
@@ -954,6 +961,7 @@ export function AccountsPage(): ReactElement {
                 setChecked,
               ),
             }}
+            rowClassName={(r) => railClass(accountLoginTone(r.login_status))}
             onRow={(record) => ({
               ...accountRow(record),
               onContextMenu: (e) => {

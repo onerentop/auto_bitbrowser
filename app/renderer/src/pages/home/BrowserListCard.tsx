@@ -93,6 +93,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
       title: "窗口ID",
       key: "id",
       width: 100,
+      fixed: "left",
       sorter: sorter("profileId"),
       defaultSortOrder: "descend",
       render: (_, b) =>
@@ -112,7 +113,7 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
       width: 260,
       ellipsis: true,
       sorter: sorter("name"),
-      render: (_, b) => b.name || <Typography.Text type="secondary">（无名称）</Typography.Text>,
+      render: (_, b) => (b.name ? <span className="abb-id">{b.name}</span> : <Typography.Text type="secondary">（无名称）</Typography.Text>),
     },
     {
       title: "分组",
@@ -244,6 +245,8 @@ export function BrowserListCard(props: BrowserListCardProps): ReactElement {
             },
           })}
           rowSelection={{
+            // 与固定在左的窗口ID 列一起固定：横向滚动时勾选框一直可见
+            fixed: "left",
             selectedRowKeys: checked,
             // 被筛选隐藏的勾选也要保留（antd 默认会丢掉不在 dataSource 里的 key）
             preserveSelectedRowKeys: true,

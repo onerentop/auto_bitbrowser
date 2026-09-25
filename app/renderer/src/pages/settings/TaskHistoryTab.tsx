@@ -5,7 +5,7 @@
  * 上面是任务列表，选中一条后下面是该次运行的逐条目结果；右上角可导出 CSV。
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { App, Button, Empty, Space, Table, Tag } from "antd";
+import { App, Button, Empty, Space, Table, Typography } from "antd";
 import { DownloadOutlined, SyncOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { TaskRunItemRow, TaskRunRow } from "../../../../shared/channels/task-history.ts";
@@ -14,21 +14,15 @@ import { onTaskFinished } from "../../stores/task.ts";
 import { Panel, Section } from "../../components/Section.tsx";
 import { rowSelect } from "../../components/row-select.ts";
 import { usePagination } from "../../components/use-pagination.ts";
+import { StatusDot } from "../../components/StatusDot.tsx";
+import { historyItemTone, railClass, runOutcomeTone } from "../../lib/list-tone.ts";
 
-/** 任务结果的标签色：antd 语义色（主题里已映射到 ok / warn / bad 令牌） */
-function outcomeTag(outcome: string | null): ReactElement {
-  const value = outcome ?? "";
-  const color = value === "succeeded" ? "success" : value === "stopped" ? "warning" : "error";
-  const label = value === "succeeded" ? "成功" : value === "stopped" ? "已停止" : value === "failed" ? "失败" : value || "-";
-  return <Tag color={color}>{label}</Tag>;
-}
-
-function itemStatusTag(status: string | null): ReactElement {
-  const value = status ?? "";
-  // 「跳过」等中间状态用中性色：它们既不算成功也不算失败
-  const color =
-    value === "成功" ? "success" : value === "失败" || value === "错误" ? "error" : value === "处理中" ? "processing" : "default";
-  return <Tag color={color}>{value || "-"}</Tag>;
+/** 任务结果的文字（色调见 lib/list-tone.ts 的 runOutcomeTone） */
+function outcomeLabel(outcome: string | null): string {
+  if (outcome === "succeeded") return "成功";
+  if (outcome === "stopped") return "已停止";
+  if (outcome === "failed") return "失败";
+  return outcome || "—";
 }
 
 export function TaskHistoryTab(): ReactElement {
@@ -107,20 +101,43 @@ export function TaskHistoryTab(): ReactElement {
       title: "结束时间",
       dataIndex: "finished_at",
       width: 170,
-      render: (v: string | null) => <span className="abb-num">{v ?? "-"}</span>,
+      render: (v: string | null) => <Typography.Text type="secondary" className="abb-num">{v ?? "—"}</Typography.Text>,
     },
-    { title: "任务", dataIndex: "label", ellipsis: true, render: (v: string | null) => v ?? "-" },
-    { title: "结果", dataIndex: "outcome", width: 90, render: (v: string | null) => outcomeTag(v) },
-    { title: "总数", dataIndex: "total", width: 70, className: "abb-num" },
-    { title: "成功", dataIndex: "success_count", width: 70, className: "abb-num" },
-    { title: "失败", dataIndex: "failed_count", width: 70, className: "abb-num" },
-    { title: "错误", dataIndex: "error", ellipsis: true, render: (v: string | null) => v ?? "" },
+    { title: "任务", dataIndex: "label", ellipsis: true, render: (v: string | null) => v ?? "—" },
+    {
+      title: "结果",
+      dataIndex: "outcome",
+      width: 96,
+      render: (v: string | null) => <StatusDot tone={runOutcomeTone(v)} text={outcomeLabel(v)} />,
+    },
+    { title: "总数", dataIndex: "total", width: 70, align: "right", className: "abb-num" },
+    { title: "成功", dataIndex: "success_count", width: 70, align: "right", className: "abb-num" },
+    {
+      title: "失败",
+      dataIndex: "failed_count",
+      width: 70,
+      align: "right",
+      className: "abb-num",
+      // 有失败时用失败色，0 时淡化
+      render: (v: number) => <Typography.Text type={v > 0 ? "danger" : "secondary"}>{v}</Typography.Text>,
+    },
+    {
+      title: "错误",
+      dataIndex: "error",
+      ellipsis: { showTitle: true },
+      render: (v: string | null) => <Typography.Text type="secondary">{v ?? ""}</Typography.Text>,
+    },
   ];
 
   const itemColumns: ColumnsType<TaskRunItemRow> = [
-    { title: "账号", dataIndex: "item_key", ellipsis: true, render: (v: string | null) => v ?? "-" },
-    { title: "状态", dataIndex: "status", width: 100, render: (v: string | null) => itemStatusTag(v) },
-    { title: "消息", dataIndex: "message", ellipsis: true, render: (v: string | null) => v ?? "" },
+    { title: "账号", dataIndex: "item_key", ellipsis: true, render: (v: string | null) => (v ? <span className="abb-id">{v}</span> : "—") },
+    {
+      title: "状态",
+      dataIndex: "status",
+      width: 100,
+      render: (v: string | null) => <StatusDot tone={historyItemTone(v)} text={v || "—"} />,
+    },
+    { title: "消息", dataIndex: "message", ellipsis: { showTitle: true }, render: (v: string | null) => v ?? "" },
   ];
 
   // 点行即选中；任务历史是单选表，再点已选行不会取消（与 radio 一致）
@@ -171,6 +188,7 @@ export function TaskHistoryTab(): ReactElement {
             selectedRowKeys: selectedRunId === null ? [] : [selectedRunId],
             onChange: (keys) => setSelectedRunId(Number(keys[0])),
           }}
+          rowClassName={(r) => railClass(runOutcomeTone(r.outcome))}
           onRow={historyRow}
         />
       </Section>
@@ -185,6 +203,7 @@ export function TaskHistoryTab(): ReactElement {
             columns={itemColumns}
             dataSource={items}
             pagination={itemsPager.pagination}
+            rowClassName={(r) => railClass(historyItemTone(r.status))}
           />
         )}
       </Section>

@@ -11,7 +11,6 @@ import {
   loginStatusLabel,
   rowSorter,
   selectedItems,
-  statusTone,
 } from "../app/shared/logic/ai-task-list.ts";
 
 /** @returns {import("../app/shared/channels/ai-tasks.ts").AiTaskRow} */
@@ -89,13 +88,10 @@ test("selectedItems：含被隐藏的勾选；无窗口 ID / 空邮箱不可选"
   ]);
 });
 
-test("loginStatusLabel / statusTone", () => {
+test("loginStatusLabel", () => {
   assert.equal(loginStatusLabel({ inDb: false, loginStatus: "" }), "不在数据库");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "logged_in" }), "已登录");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "login_failed" }), "登录失败");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "not_logged" }), "未登录");
   assert.equal(loginStatusLabel({ inDb: true, loginStatus: "" }), "未知");
-  assert.equal(statusTone("成功"), "success");
-  assert.equal(statusTone("错误"), "error");
-  assert.equal(statusTone("处理中"), "warning");
 });

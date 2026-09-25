@@ -1,16 +1,18 @@
 /**
- * 账号管理页：登录状态文案 / 颜色（纯函数，无 React 依赖，可直接单测）
+ * 账号管理页：登录状态的文字 / 色调 / 失败原因（纯函数，无 React 依赖，可直接单测）
  *
- * color 是 antd Tag 的语义色名（success / processing / error / default），实际色值由主题令牌决定，深浅色都可读。
+ * tone 是列表统一色调（lib/list-tone.ts）：决定行首状态条与状态圆点的颜色。
+ * 失败原因原样给出，界面单行省略、悬停看全文（components/StatusDot.tsx）。
  * 筛选 / 计数 / 排序在 app/shared/logic/account-list.ts。
  */
 import type { AccountListRow } from "../../../../shared/channels/accounts.ts";
-
-export type LoginTagColor = "success" | "processing" | "error" | "default";
+import { accountLoginTone, type ListTone } from "../../lib/list-tone.ts";
 
 export interface StatusView {
   text: string;
-  color: LoginTagColor;
+  tone: ListTone;
+  /** 仅登录失败且有错误信息时给出 */
+  reason: string | null;
 }
 
 const LOGIN_TEXT: Record<string, string> = {
@@ -19,26 +21,13 @@ const LOGIN_TEXT: Record<string, string> = {
   logged_in: "已登录",
   login_failed: "失败",
 };
-const LOGIN_COLOR: Record<string, LoginTagColor> = {
-  not_logged: "default",
-  logging_in: "processing",
-  logged_in: "success",
-  login_failed: "error",
-};
 
 function pick<T>(map: Record<string, T>, key: string | null): T | undefined {
   return key !== null && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
 }
 
-/** 登录状态：失败且有错误时显示「失败: 前 20 字...」，悬停显示全文 */
-export function loginView(row: Pick<AccountListRow, "login_status" | "last_error">): StatusView & { tooltip: string | null } {
+export function loginView(row: Pick<AccountListRow, "login_status" | "last_error">): StatusView {
   const status = row.login_status;
-  const lastError = row.last_error ?? "";
-  const color = pick(LOGIN_COLOR, status) ?? "default";
-  if (status === "login_failed" && lastError) {
-    const short = lastError.length > 20 ? `${lastError.slice(0, 20)}...` : lastError;
-    return { text: `失败: ${short}`, color, tooltip: `错误原因: ${lastError}` };
-  }
-  // mapping.get(status, status or "未登录")
-  return { text: pick(LOGIN_TEXT, status) ?? (status || "未登录"), color, tooltip: null };
+  const reason = status === "login_failed" && row.last_error ? row.last_error : null;
+  return { text: pick(LOGIN_TEXT, status) ?? (status || "未登录"), tone: accountLoginTone(status), reason };
 }

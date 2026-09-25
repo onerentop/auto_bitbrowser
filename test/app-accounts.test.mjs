@@ -1096,16 +1096,18 @@ const row = (o) => ({
   ...o,
 });
 
-test("登录状态文案与颜色（:505-523）", () => {
+test("登录状态：文字 + 色调 + 失败原因（原因原样给出，截断交给界面单行省略）", () => {
   const long = "123456789012345678901234";
   assert.deepEqual(loginView(row({ login_status: "login_failed", last_error: long })), {
-    text: "失败: 12345678901234567890...",
-    color: "error",
-    tooltip: `错误原因: ${long}`,
+    text: "失败",
+    tone: "bad",
+    reason: long,
   });
-  assert.equal(loginView(row({ login_status: "login_failed" })).text, "失败");
-  assert.equal(loginView(row({ login_status: null })).text, "未登录");
-  assert.equal(loginView(row({ login_status: "weird" })).text, "weird");
+  assert.deepEqual(loginView(row({ login_status: "login_failed" })), { text: "失败", tone: "bad", reason: null });
+  assert.deepEqual(loginView(row({ login_status: "logged_in", last_error: "旧错误" })), { text: "已登录", tone: "ok", reason: null });
+  assert.deepEqual(loginView(row({ login_status: "logging_in" })), { text: "登录中", tone: "busy", reason: null });
+  assert.deepEqual(loginView(row({ login_status: null })), { text: "未登录", tone: "none", reason: null });
+  assert.deepEqual(loginView(row({ login_status: "weird" })), { text: "weird", tone: "none", reason: null });
 });
 
 test("filterAccounts：分组 / 登录状态 / 搜索（邮箱包含、窗口ID 前缀、窗口名包含）叠加；无条件原样返回", () => {

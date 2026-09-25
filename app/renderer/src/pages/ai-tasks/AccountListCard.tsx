@@ -1,7 +1,7 @@
 /**
  * AI 任务页的账号列表面板：工具栏 + 分组标签 + 筛选条 + 平铺表格（虚拟滚动），同在一个 Panel 内
  *
- * 结构与首页 BrowserListCard 相同。行底色按本次任务逐行结果着色（颜色取自主题令牌）。
+ * 结构与首页 BrowserListCard 相同。本次任务的逐行结果用行首状态条 + 「任务状态」列表示（色调见 lib/list-tone.ts）。
  * 勾选与筛选状态由父组件（AiTaskPage）持有：开始任务时要用。
  * 纯逻辑在 app/shared/logic/ai-task-list.ts 与 home-list.ts。
  */
@@ -15,10 +15,12 @@ import {
   type AiTaskLoginFilter,
   type AiTaskRow,
 } from "../../../../shared/channels/ai-tasks.ts";
-import { isSelectable, loginStatusLabel, rowSorter, statusTone, type RowRuntime, type StatusTone } from "../../../../shared/logic/ai-task-list.ts";
+import { isSelectable, loginStatusLabel, rowSorter, type RowRuntime } from "../../../../shared/logic/ai-task-list.ts";
 import { Panel } from "../../components/Section.tsx";
 import { useTokens } from "../../theme/tokens.ts";
 import { rowSelect } from "../../components/row-select.ts";
+import { StatusDot } from "../../components/StatusDot.tsx";
+import { accountLoginTone, aiItemTone, railClass } from "../../lib/list-tone.ts";
 import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../../components/use-pagination.ts";
 
 export interface AccountListCardProps {
@@ -62,13 +64,9 @@ function Flag({ on, onTip, offTip }: { on: boolean; onTip: string; offTip: strin
   );
 }
 
-/** 登录状态 → antd 语义色（未列出的用默认灰） */
-const LOGIN_COLOR: Record<string, string> = { 已登录: "success", 登录失败: "error" };
-
 export function AccountListCard(props: AccountListCardProps): ReactElement {
   const { runtime, visible } = props;
   const total = props.list?.totalBrowsers ?? 0;
-  const t = useTokens();
   // 分页：搜索 / 分组 / 登录状态 / 只看失败变化回到第 1 页（6 个 AI 任务页共用一个每页条数）
   const pager = usePagination("aiTasks", visible.length, [props.search, props.groupId, props.login, props.failedOnly]);
 
@@ -85,24 +83,16 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
     return () => ro.disconnect();
   }, []);
 
-  const columns = useMemo<ColumnsType<AiTaskRow>>(() => {
-    // 行底色：状态色的淡色版（color-mix 按当前主题令牌混出，深浅色都可读）
-    const toneColor: Record<StatusTone, string> = { success: t.ok, error: t.bad, warning: t.warn };
-    const cellStyle = (r: AiTaskRow): { style?: { background: string } } => {
-      const rt = runtime[r.email];
-      // 选中行让位给选中底色：内联底色优先级高于 antd 的选中样式，否则选了看不出颜色
-      if (props.checkedKeys.includes(r.key)) return {};
-      return rt ? { style: { background: `color-mix(in srgb, ${toneColor[statusTone(rt.status)]} 16%, transparent)` } } : {};
-    };
-    return [
+  const columns = useMemo<ColumnsType<AiTaskRow>>(
+    () => [
       {
         title: "邮箱",
         key: "email",
         width: 250,
+        fixed: "left",
         ellipsis: true,
         sorter: rowSorter("email"),
-        onCell: cellStyle,
-        render: (_, r) => r.email || <Typography.Text type="secondary">（空）</Typography.Text>,
+        render: (_, r) => (r.email ? <span className="abb-id">{r.email}</span> : <Typography.Text type="secondary">（空）</Typography.Text>),
       },
       {
         title: "窗口ID",
@@ -110,7 +100,6 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         width: 90,
         sorter: rowSorter("profileId"),
         defaultSortOrder: "descend",
-        onCell: cellStyle,
         render: (_, r) =>
           r.profileId !== null ? <span className="abb-mono">{r.profileId}</span> : <Typography.Text type="secondary">—</Typography.Text>,
       },
@@ -119,29 +108,21 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         key: "group",
         width: 110,
         ellipsis: true,
-        onCell: cellStyle,
         render: (_, r) => <Tag bordered={false}>{r.groupName}</Tag>,
       },
       {
         title: "登录状态",
         key: "login",
-        width: 100,
-        onCell: cellStyle,
-        render: (_, r) => {
-          const label = loginStatusLabel(r);
-          return (
-            <Tag bordered={false} color={LOGIN_COLOR[label]}>
-              {label}
-            </Tag>
-          );
-        },
+        width: 110,
+        render: (_, r) => (
+          <StatusDot tone={r.inDb ? accountLoginTone(r.loginStatus) : "none"} text={loginStatusLabel(r)} />
+        ),
       },
       {
         title: "辅助邮箱",
         key: "recovery",
         width: 76,
         align: "center",
-        onCell: cellStyle,
         render: (_, r) => <Flag on={r.hasRecoveryEmail} onTip="数据库里有辅助邮箱" offTip="数据库里没有辅助邮箱" />,
       },
       {
@@ -149,7 +130,6 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         key: "secret",
         width: 76,
         align: "center",
-        onCell: cellStyle,
         render: (_, r) => <Flag on={r.hasSecret} onTip="数据库里有 2FA 密钥" offTip="数据库里没有 2FA 密钥" />,
       },
       {
@@ -157,25 +137,26 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
         key: "lastLogin",
         width: 150,
         sorter: rowSorter("lastLoginAt"),
-        onCell: cellStyle,
         render: (_, r) => r.lastLoginAt ?? <Typography.Text type="secondary">—</Typography.Text>,
       },
       {
         title: "任务状态",
         key: "status",
-        width: 84,
-        onCell: cellStyle,
-        render: (_, r) => runtime[r.email]?.status ?? "",
+        width: 96,
+        render: (_, r) => {
+          const st = runtime[r.email]?.status;
+          return st ? <StatusDot tone={aiItemTone(st)} text={st} /> : <Typography.Text type="secondary">—</Typography.Text>;
+        },
       },
       {
         title: "消息",
         key: "message",
         ellipsis: { showTitle: true },
-        onCell: cellStyle,
         render: (_, r) => runtime[r.email]?.message ?? "",
       },
-    ];
-  }, [runtime, t, props.checkedKeys]);
+    ],
+    [runtime],
+  );
 
   const filtered = visible.length !== (props.list?.rows.length ?? 0);
 
@@ -265,6 +246,8 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
             ),
           }}
           rowSelection={{
+            // 与固定在左的邮箱列一起固定：横向滚动时勾选框和行首状态条一直可见
+            fixed: "left",
             columnWidth: 40,
             selectedRowKeys: props.checkedKeys,
             // 被筛选隐藏的勾选也要保留（antd 默认会丢掉不在 dataSource 里的 key）
@@ -278,6 +261,7 @@ export function AccountListCard(props: AccountListCardProps): ReactElement {
               props.onCheckedChange,
             ),
           }}
+          rowClassName={(r) => railClass(aiItemTone(runtime[r.email]?.status))}
           onRow={accountRow}
         />
       </div>

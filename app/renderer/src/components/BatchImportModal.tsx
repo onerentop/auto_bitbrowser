@@ -16,6 +16,7 @@ import {
 import { describeError } from "../lib/ipc.ts";
 import { useTokens } from "../theme/tokens.ts";
 import { usePagination } from "./use-pagination.ts";
+import { railClass } from "../lib/list-tone.ts";
 
 export interface BatchImportModalProps<T> {
   open: boolean;
@@ -139,6 +140,7 @@ export function BatchImportModal<T>(props: BatchImportModalProps<T>): ReactEleme
           dataSource={preview}
           pagination={pager.pagination}
           scroll={{ y: 240 }}
+          rowClassName={(r) => railClass(r.ok ? "none" : "bad")}
         />
         <Typography.Text type="secondary">
           有效 <Typography.Text type="success" className="abb-num">{counts.valid}</Typography.Text> 条，无效{" "}

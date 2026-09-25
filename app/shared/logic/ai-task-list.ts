@@ -2,7 +2,8 @@
  * AI 任务页（替换手机号等 6 个页面）平铺账号列表的纯函数 —— 渲染层用，node:test 直接测
  *
  * 包含：filterRows（分组 + 账号状态 + 只看本次失败 + 搜索）、rowSorter（表头排序）、
- * isSelectable / selectedItems（勾选 → 任务条目）、statusTone（任务结果色调）。
+ * isSelectable / selectedItems（勾选 → 任务条目）、loginStatusLabel（登录状态文案）。
+ * 任务结果的色调在渲染层 lib/list-tone.ts（aiItemTone）。
  * 勾选的「刷新后保留 / 隐藏计数」直接复用 home-list.ts 的 reconcileChecked / selectionSummary。
  * 纯 TS，不依赖 node / DOM / electron。
  */
@@ -112,15 +113,6 @@ export function selectedItems(rows: readonly AiTaskRow[], checkedKeys: readonly 
     items.push({ email: r.email, profileId: r.profileId });
   }
   return items;
-}
-
-export type StatusTone = "success" | "error" | "warning";
-
-/** 成功绿；失败 / 错误红；其他（处理中等）黄 */
-export function statusTone(status: string): StatusTone {
-  if (status === AI_TASK_ITEM_STATUS.success) return "success";
-  if (status === AI_TASK_ITEM_STATUS.failed || status === AI_TASK_ITEM_STATUS.error) return "error";
-  return "warning";
 }
 
 /** 登录状态显示文案（与账号管理页一致：not_logged 为 schema 默认值「未登录」） */

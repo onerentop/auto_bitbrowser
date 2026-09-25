@@ -2,7 +2,7 @@
  * 「代理」标签（列表 / 增删改 / 批量导入 / 绑定详情）
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { Alert, App, Button, Empty, Form, Input, List, Modal, Select, Space, Table, Tooltip, Typography } from "antd";
+import { Alert, App, Button, Empty, Form, Input, List, Modal, Select, Space, Table, Typography } from "antd";
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -286,14 +286,25 @@ export function ProxiesTab(): ReactElement {
 
   const columns: ColumnsType<ProxyListItemDto> = [
     { title: "类型", dataIndex: "proxy_type", width: 80 },
-    { title: "主机", dataIndex: "host", ellipsis: true },
-    { title: "端口", dataIndex: "port", width: 80 },
-    { title: "用户名", dataIndex: "username", ellipsis: true },
-    { title: "密码", key: "password", width: 80, render: (_, p) => (p.password ? "***" : "") },
+    { title: "主机", dataIndex: "host", ellipsis: true, render: (v: string) => <span className="abb-mono">{v}</span> },
+    { title: "端口", dataIndex: "port", width: 80, align: "right", render: (v: string) => <span className="abb-mono">{v}</span> },
+    {
+      title: "用户名",
+      dataIndex: "username",
+      ellipsis: true,
+      render: (v: string) => v || <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    {
+      title: "密码",
+      key: "password",
+      width: 80,
+      render: (_, p) => (p.password ? "***" : <Typography.Text type="secondary">—</Typography.Text>),
+    },
     {
       title: "使用情况",
       key: "usage",
       width: 90,
+      align: "right",
       render: (_, p) => (
         <span className="abb-num" style={{ color: usageColor(t, p) }}>{`${p.used_count}/${p.max_count}`}</span>
       ),
@@ -301,17 +312,18 @@ export function ProxiesTab(): ReactElement {
     {
       title: "操作",
       key: "actions",
-      width: 100,
+      width: 110,
+      fixed: "right",
       render: (_, p) => (
         <Space size={0}>
-          <Tooltip title="编辑">
-            <Button type="text" icon={<EditOutlined />} onClick={() => openEdit(p)} />
-          </Tooltip>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(p)}>
+            编辑
+          </Button>
           {/* 有 proxy_id 且已使用时才显示详情 */}
           {p.proxy_id && p.used_count > 0 ? (
-            <Tooltip title="详情">
-              <Button type="text" icon={<InfoCircleOutlined />} onClick={() => setDetailId(p.proxy_id)} />
-            </Tooltip>
+            <Button type="link" size="small" icon={<InfoCircleOutlined />} onClick={() => setDetailId(p.proxy_id)}>
+              详情
+            </Button>
           ) : null}
         </Space>
       ),
@@ -359,6 +371,8 @@ export function ProxiesTab(): ReactElement {
         onRow={proxyRow}
         pagination={pager.pagination}
         locale={{ emptyText: <Empty description="暂无代理" /> }}
+        // 横向放不下时表格内部滚动，操作列固定在右侧
+        scroll={{ x: "max-content" }}
         style={{ marginTop: 12 }}
       />
 

@@ -128,14 +128,21 @@ export function buildTheme(dark: boolean, reduceMotion = false): ThemeConfig {
         itemBorderRadius: 6,
         activeBarBorderWidth: 0,
       },
+      // 列表规范（.trellis/tasks/09-25-list-display-design/design.md）：
+      // 行高约 40px、无斑马纹、1px 分隔线；悬停 canvas、选中 indigoSoft；表头 muted（字号 / 字重在 app.css）
       Table: {
         headerBg: p.surface,
         headerColor: p.muted,
         headerSplitColor: "transparent",
+        headerSortActiveBg: p.surface,
+        headerSortHoverBg: p.canvas,
+        rowHoverBg: p.canvas,
         rowSelectedBg: p.indigoSoft,
         rowSelectedHoverBg: p.indigoSoft,
         borderColor: p.line,
-        cellPaddingBlockSM: 6,
+        cellPaddingBlockSM: 8,
+        cellPaddingInlineSM: 12,
+        bodySortBg: "transparent",
       },
       Card: { headerFontSize: 14, headerHeightSM: 40 },
       Tabs: { horizontalMargin: "0 0 12px 0" },

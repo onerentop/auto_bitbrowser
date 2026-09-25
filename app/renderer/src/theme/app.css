@@ -34,6 +34,89 @@ body {
   scrollbar-color: var(--abb-line) transparent;
 }
 
+/* ---------- 列表（全部 Table 共用，见 .trellis/tasks/09-25-list-display-design/design.md） ---------- */
+
+/* 表头：12px、muted、500；不全大写 */
+.ant-table-wrapper .ant-table-thead > tr > th {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* 唯一「大声」的元素：行首 3px 状态条（行类由 lib/list-tone.ts 的 railClass 给出） */
+.ant-table-wrapper .ant-table-tbody > tr.abb-rail-ok > td:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-ok);
+}
+.ant-table-wrapper .ant-table-tbody > tr.abb-rail-warn > td:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-warn);
+}
+.ant-table-wrapper .ant-table-tbody > tr.abb-rail-bad > td:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-bad);
+}
+.ant-table-wrapper .ant-table-tbody > tr.abb-rail-busy > td:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-indigo);
+}
+/* 虚拟表的行不是 <tr>：同样画在首个单元格上 */
+.ant-table-wrapper .ant-table-tbody-virtual .ant-table-row.abb-rail-ok > .ant-table-cell:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-ok);
+}
+.ant-table-wrapper .ant-table-tbody-virtual .ant-table-row.abb-rail-warn > .ant-table-cell:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-warn);
+}
+.ant-table-wrapper .ant-table-tbody-virtual .ant-table-row.abb-rail-bad > .ant-table-cell:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-bad);
+}
+.ant-table-wrapper .ant-table-tbody-virtual .ant-table-row.abb-rail-busy > .ant-table-cell:first-child {
+  box-shadow: inset 3px 0 0 var(--abb-indigo);
+}
+
+/* 状态单元格（components/StatusDot.tsx）：圆点 + 文字，颜色跟色调；原因 muted 单行省略 */
+.abb-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.abb-dot::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.abb-tone-ok {
+  color: var(--abb-ok);
+}
+.abb-tone-warn {
+  color: var(--abb-warn);
+}
+.abb-tone-bad {
+  color: var(--abb-bad);
+}
+.abb-tone-busy {
+  color: var(--abb-indigo);
+}
+.abb-tone-none {
+  color: var(--abb-muted);
+}
+.abb-tone-none::before {
+  background: var(--abb-idle);
+}
+.abb-dot-reason {
+  min-width: 0;
+  margin-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--abb-muted);
+}
+
+/* 身份列（邮箱 / 名称）：ink、500 */
+.abb-id {
+  color: var(--abb-ink);
+  font-weight: 500;
+}
+
 /* 任务坞进度条：不定进度时一段色块往复移动 */
 @keyframes abb-indeterminate {
   0% {
