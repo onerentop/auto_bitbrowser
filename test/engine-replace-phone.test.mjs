@@ -25,7 +25,7 @@ const SIGNIN_URL = "https://accounts.google.com/v3/signin/identifier";
 const PASSWORD_SELECTOR = 'input[name="Passwd"]';
 const TOTP_SELECTOR = "#totpPin";
 const NEW_PHONE = "+8613800001234";
-/** 页面上的显示格式（真机：+86 176 0014 4886 这种分组格式） */
+/** 页面上的显示格式（真机：+86 1xx xxxx xxxx 这种分组格式） */
 const NEW_PHONE_SHOWN = "+86 138 0000 1234";
 const OLD_PHONE_SHOWN = "07521 544348";
 const PASSWORD = "pw-must-not-reach-the-llm";
