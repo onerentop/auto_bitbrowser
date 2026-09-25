@@ -232,8 +232,8 @@ test("appendPasswordRecord：追加「邮箱----新密码----状态----时间」
     const lines = readFileSync(join(dir, PASSWORD_RECORD_FILE), "utf8").trim().split("\n");
     assert.equal(PASSWORD_RECORD_FILE, "已修改密码.txt");
     assert.equal(lines.length, 2);
-    assert.match(lines[0], /^a@x\.com----NewPw-1----提交前----\d{4}-\d{2}-\d{2}T/);
-    assert.match(lines[1], /^a@x\.com----NewPw-1----已确认----/);
+    assert.match(lines[0] ?? "", /^a@x\.com----NewPw-1----提交前----\d{4}-\d{2}-\d{2}T/);
+    assert.match(lines[1] ?? "", /^a@x\.com----NewPw-1----已确认----/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

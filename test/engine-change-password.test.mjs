@@ -22,7 +22,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ChangePasswordOperation } from "../src/engine/operations/change-password.ts";
+import { ChangePasswordOperation, CONFIRM_DIALOG_PATTERN } from "../src/engine/operations/change-password.ts";
 import { GoogleURLs } from "../src/engine/constants.ts";
 
 const PASSWORD_URL = GoogleURLs.PASSWORD;
@@ -46,6 +46,9 @@ const HOME_TEXT = "管理您的 Google 账号 隐私权条款 帮助 关于";
 const LANDING_TEXT = "Google 账号 登录 使用您的 Google 账号";
 const ERROR_TEXT = "无法访问此网站 chromewebdata ERR_CONNECTION_RESET 请检查网络连接";
 const SIGNIN_TEXT = "登录 使用您的 Google 账号 电子邮件地址或电话号码";
+/** 真机 2026-09-25 英文界面：点「Change password」后弹出的确认弹层原文（注意 You’ll 是弯引号） */
+const DIALOG_TEXT_EN =
+  "You’ll stay signed in on these devices after changing your password: The device you are on now Apple iPad Air (10.9-inch, 5th generation) You can sign out of any device that’s connected to your account by visiting your devices in your settings Cancel Change password";
 
 const NEW_PASSWORD = "New-Passw0rd-abcdef";
 
@@ -62,16 +65,19 @@ const NEW_PASSWORD = "New-Passw0rd-abcdef";
  *   error_page   —— chrome-error:// 错误页
  *   dead         —— 提交后引擎就死了（取 URL / 页面文本都抛错）
  */
-function fakeEngine({ afterSubmit = "home", hasSaveButton = true } = {}) {
+function fakeEngine({ afterSubmit = "home", hasSaveButton = true, confirmDialog = false, dialogFadeIn = 0 } = {}) {
+  let fadeLeft = dialogFadeIn; // 弹层淡入中：前几次在弹层里点不到按钮（真机 2026-09-25）
   /** @type {{ clickByText: string[], pressKey: string[], fill: { selector: string, value: string }[], navigate: string[] }} */
   const calls = { clickByText: [], pressKey: [], fill: [], navigate: [] };
   let state = "form";
   let dead = false; // 仅「提交后引擎死掉」那条用例由 submit() 置位
-  const onForm = () => !dead && (state === "form" || state === "reject");
+  const onForm = () => !dead && (state === "form" || state === "reject" || state === "dialog");
   const textOf = () => {
     switch (state) {
       case "form":
         return FORM_TEXT;
+      case "dialog":
+        return `${FORM_TEXT} ${DIALOG_TEXT_EN}`;
       case "reject":
         return REJECT_TEXT;
       case "success_text":
@@ -140,8 +146,22 @@ function fakeEngine({ afterSubmit = "home", hasSaveButton = true } = {}) {
       },
       async clickByText(label) {
         calls.clickByText.push(label);
-        if (state !== "form" || label !== "更改密码") return false;
-        if (!hasSaveButton) return false;
+        if (label !== "更改密码" || !hasSaveButton) return false;
+        if (state === "dialog") {
+          if (fadeLeft > 0) {
+            fadeLeft -= 1;
+            return false; // 弹层文字已在 DOM 里，但按钮还在淡入，不可点
+          }
+          // 弹层里的按钮：这一下才真正提交
+          state = "form";
+          submit();
+          return true;
+        }
+        if (state !== "form") return false;
+        if (confirmDialog) {
+          state = "dialog";
+          return true;
+        }
         submit();
         return true;
       },
@@ -211,6 +231,46 @@ test("提交后页面文本与 url 必须进日志（真机教训：不记文本
   assert.ok(submitLog, "必须有「提交后页面」这条日志");
   assert.match(submitLog, /url=https:\/\/myaccount\.google\.com\/security-checkup-welcome/);
   assert.match(submitLog, /文本\(\d+ 字\)="账号 帮助/);
+});
+
+// ==================== 真机 2026-09-25：点「Change password」后弹出确认弹层 ====================
+
+test("真机回归（2026-09-25）：点保存后弹出「更改密码后仍保持登录的设备」确认弹层 → 还要点弹层里的按钮，才真正提交", async () => {
+  const { result, fake } = await runOp(fakeEngine({ afterSubmit: "success_text", confirmDialog: true }));
+  assert.equal(result.success, true, `应判成功，实际: ${result.message}`);
+  assert.equal(
+    fake.calls.clickByText.filter((t) => t === "更改密码").length,
+    2,
+    `表单按钮一次 + 弹层按钮一次: ${JSON.stringify(fake.calls.clickByText)}`,
+  );
+});
+
+test("真机回归（2026-09-25 第二次）：弹层文字一出现就去点、按钮还在淡入点不到 → 继续等，点到为止（不能点一次没中就放弃）", async () => {
+  const { result, fake } = await runOp(fakeEngine({ afterSubmit: "success_text", confirmDialog: true, dialogFadeIn: 2 }));
+  assert.equal(result.success, true, `应判成功，实际: ${result.message}`);
+  assert.equal(fake.calls.clickByText.filter((t) => t === "更改密码").length, 4, "表单 1 次 + 弹层淡入时 2 次没点中 + 第 3 次点中");
+});
+
+test("弹层一直点不中（8 轮都没点到）→ 没真正提交，必须判失败，不能报成功（否则会把没生效的密码当成已改）", async () => {
+  const { result, fake } = await withFastClock(() =>
+    runOp(fakeEngine({ afterSubmit: "success_text", confirmDialog: true, dialogFadeIn: 99 })),
+  );
+  assert.equal(result.success, false, `弹层没点中就不算改成功，实际: ${result.message}`);
+  assert.equal(fake.calls.clickByText.filter((t) => t === "更改密码").length, 1 + 8, "表单 1 次 + 弹层轮询到上限 8 次");
+});
+
+test("确认弹层判定只认弹层专有文字：表单页本来就有「保持登录状态 / where you’ll stay signed in」，不能当弹层（否则会多点一次）", () => {
+  const EN_FORM =
+    "Password Choose a strong password and don't reuse it for other accounts. You may be signed out of your account on some devices. Learn more about where you’ll stay signed in New password Confirm new password Change password";
+  assert.equal(CONFIRM_DIALOG_PATTERN.test(FORM_TEXT), false);
+  assert.equal(CONFIRM_DIALOG_PATTERN.test(EN_FORM), false);
+  assert.equal(CONFIRM_DIALOG_PATTERN.test(DIALOG_TEXT_EN), true);
+});
+
+test("没有确认弹层时（中文真机形态）只点一次保存，不重复提交", async () => {
+  const { result, fake } = await runOp(fakeEngine({ afterSubmit: "success_text" }));
+  assert.equal(result.success, true);
+  assert.equal(fake.calls.clickByText.filter((t) => t === "更改密码").length, 1);
 });
 
 test("确认文案换了措辞（词表不中）但已离开密码页且表单消失 → 兜底判成功", async () => {

@@ -210,6 +210,19 @@ test("clickByText 脚本：不得选中「包含其它命中元素」的祖先�
   assert.equal(outer.clicked, false);
 });
 
+test("clickByText 脚本：页面开着弹层时，同名按钮优先点弹层里的那个（真机：改密确认弹层与表单都有「Change password」）", () => {
+  const dialog = { role: "dialog" };
+  const formBtn = Object.assign(el({ tagName: "BUTTON", innerText: "Change password" }), { closest: () => null });
+  const dialogBtn = Object.assign(el({ tagName: "BUTTON", innerText: "Change password" }), {
+    closest: (/** @type {string} */ sel) => (sel.includes("dialog") ? dialog : null),
+  });
+
+  runScript(textClickScript("Change password"), [formBtn, dialogBtn]);
+
+  assert.equal(dialogBtn.clicked, true, "应点弹层里的按钮");
+  assert.equal(formBtn.clicked, false, "不能点弹层下面的表单按钮");
+});
+
 test("clickByText：page.evaluate 抛错时返回 null（吞错分支，不把异常抛给调用方）", async () => {
   const engine = /** @type {any} */ (new StagehandGoogleEngine(/** @type {any} */ ({ ixClient: {} })));
   engine.sh = {};

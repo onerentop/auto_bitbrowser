@@ -153,8 +153,15 @@ export function textClickScript(text: string, mode: "prefix" | "contains" = "pre
     ).filter((el) => isClickable(el) && hits(el));
     if (candidates.length === 0) return null;
 
-    const exact = candidates.filter((el) => label(el) === want);
-    const matched = exact.length > 0 ? exact : candidates;
+    // 页面开着弹层（role=dialog / alertdialog / aria-modal）时，同名按钮只在弹层里挑：
+    // 真机 2026-09-25 改密确认弹层与下面的表单都有「Change password」，点到表单那个等于没点。
+    const inDialog = (el) =>
+      typeof el.closest === 'function' &&
+      !!el.closest('[role="dialog"],[role="alertdialog"],[aria-modal="true"]');
+    const dialogScoped = candidates.filter(inDialog);
+    const scoped = dialogScoped.length > 0 ? dialogScoped : candidates;
+    const exact = scoped.filter((el) => label(el) === want);
+    const matched = exact.length > 0 ? exact : scoped;
     const contained = (el, other) => typeof el.contains === 'function' && el.contains(other);
     const innermost = matched.filter(
       (el) => !matched.some((other) => other !== el && contained(el, other)),

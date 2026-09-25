@@ -45,6 +45,12 @@ const CONFIRM_PASSWORD_SELECTORS = [
 /** 保存按钮的文案（真机是「更改密码」，不是「保存」） */
 const SAVE_BUTTON_TEXTS = ["更改密码", "Change password", "保存", "Save"] as const;
 
+/**
+ * 点「更改密码」后的确认弹层（真机 2026-09-25 英文原文：You’ll stay signed in on these devices after changing
+ * your password: …）。只认弹层专有的句子：表单页本身就有「where you’ll stay signed in / 保持登录状态」，
+ * 用它会把没弹层的表单页也当弹层、多点一次。中文界面的弹层文案未在真机见过，按「更改密码后」兜底。
+ */
+export const CONFIRM_DIALOG_PATTERN = /stay signed in on these devices after changing|更改密码后/i;
 /** 表单出现 / 提交后页面变化的等待上限 */
 const FORM_TIMEOUT_MS = 15_000;
 /** 提交后等待页面给出结果的上限（真机：Google 改完密码后页面变化较慢） */
@@ -209,6 +215,28 @@ export class ChangePasswordOperation {
       this.log?.(submitted ? "未找到保存按钮，改用回车提交" : "未找到「更改密码」按钮，也未能回车提交");
     }
     if (!submitted) return { success: false, message: "找不到「更改密码」按钮", error: "未找到保存按钮" };
+
+    // 真机 2026-09-25（英文界面）：点完保存会弹出确认弹层「You’ll stay signed in on these devices after
+    // changing your password … Cancel / Change password」，不点弹层里的按钮就根本没提交（页面停在弹层上，
+    // 判定只能超时）。弹层出现就再点一次——引擎的按文本点击在弹层打开时只点弹层里的同名按钮。
+    // 第二次真机：弹层文字一进 DOM 就被认出来，但按钮还在淡入（不可点）→ 点不到。所以要「点到为止」：
+    // 每轮 1 秒、最多 8 轮，弹层在而没点中就继续等。
+    for (let i = 0; i < 8; i++) {
+      // 取页面文本失败（引擎已死 / 导航中）就当没有弹层，交给后面的判定如实处理（fail-closed）
+      const text = await this.engine.getPageContent().catch(() => "");
+      if (CONFIRM_DIALOG_PATTERN.test(text)) {
+        let clicked = false;
+        for (const label of SAVE_BUTTON_TEXTS) {
+          if (await this.engine.clickByText(label)) {
+            this.log?.(`确认弹层：已点击「${label}」`);
+            clicked = true;
+            break;
+          }
+        }
+        if (clicked) break;
+      }
+      await this.engine.wait(1000);
+    }
 
     await this.engine.wait(8000);
     return { success: true };

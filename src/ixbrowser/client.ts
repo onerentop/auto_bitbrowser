@@ -18,6 +18,7 @@ import {
   type IxProfileListQuery,
   type IxTagListData,
 } from "./types.ts";
+import { BACKOFF_FACTOR, MAX_RETRIES, isRetryableError } from "./window.ts";
 
 /** HTTP 状态码非 200 */
 export class IxHttpError extends Error {
@@ -53,12 +54,15 @@ export interface IxClientOptions {
   timeoutMs?: number;
   /** 便于单测注入 */
   fetchImpl?: typeof fetch;
+  /** 可重试错误的首次重试间隔（毫秒，按 BACKOFF_FACTOR 退避）；默认 1000，单测传 0 */
+  retryDelayMs?: number;
 }
 
 export class IxBrowserClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryDelayMs: number;
 
   /** 最近一次 profile-list 请求的总数 */
   public total = 0;
@@ -69,6 +73,7 @@ export class IxBrowserClient {
     this.baseUrl = `http://${host}:${port}/api/v2/`;
     this.timeoutMs = options.timeoutMs ?? IX_DEFAULT_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.retryDelayMs = options.retryDelayMs ?? 1000;
   }
 
   /**
@@ -282,8 +287,9 @@ export class IxBrowserClient {
   }
 
   /**
-   * 更新窗口信息（备注、2FA 密钥等）。
- * 只发送传入的字段。
+   * 更新窗口信息（备注、2FA 密钥、密码等）。只发送传入的字段。
+   * profile-update 是覆盖写（幂等），遇到可重试错误（socket hang up / server busy 等）按退避重试，
+   * 最多 MAX_RETRIES 次——真机 2026-09-25：改密成功后同步窗口 password 撞上一次 socket hang up 就放弃了。
    */
   async updateProfile(
     profileId: number,
@@ -294,12 +300,20 @@ export class IxBrowserClient {
     for (const [k, v] of Object.entries(fields)) {
       if (v !== undefined) params[k] = v;
     }
-    try {
-      await this.call("profile-update", params);
-      return true;
-    } catch (error) {
-      console.error(`[ix] update_profile 失败: ${error}`);
-      return false;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.call("profile-update", params);
+        return true;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (attempt < MAX_RETRIES && isRetryableError(msg)) {
+          console.error(`[ix] update_profile 失败（第 ${attempt + 1} 次，将重试）: ${error}`);
+          await new Promise((r) => setTimeout(r, this.retryDelayMs * BACKOFF_FACTOR ** attempt));
+          continue;
+        }
+        console.error(`[ix] update_profile 失败: ${error}`);
+        return false;
+      }
     }
   }
 

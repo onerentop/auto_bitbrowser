@@ -87,6 +87,53 @@ test("真机回归（2026-09-25）：error.code 是字符串（ixBrowser 上游�
   });
 });
 
+test("真机回归（2026-09-25）：数字错误码 + 「socket hang up」也算可重试", () => {
+  // 改密后同步窗口 password 时 ixBrowser 回过 IxResponseError: socket hang up，一次抖动就让窗口字段没写上
+  assert.equal(isRetryableError("socket hang up"), true);
+});
+
+/**
+ * 按顺序依次返回给定响应的假 fetch
+ * @returns {any}
+ */
+function seqFetch(bodies) {
+  const calls = [];
+  const impl = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    const body = bodies[Math.min(calls.length - 1, bodies.length - 1)];
+    return { status: 200, json: async () => body };
+  };
+  impl.calls = calls;
+  return impl;
+}
+
+test("真机回归（2026-09-25）：updateProfile 遇到可重试错误（socket hang up）会重试，后续成功就返回 true", async () => {
+  const f = seqFetch([
+    { error: { code: 1, message: "socket hang up" }, data: null },
+    { error: { code: "ECONNRESET", message: "socket hang up" }, data: null },
+    { error: { code: 0, message: "success" } },
+  ]);
+  const c = new IxBrowserClient({ fetchImpl: f, retryDelayMs: 0 });
+  const ok = await c.updateProfile(82, { password: "x" });
+  assert.equal(ok, true);
+  assert.equal(f.calls.length, 3);
+  assert.ok(f.calls.every((call) => /profile-update$/.test(call.url)));
+});
+
+test("updateProfile 不可重试的错误不重试，直接返回 false", async () => {
+  const f = seqFetch([{ error: { code: 2007, message: "窗口不存在" }, data: null }]);
+  const c = new IxBrowserClient({ fetchImpl: f, retryDelayMs: 0 });
+  assert.equal(await c.updateProfile(82, { password: "x" }), false);
+  assert.equal(f.calls.length, 1);
+});
+
+test("updateProfile 可重试错误一直不好，重试有上限（共 4 次）后返回 false", async () => {
+  const f = seqFetch([{ error: { code: 1008, message: "Server busy, please try again later." }, data: null }]);
+  const c = new IxBrowserClient({ fetchImpl: f, retryDelayMs: 0 });
+  assert.equal(await c.updateProfile(82, { password: "x" }), false);
+  assert.equal(f.calls.length, 4);
+});
+
 test("全部请求都是 POST + JSON", async () => {
   const f = fakeFetch({ error: { code: 0 }, data: { total: 0, data: [] } });
   const c = new IxBrowserClient({ fetchImpl: f });

@@ -28,6 +28,8 @@ export const RETRYABLE_ERRORS: readonly string[] = [
   "econnrefused",
   "econnreset",
   "etimedout",
+  // 数字错误码 + 「socket hang up」（真机 2026-09-25：改密后同步窗口 password 时撞上，窗口字段没写上）
+  "socket hang up",
   // ixBrowser code=1008「Server busy, please try again later.」：关窗等操作进行中时并发请求会收到，
   // 1~2 秒后自行恢复（真机 2026-09-25：登录后关窗与账号列表刷新撞上，列表整批落到「窗口信息获取失败」）
   "server busy",
