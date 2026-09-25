@@ -149,7 +149,7 @@ function toProfileId(value: number | string | null | undefined): number | null {
   return Number.isInteger(n) && n !== 0 ? n : null;
 }
 
-/** cookies_backup=False, load_profile_info_page=False */
+/** cookies_backup=true（关窗后保存登录状态）, load_profile_info_page=false */
 export async function openBrowserById(
   deps: IxWindowDeps,
   profileId: number | string,
@@ -158,7 +158,7 @@ export async function openBrowserById(
   const id = toProfileId(profileId);
   if (id === null) return false;
   const r = await withRetry(deps, maxRetries, "窗口打开失败", () =>
-    deps.client.openProfile(id, { cookiesBackup: false, loadProfileInfoPage: false }),
+    deps.client.openProfile(id, { cookiesBackup: true, loadProfileInfoPage: false }),
   );
   return r.ok;
 }

@@ -114,6 +114,13 @@ test("openProfile 不传 cookie 时不发送该键", async () => {
   assert.deepEqual(f.calls[0].body.args, ["--disable-extension-welcome-page"]);
 });
 
+test("真机回归（2026-09-25）：openProfile 默认 cookies_backup=true——否则关窗后登录状态丢失、最后打开时间也不更新", async () => {
+  const f = fakeFetch({ error: { code: 0 }, data: { ws: "ws://x", debugging_address: "127.0.0.1:1", webdriver: "d", pid: 1, profile_id: 1 } });
+  const c = new IxBrowserClient({ fetchImpl: f });
+  await c.openProfile(1);
+  assert.equal(f.calls[0].body.cookies_backup, true, "与官方 SDK 默认一致");
+});
+
 test("openProfile 不重复追加 welcome-page 参数", async () => {
   const f = fakeFetch({ error: { code: 0 }, data: { ws: "ws://x", debugging_address: "", webdriver: "", pid: 1, profile_id: 1 } });
   const c = new IxBrowserClient({ fetchImpl: f });

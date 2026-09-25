@@ -202,7 +202,9 @@ export class IxBrowserClient {
       profile_id: profileId,
       load_extensions: options.loadExtensions ?? true,
       load_profile_info_page: options.loadProfileInfoPage ?? false,
-      cookies_backup: options.cookiesBackup ?? false,
+      // 真机 2026-09-25：传 false 时关窗后 ixBrowser 不保存这次会话（登录状态丢失、最后打开时间也不更新），
+      // 下次打开又是未登录。与官方 SDK open_profile 的默认值一致：true。
+      cookies_backup: options.cookiesBackup ?? true,
       args,
     };
     if (options.cookie != null) params["cookie"] = options.cookie;

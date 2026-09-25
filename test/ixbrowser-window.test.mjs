@@ -146,7 +146,7 @@ test("openBrowserById / deleteBrowserById：无效 id 返回 false；失败返�
   assert.equal(await openBrowserById(d, ""), false);
   assert.equal(await openBrowserById(d, 0), false);
   assert.equal(await openBrowserById(d, "12"), true);
-  assert.deepEqual(opened, [[12, { cookiesBackup: false, loadProfileInfoPage: false }]]);
+  assert.deepEqual(opened, [[12, { cookiesBackup: true, loadProfileInfoPage: false }]], "首页「打开窗口」也要保存登录信息");
   assert.equal(await deleteBrowserById(d, 12), false);
 });
 
