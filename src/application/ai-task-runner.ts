@@ -1,6 +1,6 @@
 /**
  * AI 批量任务（替换手机号 / 替换辅助邮箱 / 修改2SV手机 / 修改验证器 / 踢出设备 / 改密码）的执行逻辑
- * 每个账号执行前先确认登录（已登录直接执行，未登录才登录，登录失败不执行）。
+ * 每个账号执行前先只读检查登录（已登录直接执行，未登录才走登录流程，登录失败不执行）。
  *
  * 包含四部分：
  *   - buildAiTaskRows：窗口列表 + 数据库账号 → 平铺账号列表
@@ -32,7 +32,7 @@ import { autoModify2svPhone } from "../automation/auto-modify-2sv-phone.ts";
 import { autoModifyAuthenticator } from "../automation/auto-modify-authenticator.ts";
 import { autoKickDevices } from "../automation/auto-kick-devices.ts";
 import { autoChangePassword } from "../automation/auto-change-password.ts";
-import { autoGoogleLogin } from "../automation/auto-google-login.ts";
+import { autoGoogleLogin, checkGoogleLogin } from "../automation/auto-google-login.ts";
 
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -100,7 +100,9 @@ export interface AiTaskAutomation {
   autoModifyAuthenticator: typeof autoModifyAuthenticator;
   autoKickDevices: typeof autoKickDevices;
   autoChangePassword: typeof autoChangePassword;
-  /** 执行前确认登录（已登录直接返回，不再登录） */
+  /** 执行前只读检查窗口是否已登录（不输入、不写库） */
+  checkGoogleLogin: typeof checkGoogleLogin;
+  /** 检查发现未登录时才调用的登录流程 */
   autoGoogleLogin: typeof autoGoogleLogin;
 }
 
@@ -111,6 +113,7 @@ export const DEFAULT_AI_TASK_AUTOMATION: AiTaskAutomation = {
   autoModifyAuthenticator,
   autoKickDevices,
   autoChangePassword,
+  checkGoogleLogin,
   autoGoogleLogin,
 };
 
@@ -312,23 +315,39 @@ export async function runAiTask(
       const row = deps.getAccount(email);
       const accountInfo: Record<string, unknown> = row ? { ...row } : { email };
 
-      // 执行前确认登录：autoGoogleLogin 第一步打开 myaccount 检查，**显示该账号就直接返回、不再登录**；
-      // 没登录才用数据库账号信息登录。登录失败就不执行操作 —— 否则操作页会被跳到登录页，
-      // 报出含糊的「需要先登录账号」（真机 2026-09-25：数据库写已登录，窗口其实早已退出）。
-      let login: { success: boolean; message: string; loginStatus: string };
+      // 执行前先**只读**检查窗口是否已登录该账号（真机 2026-09-25：数据库写已登录，窗口其实早已退出）：
+      //   - 已登录 → 不走登录流程，直接执行后续步骤；库里状态过时才纠正并通知界面；
+      //   - 未登录（或检查本身出错）→ 才用数据库账号信息登录。登录失败就不执行操作 ——
+      //     否则操作页会被跳到登录页，报出含糊的「需要先登录账号」。
+      let signedIn = false;
       try {
-        login = await deps.automation.autoGoogleLogin(String(profileId), accountInfo, {
-          callback: api.log,
-          accountRepo: deps.loginSink.accountRepo(),
-        });
-      } catch (error) {
-        // autoGoogleLogin 正常会把异常折成返回值；万一漏出来，也按「登录失败，未执行」处理
-        login = { success: false, message: errText(error), loginStatus: "login_failed" };
+        signedIn = (await deps.automation.checkGoogleLogin(String(profileId), accountInfo, { callback: api.log })).signedIn;
+      } catch {
+        signedIn = false; // 检查出错交给登录流程（它第一步还会再检查一次）
       }
-      // 写库只对数据库里有的账号生效；按写完后的库内值通知界面（与账号页显示的一致）
-      if (row) {
-        const after = deps.getAccount(email);
-        deps.loginSink.changed(email, String(after?.["login_status"] ?? login.loginStatus), textOf(after?.["last_error"]) || null);
+
+      let login: { success: boolean; message: string; loginStatus: string };
+      if (signedIn) {
+        login = { success: true, message: "已登录", loginStatus: "logged_in" };
+        if (row && textOf(row["login_status"]) !== "logged_in") {
+          deps.loginSink.accountRepo().updateLoginStatus(email, "logged_in");
+          deps.loginSink.changed(email, "logged_in", null);
+        }
+      } else {
+        try {
+          login = await deps.automation.autoGoogleLogin(String(profileId), accountInfo, {
+            callback: api.log,
+            accountRepo: deps.loginSink.accountRepo(),
+          });
+        } catch (error) {
+          // autoGoogleLogin 正常会把异常折成返回值；万一漏出来，也按「登录失败，未执行」处理
+          login = { success: false, message: errText(error), loginStatus: "login_failed" };
+        }
+        // 写库只对数据库里有的账号生效；按写完后的库内值通知界面（与账号页显示的一致）
+        if (row) {
+          const after = deps.getAccount(email);
+          deps.loginSink.changed(email, String(after?.["login_status"] ?? login.loginStatus), textOf(after?.["last_error"]) || null);
+        }
       }
 
       if (!login.success) {

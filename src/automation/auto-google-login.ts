@@ -49,6 +49,35 @@ export async function checkLoginStatusQuick(engine: {
   }
 }
 
+/**
+ * 只读检查：窗口当前是否已登录目标账号（打开 myaccount，只认 myaccount 域名 + 目标邮箱）。
+ * **不输入任何东西、不写库**——AI 任务执行前先调它，已登录就直接进入后续步骤，不走登录流程。
+ */
+export async function checkGoogleLogin(
+  browserId: string,
+  account: Record<string, unknown>,
+  options: { callback?: ((msg: string) => void) | null } = {},
+): Promise<{ signedIn: boolean; otherAccount: boolean; url: string }> {
+  const email = String(account["email"] ?? "");
+  const log = (msg: string) => options.callback?.(`[${email}] ${msg}`);
+  log("检查窗口当前登录状态...");
+  return withEngine(
+    browserId,
+    { closeAfter: false },
+    async (engine) => {
+      const { LoginOperation } = await import("../engine/operations/login.ts");
+      const r = await new LoginOperation(engine).checkSignedIn(email);
+      log(r.signedIn ? "myaccount 页面显示该账号，已处于登录状态，跳过登录" : "窗口未登录该账号，开始登录");
+      return r;
+    },
+    (msg) => {
+      // 检查本身出错（连不上窗口等）：交给后面的登录流程处理，登录第一步还会再检查一次
+      log(`检查登录状态出错: ${msg}，转入登录流程`);
+      return { signedIn: false, otherAccount: false, url: "" };
+    },
+  );
+}
+
 export async function autoGoogleLogin(
   browserId: string,
   account: Record<string, unknown>,

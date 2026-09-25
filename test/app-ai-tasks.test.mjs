@@ -46,7 +46,7 @@ function fakeIx({ groups = [], windows = [] } = {}) {
  * @param {Record<string, string>} [login] 执行前确认登录的结果：email → "fail"（默认成功）
  * @returns {{ calls: any[], loginCalls: any[], seq: string[], automation: any }}
  */
-function fakeAutomation(behavior = {}, hooks = {}, login = {}) {
+function fakeAutomation(behavior = {}, hooks = {}, login = {}, check = {}) {
   const calls = [];
   /** @type {any[]} */
   const loginCalls = [];
@@ -92,7 +92,14 @@ function fakeAutomation(behavior = {}, hooks = {}, login = {}) {
         const b = pick("password", args);
         return b === "fail" ? [false, "改密失败"] : [true, "密码已修改"];
       },
-      // 执行前的「确认登录」：login[email] = "fail" / "throw" / "stuck"；模拟真实函数的写库行为
+      // 执行前的「只读检查」：check[email] = "in"（已登录）/ "throw"；默认「未登录」，走登录流程
+      async checkGoogleLogin(browserId, account) {
+        seq.push(`check:${account?.email}`);
+        const email = String(account?.email ?? "");
+        if (check[email] === "throw") throw new Error("检查炸了");
+        return { signedIn: check[email] === "in", otherAccount: false, url: "https://myaccount.google.com/" };
+      },
+      // 未登录时才调用的「登录」：login[email] = "fail" / "throw" / "stuck"；模拟真实函数的写库行为
       async autoGoogleLogin(browserId, account, opts) {
         loginCalls.push({ browserId, account, opts });
         seq.push(`login:${account?.email}`);
@@ -117,9 +124,9 @@ function fakeAutomation(behavior = {}, hooks = {}, login = {}) {
 }
 
 /**
- * @param {{ groups?: any[], windows?: any[], behavior?: Record<string, any>, hooks?: Record<string, any>, ctxOverrides?: Record<string, any>, windowNames?: Record<string, string | null>, login?: Record<string, string> }} [options]
+ * @param {{ groups?: any[], windows?: any[], behavior?: Record<string, any>, hooks?: Record<string, any>, ctxOverrides?: Record<string, any>, windowNames?: Record<string, string | null>, login?: Record<string, string>, check?: Record<string, string> }} [options]
  */
-function setup({ groups = [], windows = [], behavior = {}, hooks = {}, ctxOverrides = {}, windowNames, login = {} } = {}) {
+function setup({ groups = [], windows = [], behavior = {}, hooks = {}, ctxOverrides = {}, windowNames, login = {}, check = {} } = {}) {
   const dataRoot = mkdtempSync(join(tmpdir(), "abb-ai-tasks-"));
   const events = [];
   const waiters = [];
@@ -136,7 +143,7 @@ function setup({ groups = [], windows = [], behavior = {}, hooks = {}, ctxOverri
     ixClient: ix,
   });
   const ctx = { ...base, ...ctxOverrides };
-  const fake = fakeAutomation(behavior, { ...hooks, ctx }, login);
+  const fake = fakeAutomation(behavior, { ...hooks, ctx }, login, check);
   const startedNames = new Map();
   const handlers = createAiTasksHandlers(ctx, {
     automation: fake.automation,
@@ -426,6 +433,51 @@ test("停止：第二个账号前停止，只处理 1 个；结束状态 stopped
   }
 });
 
+test("执行前先只读检查：窗口已登录该账号 → 不进登录流程、不写库不广播，直接执行", async () => {
+  const s = setup({ check: { "a@x.com": "in" } });
+  seed(s.ctx, [{ email: "a@x.com", password: "pa", secret_key: "SK" }]);
+  s.ctx.accountRepo().updateLoginStatus("a@x.com", "logged_in");
+  try {
+    await s.call(START, "replace_phone", [{ email: "a@x.com", profileId: 7 }], { newPhone: "13800" });
+    const fin = await s.finished();
+    assert.deepEqual(s.seq, ["check:a@x.com", "phone:a@x.com"], "已登录：检查完直接执行，不调用登录");
+    assert.equal(s.loginCalls.length, 0);
+    assert.equal(fin.result.results[0].status, "成功");
+    assert.equal(s.events.filter(([c]) => c === IPC.event.accountsLoginStatusChanged).length, 0, "库里本来就是已登录，不广播");
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("执行前先只读检查：窗口已登录但库里是旧的「登录失败」→ 纠正为已登录并广播，仍不进登录流程", async () => {
+  const s = setup({ check: { "a@x.com": "in" } });
+  seed(s.ctx, [{ email: "a@x.com", password: "pa" }]);
+  s.ctx.accountRepo().updateLoginStatus("a@x.com", "login_failed", "旧原因");
+  try {
+    await s.call(START, "kick_devices", [{ email: "a@x.com", profileId: 1 }], {});
+    await s.finished();
+    assert.deepEqual(s.seq, ["check:a@x.com", "kick:a@x.com"]);
+    assert.equal(s.ctx.accountRepo().getAccountByEmail("a@x.com")?.login_status, "logged_in");
+    const ev = s.events.filter(([c]) => c === IPC.event.accountsLoginStatusChanged).map(([, p]) => p);
+    assert.deepEqual(ev, [{ emails: ["a@x.com"], status: "logged_in", lastError: null }]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("执行前先只读检查：检查本身出错 → 退回走登录流程（登录第一步还会再检查一次）", async () => {
+  const s = setup({ check: { "a@x.com": "throw" } });
+  seed(s.ctx, [{ email: "a@x.com", password: "pa" }]);
+  try {
+    await s.call(START, "kick_devices", [{ email: "a@x.com", profileId: 1 }], {});
+    const fin = await s.finished();
+    assert.deepEqual(s.seq, ["check:a@x.com", "login:a@x.com", "kick:a@x.com"]);
+    assert.equal(fin.result.results[0].status, "成功");
+  } finally {
+    s.cleanup();
+  }
+});
+
 test("停止：登录阶段请求停止 → 登录完也不执行操作，该账号记失败「已停止」，后面的账号不处理", async () => {
   let ctxRef = null;
   const s = setup({ hooks: { onLogin: () => ctxRef.tasks.stop() } });
@@ -442,7 +494,7 @@ test("停止：登录阶段请求停止 → 登录完也不执行操作，该账
     );
     const fin = await s.finished();
     assert.equal(fin.outcome, "stopped");
-    assert.deepEqual(s.seq, ["login:a@x.com"], "登录后发现已停止：不踢设备，也不处理 b");
+    assert.deepEqual(s.seq, ["check:a@x.com", "login:a@x.com"], "登录后发现已停止：不踢设备，也不处理 b");
     assert.deepEqual(fin.result.results.map((r) => [r.email, r.status, r.message]), [["a@x.com", "失败", "已停止，未执行踢出设备"]]);
   } finally {
     s.cleanup();
@@ -490,7 +542,7 @@ test("执行前确认登录：先登录（用数据库账号信息、带写库�
   try {
     await s.call(START, "replace_phone", [{ email: "a@x.com", profileId: 7 }], { newPhone: "13800" });
     const fin = await s.finished();
-    assert.deepEqual(s.seq, ["login:a@x.com", "phone:a@x.com"], "先确认登录，再执行操作");
+    assert.deepEqual(s.seq, ["check:a@x.com", "login:a@x.com", "phone:a@x.com"], "先检查、没登录才登录，再执行操作");
     const { browserId, account, opts } = s.loginCalls[0];
     assert.equal(browserId, "7");
     assert.deepEqual([account.email, account.password, account.secret_key], ["a@x.com", "pa", "SK"]);
@@ -519,7 +571,7 @@ test("执行前确认登录：登录失败 → 不执行操作，行失败并写
       {},
     );
     const fin = await s.finished();
-    assert.deepEqual(s.seq, ["login:a@x.com", "login:b@x.com", "kick:b@x.com"], "a 登录失败就不踢设备");
+    assert.deepEqual(s.seq, ["check:a@x.com", "login:a@x.com", "check:b@x.com", "login:b@x.com", "kick:b@x.com"], "a 登录失败就不踢设备");
     assert.deepEqual(fin.result.results.map((r) => [r.email, r.status]), [
       ["a@x.com", "失败"],
       ["b@x.com", "成功"],
@@ -544,7 +596,7 @@ test("执行前确认登录：登录函数抛异常 → 行失败并带需求文
   try {
     await s.call(START, "kick_devices", [{ email: "a@x.com", profileId: 1 }], {});
     const fin = await s.finished();
-    assert.deepEqual(s.seq, ["login:a@x.com"]);
+    assert.deepEqual(s.seq, ["check:a@x.com", "login:a@x.com"]);
     assert.deepEqual(
       [fin.result.results[0].status, fin.result.results[0].message],
       ["失败", "登录失败，未执行踢出设备：登录炸了"],
@@ -571,7 +623,7 @@ test("执行前确认登录：数据库没有该账号时照样检查登录（�
   try {
     await s.call(START, "kick_devices", [{ email: "ghost@x.com", profileId: 3 }], {});
     const fin = await s.finished();
-    assert.deepEqual(s.seq, ["login:ghost@x.com", "kick:ghost@x.com"]);
+    assert.deepEqual(s.seq, ["check:ghost@x.com", "login:ghost@x.com", "kick:ghost@x.com"]);
     assert.equal(fin.result.results[0].status, "成功");
     assert.equal(s.events.filter(([c]) => c === IPC.event.accountsLoginStatusChanged).length, 0);
   } finally {
