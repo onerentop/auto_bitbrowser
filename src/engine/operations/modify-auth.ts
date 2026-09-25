@@ -28,6 +28,13 @@ import { GoogleReauth, type ReauthCredentials } from "./reauth.ts";
 
 const BASE32_CHARS = new Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".split(""));
 
+/**
+ * 「验证器已经换成新的」的页面文字（真机 2026-09-24 中文：身份验证器应用已更改 / 添加时间：刚刚；
+ * 英文设置页的时间格式是 Added 244 days ago / Added yesterday，换完是 Added just now）。
+ * 只认验证器条目上的这几种写法：裸「just now」会撞上页面别处的相对时间戳（近期安全活动等），审查指出。
+ */
+const AUTH_CHANGED = /身份验证器应用已更改|添加时间：\s*刚刚|\bAdded just now\b/i;
+
 /** 校验是否为合法 Base32 密钥（长度 16-32，字符集 A-Z2-7） */
 export function isValidBase32(s: string): boolean {
   if (s.length < 16 || s.length > 32) return false;
@@ -107,7 +114,7 @@ export class ModifyAuthenticatorOperation {
         return fail("需要先登录账号", "未登录");
       }
 
-      const result = await this.performModify();
+      const result = await this.performModify(credentials);
       const durationMs = Date.now() - start;
 
       if (result.success) {
@@ -132,7 +139,7 @@ export class ModifyAuthenticatorOperation {
     }
   }
 
-  private async performModify(): Promise<StepOutcome> {
+  private async performModify(credentials: ReauthCredentials): Promise<StepOutcome> {
     try {
       // Step 1: 进入设置流程
       await this.engine.act(
@@ -169,8 +176,8 @@ export class ModifyAuthenticatorOperation {
         return { success: false, message: "需要手动完成验证", new_secret: newSecret, error: "验证码生成失败" };
       }
 
-      // Step 5: 验证设置
-      const verify = await this.verifySetup();
+      // Step 5: 验证设置（以真实页面为准）
+      const verify = await this.verifySetup(credentials);
       if (verify.success) return { success: true, new_secret: newSecret };
 
       return {
@@ -212,37 +219,39 @@ export class ModifyAuthenticatorOperation {
     }
   }
 
-  private async verifySetup(): Promise<StepOutcome> {
+  /**
+   * 以真实页面为准核对（不看 AI 的回答：它会用否定句复述「已更改 / 成功」，按关键词判会假成功——
+   * 同一类问题在替换手机号上真机踩过）。
+   *   1. 当前页（真机成功后直接显示「身份验证器应用已更改 / 添加时间：刚刚」）；
+   *   2. 否则重新打开验证器设置页，看列表里的验证器是不是「刚刚」添加的。
+   */
+  private async verifySetup(credentials: ReauthCredentials): Promise<StepOutcome> {
     try {
-      const extracted = await this.engine.extract(
-        `
-                检查页面是否显示身份验证器设置成功的标志：
-                1. "Authenticator app added" 或 "已添加身份验证器"
-                2. "Success" 或 "成功"
-                3. "Done" 或 "完成"
-                4. 显示已设置的验证器
-
-                也检查错误信息：
-                5. "Invalid code" 或 "验证码无效"
-                6. "Error" 或 "错误"
-                `,
-      );
-      if (!extracted.success) return { success: false, message: "无法验证设置结果" };
-
-      const text = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
-
-      // 真机（2026-09-24）：改成功后页面上写的是「身份验证器应用已更改 / 添加时间：刚刚」，
-      // 原词表只有「已添加 / added」，真机上必然判成「无法确定设置结果」——而账号其实已经改掉，
-      // 新密钥因此不会被保存（saveNewSecret 只在 success 时调用）。故补上「已更改」等真机文案。
-      const okWords = ["added", "已添加", "success", "成功", "done", "完成", "已更改", "更改", "changed"];
-      if (okWords.some((k) => text.includes(k))) return { success: true };
-
-      const badWords = ["invalid", "无效", "error", "错误"];
-      if (badWords.some((k) => text.includes(k))) {
-        return { success: false, message: "验证码验证失败", error: "无效的验证码" };
+      // 当前页也要确认确实停在验证器设置页上，才拿它的文字作判据
+      const here = await this.engine.getCurrentUrl();
+      if (here.includes("two-step-verification/authenticator") && AUTH_CHANGED.test(await this.engine.getPageContent())) {
+        return { success: true };
       }
 
-      return { success: false, message: "无法确定设置结果" };
+      // 导航失败时页面停在原地，不能拿它当结果
+      const nav = await this.engine.navigate(GoogleURLs.AUTHENTICATOR, { timeoutMs: Timeouts.NAVIGATION });
+      if (!nav.success) {
+        return { success: false, message: "无法核验：打开身份验证器设置页失败", error: nav.error ?? "导航失败" };
+      }
+      await this.engine.wait(Timeouts.AFTER_NAVIGATION);
+      const reauth = await this.reauth.passIfRequired(credentials);
+      if (reauth && !reauth.success) return { success: false, message: reauth.message, error: reauth.error };
+      const url = await this.engine.getCurrentUrl();
+      if (!url.includes("two-step-verification/authenticator")) {
+        return { success: false, message: "无法核验：页面没有停在身份验证器设置页", error: url };
+      }
+
+      const text = await this.engine.getPageContent();
+      if (AUTH_CHANGED.test(text)) return { success: true };
+      if (/验证码无效|验证码错误|Wrong code|Invalid code/i.test(text)) {
+        return { success: false, message: "验证码验证失败", error: "无效的验证码" };
+      }
+      return { success: false, message: "身份验证器设置页上没有看到刚更换的验证器", error: "页面未显示「刚刚」" };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

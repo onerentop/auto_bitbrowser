@@ -40,9 +40,9 @@ const SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 /**
  * 假引擎：状态机 + 只读记录。
  *   reauthShape: "password"（真机形态）| "password_then_totp" | null
- * @param {{ reauthShape?: string | null, signedOut?: boolean }} [options]
+ * @param {{ reauthShape?: string | null, signedOut?: boolean, verifyNoop?: boolean, strayJustNow?: boolean, english?: boolean }} [options]
  */
-function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
+function fakeEngine({ reauthShape = null, signedOut = false, verifyNoop = false, strayJustNow = false, english = false } = {}) {
   /** @type {{ navigate: any[], fill: any[], act: any[], actResult: any[] }} */
   const calls = { navigate: [], fill: [], act: [], actResult: [] };
   const initialState = signedOut ? "signin" : reauthShape ? "reauth_pwd" : "settings";
@@ -70,6 +70,8 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
   };
   let state = initialState;
   let extractCount = 0;
+  /** 账号上的验证器是否真的被换掉了（只有 Verify 真正生效才会） */
+  let changed = false;
 
   return {
     calls,
@@ -84,6 +86,14 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
         return urls[state];
       },
       async getPageContent() {
+        // 验证器真的换过之后，重新打开设置页显示「添加时间：刚刚 / Added just now」（真机）
+        if (state === "settings" && changed) {
+          return english
+            ? "Authenticator app\nYour authenticator\nAuthenticator\nAdded just now\nChange authenticator app"
+            : "“身份验证器”应用\n您的身份验证器\n添加时间：刚刚\n更改身份验证器应用";
+        }
+        // 页面别处的相对时间戳（近期安全活动等），与验证器条目无关
+        if (strayJustNow && state === "verifying") return "正在验证…\nRecent security activity\nNew sign-in on Windows · just now";
         return texts[state];
       },
       async isVisible(selector) {
@@ -125,7 +135,11 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
           if (state !== "code_input") result = false;
           else state = "verifying";
         } else if (/Verify|验证|Done|完成/.test(instruction) && state === "verifying") {
-          state = "done";
+          // verifyNoop：点了但没生效（页面停在「正在验证」，账号上的验证器没变）
+          if (!verifyNoop) {
+            state = "done";
+            changed = true;
+          }
         }
         calls.actResult.push(result);
         return { success: result };
@@ -133,11 +147,7 @@ function fakeEngine({ reauthShape = null, signedOut = false } = {}) {
       async extract() {
         extractCount += 1;
         if (extractCount === 1) return { success: true, data: { secret_key: NEW_SECRET } };
-        // 第二步核对：只有真正走完 → 才有成功标志
-        return {
-          success: true,
-        data: { status: state === "done" ? "身份验证器应用已更改\n添加时间：刚刚" : "您的身份验证器 添加时间：244 天前" },
-        };
+        return { success: true, data: {} };
       },
     }),
   };
@@ -228,6 +238,35 @@ test("缺陷 3 回归：真机成功文案「身份验证器应用已更改」�
     totpSecret: SECRET,
   });
 
+  assert.equal(result.success, true, result.message);
+  assert.equal(result.secret_key, NEW_SECRET);
+});
+
+test("真机回归（2026-09-25）：结果以真实页面为准——验证没生效（页面停在「正在验证」）时不能判成功；新密钥仍带回", async () => {
+  const { engine } = fakeEngine({ verifyNoop: true });
+  const result = await new ModifyAuthenticatorOperation(engine).execute({
+    password: PASSWORD,
+    totpSecret: SECRET,
+  });
+  assert.equal(result.success, false, "页面上没有「添加时间：刚刚」就不能判成功");
+  assert.equal(result.secret_key, NEW_SECRET, "密钥已经生成并提交过验证码：必须带回给调用方留存");
+});
+
+test("审查回归：验证没生效，但当前页别处有个「just now」时间戳（如近期活动）→ 不能判成功", async () => {
+  const { engine } = fakeEngine({ verifyNoop: true, strayJustNow: true });
+  const result = await new ModifyAuthenticatorOperation(engine).execute({
+    password: PASSWORD,
+    totpSecret: SECRET,
+  });
+  assert.equal(result.success, false, "只有验证器条目上的「Added just now / 添加时间：刚刚」才算");
+});
+
+test("英文界面：重新打开设置页显示「Added just now」→ 判成功", async () => {
+  const { engine } = fakeEngine({ english: true });
+  const result = await new ModifyAuthenticatorOperation(engine).execute({
+    password: PASSWORD,
+    totpSecret: SECRET,
+  });
   assert.equal(result.success, true, result.message);
   assert.equal(result.secret_key, NEW_SECRET);
 });
