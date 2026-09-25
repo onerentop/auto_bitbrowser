@@ -10,6 +10,7 @@ import {
   IxResponseError,
   IxUnexpectedError,
 } from "../src/ixbrowser/client.ts";
+import { isRetryableError } from "../src/ixbrowser/window.ts";
 
 /**
  * 构造一个假的 fetch，返回给定 JSON
@@ -72,6 +73,18 @@ test("缺少 error.code 抛 IxUnexpectedError", async () => {
   const c = new IxBrowserClient({ fetchImpl: f });
   await assert.rejects(() => c.call("profile-list"), (err) =>
     err instanceof IxUnexpectedError && err.message.includes("'error.code' key"));
+});
+
+test("真机回归（2026-09-25）：error.code 是字符串（ixBrowser 上游断开 ECONNRESET）时，错误信息带上原因，且可被重试识别", async () => {
+  const f = fakeFetch({ error: { code: "ECONNRESET", message: "socket hang up" }, data: null });
+  const c = new IxBrowserClient({ fetchImpl: f });
+  await assert.rejects(() => c.call("profile-list"), (err) => {
+    assert.ok(err instanceof IxUnexpectedError);
+    assert.match(err.message, /ECONNRESET/);
+    assert.match(err.message, /socket hang up/);
+    assert.equal(isRetryableError(err.message), true, "应按可重试错误处理（列表 / 窗口信息读取会自动重试）");
+    return true;
+  });
 });
 
 test("全部请求都是 POST + JSON", async () => {

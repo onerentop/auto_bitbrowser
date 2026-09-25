@@ -109,6 +109,12 @@ export class IxBrowserClient {
       throw new IxUnexpectedError("The returned data does not contain the 'error' key");
     }
     const error = envelope.error;
+    // 真机 2026-09-25：ixBrowser 自己的上游连接断开时回 {"error":{"code":"ECONNRESET","message":"socket hang up"}}，
+    // code 是字符串。把原因带进错误信息（isRetryableError 靠它识别 econnreset 等并自动重试），
+    // 不能笼统报「缺少 error.code」——那样既看不出原因，也不会重试。
+    if (error != null && typeof error.code === "string" && error.code !== "") {
+      throw new IxUnexpectedError(`ixBrowser 连接异常 ${error.code}: ${String(error.message ?? "")}`);
+    }
     if (error == null || typeof error.code !== "number") {
       throw new IxUnexpectedError("The returned data does not contain the 'error.code' key");
     }
