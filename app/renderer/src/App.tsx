@@ -143,7 +143,8 @@ export function App(): ReactElement {
           <StatusLights onOpen={() => go("status")} />
         </nav>
       </Sider>
-      <Layout>
+      {/* minWidth: 0：flex 子项默认 min-width:auto，会被宽表格撑破窗口；宽表格应在表格内部横向滚动 */}
+      <Layout style={{ minWidth: 0 }}>
         <Content style={{ overflow: "auto", padding: "20px 24px" }}>
           {PAGES.filter((p) => visited.has(p.key)).map((p) => (
             <div key={p.key} style={{ display: p.key === page ? "block" : "none", height: "100%" }}>
