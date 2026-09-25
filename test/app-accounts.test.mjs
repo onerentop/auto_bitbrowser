@@ -158,6 +158,8 @@ const OPTS = { concurrency: 2 };
 
 // ==================== 列表 ====================
 
+const VOCAB_BUSY = [{ id: 7, title: "忙碌后仍可见", color: "#67C23A" }];
+
 test("list：窗口名 / 分组由 browser_profile_id 映射；分组与窗口并发请求；未绑定 / 窗口不存在归伪分组", async () => {
   /** @type {string[]} */
   const order = [];
@@ -269,6 +271,32 @@ test("list：窗口翻页遇到可重试错误先重试（1s/2s 退避）再成�
   const r2 = await s2.call(CH.accountsList);
   assert.match(r2.windowError, /profile not exist/);
   assert.deepEqual(sleeps, [], "不可重试错误不等待");
+});
+
+test("list：ixBrowser 关窗期间回 1008 Server busy 时，窗口列表与标签词表都退避重试，不落到「窗口信息获取失败」", async () => {
+  /** @type {number[]} */
+  const sleeps = [];
+  const s = setup({ tags: VOCAB_BUSY, deps: { sleep: async (ms) => void sleeps.push(ms) } });
+  const busy = () => Object.assign(new Error("Server busy, please try again later."), { code: 1008 });
+  let listBusy = 2;
+  s.ix.getProfileList = async () => {
+    if (listBusy-- > 0) throw busy();
+    return [{ profile_id: 101, name: "win-a", tag_id: "7" }];
+  };
+  const origTags = s.ix.getTagList.bind(s.ix);
+  let tagBusy = 1;
+  s.ix.getTagList = async (q) => {
+    if (tagBusy-- > 0) throw busy();
+    return origTags(q);
+  };
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
+  const r = await s.call(CH.accountsList);
+  assert.equal(r.windowError, null);
+  assert.equal(r.rows[0].group_name, "未分组", "拿到窗口列表后按真实分组归类");
+  assert.equal(r.tagError, null);
+  assert.deepEqual(r.rows[0].tags.map((t) => t.title), ["忙碌后仍可见"]);
+  // 窗口与词表并发，退避顺序交错，排序后比：窗口 1s/2s + 词表 1s
+  assert.deepEqual([...sleeps].sort((a, b) => a - b), [1000, 1000, 2000]);
 });
 
 // ==================== 账号数据（从设置页迁来） ====================
@@ -1393,6 +1421,8 @@ test("list：标签由窗口 tag_id + 词表映射（标题含空格也不受影
   seed(s2.ctx, [{ email: "a@x.com", browser_profile_id: "101" }]);
   const r2 = await s2.call(CH.accountsList);
   assert.match(r2.tagError, /ECONNREFUSED/);
+  // ECONNREFUSED 可重试：词表共尝试 1 + MAX_RETRIES(3) = 4 次才放弃
+  assert.equal(s2.ix.calls.filter((c) => c[0] === "tagList").length, 4, "重试用完才记 tagError");
   assert.deepEqual(r2.tags, []);
   assert.deepEqual(r2.rows[0].tags, [], "词表取不到时不显示半个标签");
 });

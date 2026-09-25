@@ -230,31 +230,42 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * 对 ixBrowser 请求做「可重试错误先退避重试、用完仍失败才抛错」（判定与退避同 window.ts）。
+ * 与 window.ts 的 withRetry 不同：这里保留抛错，让调用方区分「没取到」与「取到了空」。
+ */
+async function retryIx<T>(
+  label: string,
+  op: () => Promise<T>,
+  options: { sleep?: (ms: number) => Promise<void>; log?: (message: string) => void } = {},
+): Promise<T> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await op();
+    } catch (error) {
+      if (attempt >= MAX_RETRIES || !isRetryableError(errorText(error))) throw error;
+      const delay = BASE_DELAY * BACKOFF_FACTOR ** attempt;
+      options.log?.(`${label}失败: ${errorText(error)}，${delay.toFixed(1)}秒后重试...`);
+      await sleep(delay * 1000);
+    }
+  }
+}
+
 /** 翻页上限（每页 HOME_LIST_PAGE_SIZE 个，足够覆盖任何实际规模；防止服务端异常时死循环） */
 const MAX_WINDOW_PAGES = 100;
 
 /**
  * 取 ixBrowser 全部窗口：按页取到「本页不满一页」为止。
- * 每页遇到可重试错误（连接断开 / 超时等，判定与退避同 window.ts）先重试，重试用完仍失败才抛错；
+ * 每页遇到可重试错误（连接断开 / 超时 / 1008 Server busy 等，判定与退避同 window.ts）先重试，重试用完仍失败才抛错；
  * 不像 getBrowserList 那样静默返回部分数据——账号列表要区分「窗口不存在」与「窗口信息没取到」。
  */
 export async function listAllWindows(
   client: Pick<IxBrowserClient, "getProfileList">,
   options: { sleep?: (ms: number) => Promise<void>; log?: (message: string) => void } = {},
 ): Promise<WindowLike[]> {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const fetchPage = async (page: number): Promise<WindowLike[]> => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await client.getProfileList({ page, limit: HOME_LIST_PAGE_SIZE });
-      } catch (error) {
-        if (attempt >= MAX_RETRIES || !isRetryableError(errorText(error))) throw error;
-        const delay = BASE_DELAY * BACKOFF_FACTOR ** attempt;
-        options.log?.(`获取窗口列表第 ${page} 页失败: ${errorText(error)}，${delay.toFixed(1)}秒后重试...`);
-        await sleep(delay * 1000);
-      }
-    }
-  };
+  const fetchPage = (page: number): Promise<WindowLike[]> =>
+    retryIx(`获取窗口列表第 ${page} 页`, () => client.getProfileList({ page, limit: HOME_LIST_PAGE_SIZE }), options);
   const all: WindowLike[] = [];
   for (let page = 1; page <= MAX_WINDOW_PAGES; page++) {
     const data = await fetchPage(page);
@@ -282,7 +293,14 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
     deps.listGroups ?? (() => getGroupList({ client: ctx.ix(), log: ctx.log, ...(deps.sleep ? { sleep: deps.sleep } : {}) }));
 
   // 标签词表：一次取全量（实测默认 limit=10 会截断，所以显式给大值）
-  const listTags = deps.listTags ?? (() => ctx.ix().getTagList({ limit: 500 }).then((r) => r.data));
+  // 可重试错误（含关窗期间的 1008 Server busy）按同样退避重试，用完才记 tagError
+  const listTags =
+    deps.listTags ??
+    (() =>
+      retryIx("获取标签词表", () => ctx.ix().getTagList({ limit: 500 }).then((r) => r.data), {
+        log: ctx.log,
+        ...(deps.sleep ? { sleep: deps.sleep } : {}),
+      }));
 
   const createProcessor =
     deps.createProcessor ??

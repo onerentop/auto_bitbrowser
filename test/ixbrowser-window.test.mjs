@@ -65,6 +65,8 @@ function pagedClient(total, { failPage = 0, failTimes = 0, failMsg = "timeout" }
 test("isRetryableError：关键词不区分大小写；空值不重试", () => {
   assert.equal(isRetryableError("ECONNREFUSED 127.0.0.1"), true);
   assert.equal(isRetryableError("exception desc:fetch failed network"), true);
+  // 真机 2026-09-25：关窗期间并发请求会收到 code=1008 的这句话，过 1~2 秒自行恢复
+  assert.equal(isRetryableError("Server busy, please try again later."), true);
   assert.equal(isRetryableError("profile not exist"), false);
   assert.equal(isRetryableError(""), false);
   assert.equal(isRetryableError(null), false);
