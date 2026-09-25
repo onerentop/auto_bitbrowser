@@ -138,6 +138,8 @@ export interface ChangePasswordDeps {
    * 真机改密事故复盘时正是卡在这里，只能靠猜。
    */
   callback?: (msg: string) => void;
+  /** 数据根目录：新密码在提交 Google 之前先记进「已修改密码.txt」（真机 2026-09-25：内存不能是唯一副本） */
+  projectRoot?: string;
 }
 
 export interface AiTaskRunnerDeps {

@@ -12,6 +12,7 @@ sheerID_verified_failed.txt
 sheerid_tool/
 config.json
 已修改密钥.txt
+已修改密码.txt
 
 # Exclude database files
 *.db

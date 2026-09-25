@@ -166,6 +166,8 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
             accountRepo: ctx.accountRepo(),
             ixClient: ctx.ix(),
             callback: api.log,
+            // 新密码提交前先落到数据根目录的「已修改密码.txt」（与「已修改密钥.txt」同级）
+            projectRoot: ctx.dataRoot,
           }),
           // 执行前按窗口 ID 重新读取窗口名，校验与 email 一致（防止用 A 的密码操作 B 的窗口）
           getWindowName: options.getWindowName ?? (async (profileId) => {

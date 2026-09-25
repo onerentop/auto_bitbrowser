@@ -8,6 +8,8 @@
  * 新密码由调用方生成（系统自动生成强随机密码）；这里绝不把密码写进日志、也不放进返回值
  * （任务结果会进任务历史与事件载荷）。
  */
+import fs from "node:fs";
+import path from "node:path";
 import type { AccountRepository } from "../db/account-repository.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
 import { generateStrongPassword } from "../core/random-password.ts";
@@ -20,6 +22,32 @@ import { printBanner, withEngine, type CommonOptions, type Result2 } from "./sha
  * 修改验证器会追加并拼出空段，都吃掉过用户手写的内容。用户已决定：
  * **自动化任务一律不碰备注**，密码只写数据库与窗口的 password 字段。
  */
+
+/** 新密码记录文件（数据根目录；与「已修改密钥.txt」同级，已 gitignore） */
+export const PASSWORD_RECORD_FILE = "已修改密码.txt";
+
+/**
+ * 追加一行新密码记录：`邮箱----新密码----状态----ISO时间`。
+ *
+ * 真机 2026-09-25：改密提交后没能确认（页面卡在确认弹层），而新密码当时**只存在于内存**——
+ * 万一 Google 侧其实改了，这个密码就永远找不回来。所以提交之前先落一行「提交前」，
+ * 结束后再落一行结果（已确认 / 未确认），人工能按文件核对。写不进去返回 false，不抛错。
+ */
+export function appendPasswordRecord(record: {
+  projectRoot: string;
+  email: string;
+  newPassword: string;
+  status: "提交前" | "已确认" | "未确认";
+}): boolean {
+  try {
+    const line = `${record.email}----${record.newPassword}----${record.status}----${new Date().toISOString()}\n`;
+    fs.appendFileSync(path.join(record.projectRoot, PASSWORD_RECORD_FILE), line, "utf8");
+    return true;
+  } catch (err) {
+    console.error(`❌ 写入新密码记录失败: ${err}`);
+    return false;
+  }
+}
 
 export interface SavePasswordOptions {
   email: string;
@@ -39,9 +67,9 @@ export interface SavePasswordResult {
 /**
  * 把写回结果翻成「任务行状态 + 给人看的消息」。
  *
- * 关键判断：Google 侧已经改了，本地写得再差也不能报「没改成功」——那会让操作者以为密码没变。
- * 但如果**一处都没写成**，新密码就只存在于内存里，等于丢了：这时必须报失败，
- * 逼操作者按消息里的指引去重设密码，而不是看到一个绿点以为一切正常。
+ * 数据库是账号凭据的权威来源（登录 / 巡检都从库里取密码）：没存进数据库就判失败（2026-09-25 起）。
+ * Google 侧此时已经改了，所以消息必须写清「Google 侧已更改」与新密码在哪能取回，避免操作者以为没改成。
+ * 只写了数据库、窗口没同步上：仍算成功，但指引手动同步窗口。
  */
 export function describeSaveOutcome(saved: SavePasswordResult): { ok: boolean; message: string } {
   if (saved.db && saved.windowPassword) {
@@ -51,7 +79,12 @@ export function describeSaveOutcome(saved: SavePasswordResult): { ok: boolean; m
     return { ok: true, message: "密码已更改；窗口的 password 字段未写入（数据库已是新密码，请手动同步窗口信息）" };
   }
   if (!saved.db && saved.windowPassword) {
-    return { ok: true, message: "密码已更改；数据库未写入（新密码在窗口的 password 字段里，请手动同步数据库）" };
+    // 2026-09-25 要求「修改必须存库」：没存进数据库就判失败（之后登录会拿库里的旧密码），
+    // 消息说清 Google 侧已改、新密码在窗口里，操作者不会误以为密码没变。
+    return {
+      ok: false,
+      message: "Google 侧已更改密码，但数据库未写入（新密码在窗口的 password 字段里，请手动同步数据库）",
+    };
   }
   return {
     ok: false,
@@ -100,6 +133,8 @@ export interface AutoChangePasswordOptions extends CommonOptions {
   ixClient?: Pick<IxBrowserClient, "getProfileInfo" | "updateProfile">;
   /** 任务日志回调（只写进度，不含凭据） */
   callback?: ((msg: string) => void) | null;
+  /** 数据根目录：新密码在提交前先记进这里的「已修改密码.txt」；不传则不记录（仅供单测） */
+  projectRoot?: string;
 }
 
 /** 日志里的密码掩码：只露长度与首 4 位，绝不打印完整密码 */
@@ -123,6 +158,11 @@ export async function autoChangePassword(
     { ...options, closeAfter: options.closeAfter ?? false },
     async (engine): Promise<Result2> => {
       log(`开始修改密码（新密码 ${maskPassword(newPassword)}），需要重新验证身份`);
+      // 提交 Google 之前先把新密码落盘：内存不能是它唯一的副本（见 appendPasswordRecord）
+      const root = options.projectRoot;
+      if (root && !appendPasswordRecord({ projectRoot: root, email, newPassword, status: "提交前" })) {
+        return [false, `新密码没能先记进「${PASSWORD_RECORD_FILE}」，为防丢失未提交修改`] as Result2;
+      }
       const result = await engine.changePassword(
         {
           currentPassword: String(accountInfo["password"] ?? ""),
@@ -132,8 +172,13 @@ export async function autoChangePassword(
         log,
       );
 
-      // 关键：Google 侧没确认成功 → 一个本地字段都不动
-      if (!result.success) return [false, result.message || "修改密码失败"] as Result2;
+      // 关键：Google 侧没确认成功 → 数据库 / 窗口一个字段都不动；新密码已在记录文件里，标注未确认
+      if (!result.success) {
+        if (root) appendPasswordRecord({ projectRoot: root, email, newPassword, status: "未确认" });
+        const where = root ? `；本次新密码已记在「${PASSWORD_RECORD_FILE}」（未确认），数据库仍是旧密码` : "";
+        return [false, `${result.message || "修改密码失败"}${where}`] as Result2;
+      }
+      if (root) appendPasswordRecord({ projectRoot: root, email, newPassword, status: "已确认" });
 
       log("Google 侧已确认更改，开始写回本地（数据库 / 窗口密码字段）");
       const saved = await saveNewPassword({

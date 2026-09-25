@@ -12,11 +12,16 @@ import { DatabaseSync } from "node:sqlite";
 import { generateStrongPassword, PASSWORD_LENGTH, PASSWORD_MIN_LENGTH } from "../src/core/random-password.ts";
 import { AccountRepository } from "../src/db/account-repository.ts";
 import {
+  appendPasswordRecord,
   describeSaveOutcome,
   maskPassword,
+  PASSWORD_RECORD_FILE,
   saveNewPassword,
 } from "../src/automation/auto-change-password.ts";
 import { initDb } from "../src/db/schema.ts";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ==================== 密码生成 ====================
 
@@ -201,9 +206,10 @@ test("describeSaveOutcome：只写了数据库 → 仍算成功，但要指引�
   assert.doesNotMatch(outcome.message, /本地密码已失效/, "数据库里已是新密码，凭据没丢");
 });
 
-test("describeSaveOutcome：只写了窗口 → 仍算成功，并指明新密码在窗口的 password 字段", () => {
+test("describeSaveOutcome：只写了窗口、没存进数据库 → 判失败（2026-09-25 要求：修改必须存库），消息说清 Google 已改、新密码在哪", () => {
   const outcome = describeSaveOutcome({ db: false, windowPassword: true });
-  assert.equal(outcome.ok, true, "Google 侧已改成功，不能报失败");
+  assert.equal(outcome.ok, false, "没存进数据库就不能显示成功（否则之后登录会用库里的旧密码）");
+  assert.match(outcome.message, /Google 侧已更改/, "要说清 Google 侧已经改了，不是没改成");
   assert.match(outcome.message, /窗口的 password 字段/, "要说清新密码现在能从哪取回");
   assert.match(outcome.message, /手动同步数据库/, "要提示数据库需要人工补齐");
 });
@@ -214,4 +220,38 @@ test("describeSaveOutcome：两处全没写成 → 必须报失败（新密码�
   assert.match(outcome.message, /本地密码已失效/, "要说清账号本地凭据已失效");
   assert.match(outcome.message, /Google 侧/, "要说清远端其实已经改了，避免误以为没改");
   assert.match(outcome.message, /重设密码/, "要给出下一步动作");
+});
+
+// ==================== 新密码提交前先落盘（真机 2026-09-25：内存不能是新密码的唯一副本） ====================
+
+test("appendPasswordRecord：追加「邮箱----新密码----状态----时间」到数据根目录的「已修改密码.txt」", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abb-pw-"));
+  try {
+    assert.equal(appendPasswordRecord({ projectRoot: dir, email: "a@x.com", newPassword: "NewPw-1", status: "提交前" }), true);
+    assert.equal(appendPasswordRecord({ projectRoot: dir, email: "a@x.com", newPassword: "NewPw-1", status: "已确认" }), true);
+    const lines = readFileSync(join(dir, PASSWORD_RECORD_FILE), "utf8").trim().split("\n");
+    assert.equal(PASSWORD_RECORD_FILE, "已修改密码.txt");
+    assert.equal(lines.length, 2);
+    assert.match(lines[0], /^a@x\.com----NewPw-1----提交前----\d{4}-\d{2}-\d{2}T/);
+    assert.match(lines[1], /^a@x\.com----NewPw-1----已确认----/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("appendPasswordRecord：写不进去（目录不存在）返回 false，不抛错", () => {
+  assert.equal(
+    appendPasswordRecord({ projectRoot: join(tmpdir(), "abb-no-such-dir-xyz", "deeper"), email: "a@x.com", newPassword: "p", status: "提交前" }),
+    false,
+  );
+});
+
+test("autoChangePassword 顺序：先把新密码记进文件、记不进去就不提交；之后才调用 engine.changePassword", () => {
+  const src = readFileSync(new URL("../src/automation/auto-change-password.ts", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("export async function autoChangePassword"));
+  const record = body.indexOf('status: "提交前"');
+  const submit = body.indexOf("engine.changePassword(");
+  assert.ok(record > 0, "提交前要先记录新密码");
+  assert.ok(submit > record, "记录必须发生在提交 Google 之前");
+  assert.match(body.slice(record, submit), /return \[false/, "记录失败时必须直接返回失败、不提交");
 });
