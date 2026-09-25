@@ -32,7 +32,7 @@ test("扫到了已知的列表文件（防止扫描本身失效变成假绿）",
   for (const must of [
     "pages/AccountsPage.tsx",
     "pages/accounts/WindowsView.tsx",
-    "pages/ai-tasks/AccountListCard.tsx",
+    "pages/accounts/TaskPanel.tsx",
     "pages/totp/ResultTable.tsx",
     "pages/settings/TaskHistoryTab.tsx",
     "pages/settings/ProxiesTab.tsx",

@@ -1,8 +1,9 @@
 /**
  * 手动设置登录状态后「所有显示登录状态的页面」都要同步（abb/accounts/event/loginStatusChanged）
  *
- * 页面不能单测，这里按源码钉住：账号页与 AI 任务页（6 个任务页共用）都订阅了这个事件，
- * 并用对应的纯函数就地改行；订阅写在 useEffect 里并把取消函数交回（切页 / 卸载时退订）。
+ * 页面不能单测，这里按源码钉住：账号页订阅了这个事件，并用对应的纯函数就地改行；
+ * 订阅写在 useEffect 里并把取消函数交回（切页 / 卸载时退订）。
+ * （原 AI 任务页在 2026-09-26 并入账号页的「任务」抽屉，登录状态从此只在账号页显示。）
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,7 +13,6 @@ const read = (rel) => readFileSync(new URL(`../app/renderer/src/${rel}`, import.
 
 const SUBSCRIBERS = {
   "pages/AccountsPage.tsx": "applyLoginStatusChange",
-  "pages/AiTaskPage.tsx": "applyAiLoginStatusChange",
 };
 
 for (const [rel, fn] of Object.entries(SUBSCRIBERS)) {

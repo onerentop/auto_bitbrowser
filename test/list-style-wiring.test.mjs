@@ -4,7 +4,7 @@
  * 页面不能单测，这里按源码钉住：
  *   1. 有状态的列表都画行首状态条（rowClassName 用 railClass）并用 StatusDot 显示状态；
  *   2. 身份列固定在左、操作列固定在右（宽表横向滚动时一直可见）；
- *   3. 状态不再用带底色的 Tag（颜色只在状态条与圆点上）；AI 任务列表不再给整行上底色。
+ *   3. 状态不再用带底色的 Tag（颜色只在状态条与圆点上）；任务面板结果表不整行上底色。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +15,7 @@ const read = (rel) => readFileSync(new URL(`../app/renderer/src/${rel}`, import.
 /** 有状态的列表：文件 → 状态条色调函数 */
 const RAIL_LISTS = {
   "pages/AccountsPage.tsx": "accountLoginTone",
-  "pages/ai-tasks/AccountListCard.tsx": "aiItemTone",
+  "pages/accounts/TaskPanel.tsx": "aiItemTone",
   "pages/totp/ResultTable.tsx": "totpTone",
   "pages/settings/TaskHistoryTab.tsx": "runOutcomeTone",
 };
@@ -44,7 +44,7 @@ test("批量导入预览：无效行画红色状态条", () => {
 const FIXED = {
   "pages/AccountsPage.tsx": { left: ["email"], right: ["action"] },
   "pages/accounts/WindowsView.tsx": { left: ["id"], right: [] },
-  "pages/ai-tasks/AccountListCard.tsx": { left: ["email"], right: [] },
+  "pages/accounts/TaskPanel.tsx": { left: ["email"], right: [] },
   "pages/settings/ProxiesTab.tsx": { left: [], right: ["actions"] },
 };
 
@@ -81,8 +81,8 @@ for (const [rel, { left, right }] of Object.entries(FIXED)) {
 
 test("状态不再用带底色的 Tag；AI 任务列表不再整行上底色", () => {
   assert.doesNotMatch(read("pages/AccountsPage.tsx"), /<Tag[^>]*color=\{v\.color\}/, "账号登录状态不用 Tag");
-  assert.doesNotMatch(read("pages/ai-tasks/AccountListCard.tsx"), /color-mix\(/, "AI 任务列表不再整行上底色");
-  assert.doesNotMatch(read("pages/ai-tasks/AccountListCard.tsx"), /LOGIN_COLOR/, "AI 任务登录状态不用 Tag 色");
+  assert.doesNotMatch(read("pages/accounts/TaskPanel.tsx"), /color-mix\(/, "任务面板结果表不整行上底色");
+  assert.doesNotMatch(read("pages/accounts/TaskPanel.tsx"), /LOGIN_COLOR/, "任务面板状态不用 Tag 色");
   assert.doesNotMatch(read("pages/totp/ResultTable.tsx"), /STATUS_TAG_COLOR/, "TOTP 状态不用 Tag 色");
   assert.doesNotMatch(read("pages/settings/TaskHistoryTab.tsx"), /function (outcomeTag|itemStatusTag)/, "任务历史不用 Tag");
 });

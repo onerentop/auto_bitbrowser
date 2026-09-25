@@ -21,7 +21,6 @@ import {
   Dropdown,
   Empty,
   Input,
-  InputNumber,
   Modal,
   Segmented,
   Space,
@@ -34,12 +33,11 @@ import {
 } from "antd";
 import {
   CheckCircleFilled,
-  CloudDownloadOutlined,
-  DeleteOutlined,
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
   MinusCircleOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   QrcodeOutlined,
   SyncOutlined,
@@ -51,6 +49,7 @@ import {
   type AccountListRow,
   type AccountsAction,
   type AccountsListResult,
+  type AccountsRunOptions,
   type AutoBindSummary,
   type ConfirmStep,
   type ManualLoginStatus,
@@ -75,12 +74,14 @@ import {
   formatAccountPreviewRow,
   parseAccountImportLine,
 } from "../../../shared/logic/settings-data.ts";
+import type { TaskInfo } from "../../../shared/ipc.ts";
 import { IPC, describeError, invoke, on } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
 import { ACCOUNT_VIEW_KEY, parseAccountView, type AccountView } from "../lib/ui-prefs.ts";
 import { WindowsView } from "./accounts/WindowsView.tsx";
 import { TotpImportPanel } from "./accounts/TotpImportPanel.tsx";
+import { TaskPanel } from "./accounts/TaskPanel.tsx";
 import { BatchImportModal } from "../components/BatchImportModal.tsx";
 import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
@@ -255,6 +256,8 @@ export function AccountsPage(): ReactElement {
   const [importOpen, setImportOpen] = useState(false);
   /** 导入 TOTP 密钥（原独立页并入这里） */
   const [totpOpen, setTotpOpen] = useState(false);
+  /** 任务抽屉：登录 / 巡检 / 6 种 Google 修改 / 删除统一从它启动 */
+  const [taskOpen, setTaskOpen] = useState(false);
   /** 一体列表视角：账号行 / 窗口行（原首页窗口列表并入窗口视角） */
   const [view, setView] = useState<AccountView>(readView);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
@@ -441,11 +444,17 @@ export function AccountsPage(): ReactElement {
 
   /**
    * 批量操作统一入口：（有隐藏勾选时先确认）→ precheck → 逐个确认 → start。
-   * 不传 target 时作用于全部勾选（含被筛选隐藏的）。
+   * 不传 target 时作用于全部勾选（含被筛选隐藏的）；不传 options 时用当前界面的并发 / 关窗设置
+   * （任务抽屉会显式传它自己那份）。
+   * 返回启动的任务；中途停下（取消 / 前置检查不过 / 出错）返回 null，任务抽屉据此保留上一轮结果。
    */
   const runAction = useCallback(
-    async (action: AccountsAction, target?: SelectedRow[]): Promise<void> => {
-      if (actionPending.current) return;
+    async (
+      action: AccountsAction,
+      target?: SelectedRow[],
+      options?: AccountsRunOptions,
+    ): Promise<TaskInfo | null> => {
+      if (actionPending.current) return null;
       actionPending.current = true;
       const targetRows = target ?? checkedRows.map(toSelected);
       try {
@@ -454,22 +463,29 @@ export function AccountsPage(): ReactElement {
             title: "包含看不到的账号",
             message: `已勾选 ${targetRows.length} 个账号，其中 ${hiddenChecked} 个被筛选隐藏，当前列表里看不到。\n\n确定对全部 ${targetRows.length} 个继续吗？`,
           });
-          if (!ok) return;
+          if (!ok) return null;
         }
         const pre = await invoke(IPC.invoke.accountsPrecheck, action, targetRows);
         if (!pre.ok) {
           notify(pre.level, pre.title, pre.message);
-          return;
+          return null;
         }
         for (const line of pre.logs) logLocal(line);
         for (const step of pre.confirms) {
-          if (!(await confirm(step))) return;
+          if (!(await confirm(step))) return null;
         }
-        const info = await invoke(IPC.invoke.accountsStart, action, targetRows, { concurrency, closeWindow });
+        const info = await invoke(
+          IPC.invoke.accountsStart,
+          action,
+          targetRows,
+          options ?? { concurrency, closeWindow },
+        );
         markTaskStarted(info);
+        return info;
       } catch (e) {
         logLocal(`错误: ${describeError(e)}`);
         notify("error", "错误", `任务执行出错:\n${describeError(e)}`);
+        return null;
       } finally {
         actionPending.current = false;
       }
@@ -840,25 +856,6 @@ export function AccountsPage(): ReactElement {
 
   // ---------- 渲染 ----------
 
-  const actionBtn = (
-    label: string,
-    action: AccountsAction,
-    tooltip: string,
-    extra?: { primary?: boolean; danger?: boolean; icon?: ReactNode },
-  ): ReactNode => (
-    <Tooltip title={tooltip}>
-      <Button
-        type={extra?.primary ? "primary" : "default"}
-        danger={extra?.danger}
-        icon={extra?.icon}
-        disabled={busy}
-        onClick={() => void runAction(action)}
-      >
-        {label}
-      </Button>
-    </Tooltip>
-  );
-
   const total = rows.length;
   const filtered = visible.length !== total;
   const hasChecked = checked.length > 0;
@@ -958,8 +955,8 @@ export function AccountsPage(): ReactElement {
           <Typography.Text type="secondary">{filtered ? `显示 ${visible.length} / 共 ${total}` : `共 ${total} 个账号`}</Typography.Text>
         </Space>
 
-        {/* 批量操作栏：左侧已选摘要，右侧批量任务与删除；有勾选时底色换成主色浅底，更醒目。
-            可用条件与原来一致（只受 busy 控制，未勾选时由 precheck 给出提示） */}
+        {/* 批量操作栏：左侧已选摘要，右侧「设置登录状态」与「任务」入口；有勾选时底色换成主色浅底，更醒目。
+            任务（登录 / 巡检 / Google 账号修改 / 删除）与它们的参数都在任务抽屉里，这里不再堆按钮 */}
         <div
           style={{
             display: "flex",
@@ -984,50 +981,31 @@ export function AccountsPage(): ReactElement {
             <Typography.Text type="secondary">勾选账号后批量操作</Typography.Text>
           )}
           <Space wrap size={16}>
-            <Space wrap>
-              {actionBtn(`批量登录${hasChecked ? `（${checked.length}）` : ""}`, "login", "批量登录勾选的账号", {
-                primary: hasChecked,
-                icon: <CloudDownloadOutlined />,
-              })}
-              <Tooltip title="批量登录时同时打开的窗口数">
-                <Space size={8}>
-                  <span>并发</span>
-                  <InputNumber
-                    min={1}
-                    max={10}
-                    precision={0}
-                    value={concurrency}
-                    onChange={(v) => setConcurrency(typeof v === "number" ? v : 1)}
-                    disabled={busy}
-                    style={{ width: 64 }}
-                  />
-                </Space>
+            <Dropdown
+              disabled={busy || !hasChecked}
+              trigger={["click"]}
+              menu={{
+                items: loginStatusItems,
+                onClick: ({ key }) => void setLoginStatus(checked, key as ManualLoginStatus),
+              }}
+            >
+              <Tooltip title={hasChecked ? "把勾选的账号手动标记为某个登录状态（只改记录，不打开窗口）" : "先勾选账号"}>
+                <Button disabled={busy || !hasChecked}>
+                  设置登录状态 <DownOutlined />
+                </Button>
               </Tooltip>
-              <Tooltip title="登录成功的账号完成后自动关窗；失败的保留窗口，方便你查看原因或手动过验证码">
-                <Checkbox checked={closeWindow} onChange={(e) => setCloseWindow(e.target.checked)} disabled={busy}>
-                  登录后关窗
-                </Checkbox>
-              </Tooltip>
-              {actionBtn("健康巡检", "health_check", "只读检查勾选账号在窗口里的登录状态（不提交密码，不产生新登录）")}
-              <Dropdown
-                disabled={busy || !hasChecked}
-                trigger={["click"]}
-                menu={{
-                  items: loginStatusItems,
-                  onClick: ({ key }) => void setLoginStatus(checked, key as ManualLoginStatus),
-                }}
+            </Dropdown>
+            {/* 任务统一收在抽屉里：登录 / 巡检 / 6 种 Google 修改 / 删除（原来这里是 6 个按钮 + 参数） */}
+            <Tooltip title={hasChecked ? "登录、巡检、Google 账号修改、删除都在这里" : "先勾选账号"}>
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                disabled={!hasChecked}
+                onClick={() => setTaskOpen(true)}
               >
-                <Tooltip title={hasChecked ? "把勾选的账号手动标记为某个登录状态（只改记录，不打开窗口）" : "先勾选账号"}>
-                  <Button disabled={busy || !hasChecked}>
-                    设置登录状态 <DownOutlined />
-                  </Button>
-                </Tooltip>
-              </Dropdown>
-            </Space>
-            <Space wrap>
-              {actionBtn("删除选中", "delete", "只删除账号记录，不删浏览器窗口", { icon: <DeleteOutlined /> })}
-              {actionBtn("删除+窗口", "delete_with_windows", "删除勾选账号及其绑定的浏览器窗口", { danger: true })}
-            </Space>
+                任务{hasChecked ? `（${checked.length}）` : ""}
+              </Button>
+            </Tooltip>
           </Space>
         </div>
 
@@ -1180,6 +1158,20 @@ export function AccountsPage(): ReactElement {
           <TotpImportPanel />
         </div>
       </Modal>
+
+      {/* 任务抽屉：勾选账号后在这里选任务（登录 / 巡检 / 6 种 AI 任务 / 删除）、填参数、执行并看逐账号结果 */}
+      <TaskPanel
+        open={taskOpen}
+        onClose={() => setTaskOpen(false)}
+        rows={checkedRows}
+        hiddenChecked={hiddenChecked}
+        busy={busy}
+        concurrency={concurrency}
+        onConcurrencyChange={setConcurrency}
+        closeWindow={closeWindow}
+        onCloseWindowChange={setCloseWindow}
+        onRunAccountAction={(action, options) => runAction(action, undefined, options)}
+      />
     </div>
   );
 }

@@ -32,8 +32,7 @@ function rowSelectFiles() {
 
 test("用 rowSelect 的每个页面都能被扫到（接口变了这里要跟着改）", () => {
   const files = rowSelectFiles().map((f) => f.rel);
-  assert.ok(files.length >= 6, `至少要扫到六张表，实际 ${files.length}：${files.join(", ")}`);
-  assert.ok(files.includes("pages/ai-tasks/AccountListCard.tsx"), "AI 任务账号列表必须在内");
+  assert.ok(files.length >= 5, `至少要扫到五张表，实际 ${files.length}：${files.join(", ")}`);
 });
 
 /**
