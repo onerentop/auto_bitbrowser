@@ -6,7 +6,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { LoginOperation, LoginSelectors, SIGNIN_URL } from "../src/engine/operations/login.ts";
+import {
+  INTERSTITIAL_SKIP_TEXTS,
+  LoginOperation,
+  LoginSelectors,
+  SIGNIN_URL,
+} from "../src/engine/operations/login.ts";
 import { generateTotp } from "../src/engine/totp.ts";
 
 const EMAIL = "tester@gmail.com";
@@ -113,10 +118,24 @@ function pageDef(g, name) {
           "Get a verification code at ••••• ••••48\n2-Step Verification phone\nStandard rates apply",
       };
     case "speedbump":
+      // 真机（2026-09-25，用户截图 OCR + 窗口 74 的 Chrome 历史）：2FA 之后 Google 会时不时插一张
+      // 通行密钥推广页；URL 实测为 accounts.google.com/v3/signin/speedbump/passkeyenrollment，
+      // 文案是「Sign in faster / Not now / Continue」，可点文案里没有「Skip」。
       return {
-        url: `${acc}/speedbump/passkeyenrollment?hl=en`,
+        url: `${acc}/v3/signin/speedbump/passkeyenrollment?hl=en&continue=https%3A%2F%2Fmyaccount.google.com%2F`,
         visible: [],
-        text: "Simplify your sign-in\nWith passkeys, you can sign in with your fingerprint\nNot now",
+        clickTexts: g.opts.speedbumpNoSkipButton ? ["Continue"] : ["Not now", "Continue"],
+        text:
+          "Sign in faster\nWith passkeys, your device will simply ask you for your Windows PIN or biometric\n" +
+          "Only create a passkey if this is your device. Learn more\nNot now\nContinue\nPrivacy\nTerms",
+      };
+    case "speedbump2":
+      // 串联的第二张提示页：URL 与文案同款，只是又来一次
+      return {
+        url: `${acc}/v3/signin/speedbump/passkeyenrollment?hl=en&continue=https%3A%2F%2Fmyaccount.google.com%2F&step=2`,
+        visible: [],
+        clickTexts: ["Not now", "Continue"],
+        text: "Sign in faster\nNot now\nContinue\nPrivacy\nTerms",
       };
     case "myaccount":
       return {
@@ -155,6 +174,14 @@ class FakeGoogle {
       passwordTransitionTicks: 0,
       /** 「选择验证方式」页点了验证器但页面没变（真机：Google 的 Material 列表项对 DOM click 不响应） */
       selectionDomClickNoop: false,
+      /** 真机（2026-09-25）：插了通行密钥提示页时，要等提示页被跳过，会话才可用 */
+      speedbumpBlocksSession: true,
+      /** 提示页上点不到「跳过」文案（模拟 Google 改版 / 文案不同） */
+      speedbumpNoSkipButton: false,
+      /** 提示页上算「跳过」的文案（模拟 Google 页面，不是我们的代码） */
+      speedbumpSkipTexts: ["Not now", "暂不", "以后再说", "暂时不", "不用了", "跳过"],
+      /** 跳掉一张提示页后还会再来几张（真机：/speedbump 可能串联多张） */
+      speedbumpChain: 0,
       ...opts,
     });
     this.signedInAs = opts.signedInAs ?? null;
@@ -170,6 +197,7 @@ class FakeGoogle {
     this.textClicks = [];
     this.chooserUsed = false;
     this.fronted = 0;
+    this.speedbumpChain = this.opts.speedbumpChain;
   }
   get def() {
     return pageDef(this, this.page);
@@ -177,6 +205,8 @@ class FakeGoogle {
   go(name) {
     this.page = name;
     this.error = null;
+    // 页面一换，上一次按文案点击留下的标记就没了（真机：新页面上 click('[data-abb-text-hit="1"]') 找不到元素）
+    this.lastTextHit = "";
   }
 
   async navigate(url) {
@@ -224,7 +254,7 @@ class FakeGoogle {
     // 坐标点击带标记的元素（login.ts 在 DOM 点击没效果时的兜底）
     if (sel === '[data-abb-text-hit="1"]') {
       this.clicks.push(sel);
-      this.afterTextClick();
+      this.afterTextClick(this.lastTextHit ?? "");
       return true;
     }
     if (!this.def.visible.includes(sel)) return false;
@@ -245,14 +275,29 @@ class FakeGoogle {
     const items = this.def.clickTexts ?? [];
     const hit = items.find((t) => (mode === "contains" ? t.includes(text) : t.startsWith(text)));
     if (!hit) return null;
+    // 记下命中的文案：DOM click 没效果时 login.ts 会对同一个元素做坐标点击，fake 里也要能复现这次命中
+    this.lastTextHit = hit;
     if (this.opts.selectionDomClickNoop) return { tag: "DIV", href: null };
-    this.afterTextClick();
+    this.afterTextClick(hit);
     return { tag: "DIV", href: null };
   }
 
-  /** 点了验证器选项之后进入验证码页 */
-  afterTextClick() {
-    if (this.page === "selection_auth") this.go("totp");
+  /** 按文案点击后的页面变化（对标真机：点验证器项 → 验证码页；点提示页的「Not now」→ 提示页结束） */
+  afterTextClick(hitText = "") {
+    if (this.page === "selection_auth") return this.go("totp");
+    if (!this.isSpeedbump()) return;
+    // 只有「跳过」类文案才算把提示页关掉；点 Continue 是去创建通行密钥，真机不会因此就登录成功
+    if (!this.opts.speedbumpSkipTexts.some((t) => hitText.includes(t))) return;
+    // 串联的第二张提示页（真机：跳掉一张之后还可能再来一张）
+    if (this.speedbumpChain > 0) {
+      this.speedbumpChain -= 1;
+      return this.go("speedbump2");
+    }
+    this.signedInAs = EMAIL;
+    this.go("myaccount");
+  }
+  isSpeedbump() {
+    return this.page === "speedbump" || this.page === "speedbump2";
   }
   async jsClick(sel) {
     if (!this.def.visible.includes(sel)) return false;
@@ -318,7 +363,10 @@ class FakeGoogle {
       this.error = "Wrong code. Try again.";
       return;
     }
-    this.signedInAs = EMAIL;
+    // 真机（2026-09-25）：通行密钥提示页没跳过之前，会话还不能用 —— 直接开 myaccount
+    // 会被弹到 www.google.com/account/about/（两条真机任务历史实测）。
+    const bump = this.opts.afterTotp === "speedbump" && this.opts.speedbumpBlocksSession;
+    this.signedInAs = bump ? null : EMAIL;
     this.go(this.opts.afterTotp);
   }
 }
@@ -426,10 +474,62 @@ test("账号选择页：点「使用其他账号」后输入邮箱登录", async
   assert.ok(logs.some((l) => l.includes("输入邮箱")));
 });
 
-test("验证码之后出现通行密钥提示页（speedbump）：以 myaccount 验证为准判成功", async () => {
+test("真机回归（2026-09-25）：2FA 后的通行密钥提示页必须先跳过，再以 myaccount 验证为准判成功", async () => {
+  // 真机形态：提示页没跳过之前，会话还不能用（myaccount 会被弹到 www.google.com/account/about）
   const g = new FakeGoogle({ afterTotp: "speedbump" });
+  const { result, logs } = await run(g);
+  assert.equal(result.success, true, `应当判成功，实际: ${result.error}`);
+  // 必须按文案点到「Not now」：这是真机截图里唯一的跳过入口
+  assert.ok(
+    g.textClicks.some(([t, m]) => t === "Not now" && m === "contains"),
+    `没有按文案跳过提示页: ${JSON.stringify(g.textClicks)}`,
+  );
+  assert.ok(logs.some((l) => l.includes("提示页")), `日志里应记录跳过提示页: ${JSON.stringify(logs)}`);
+  // 安全性：这一页绝不交给 AI 点击（同页的 Continue 会去创建通行密钥）
+  assert.ok(
+    !g.acts.some((a) => /continue|passkey|通行密钥/i.test(a)),
+    `不该对这一页发 AI 指令: ${JSON.stringify(g.acts)}`,
+  );
+});
+
+test("提示页上点不到「跳过」文案时：不假装成功，按 myaccount 验证结果判失败", async () => {
+  const g = new FakeGoogle({ afterTotp: "speedbump", speedbumpNoSkipButton: true });
   const { result } = await run(g);
-  assert.equal(result.success, true);
+  assert.equal(result.success, false);
+  assert.equal(result.error_type, "verification_failed");
+  assert.ok(result.error.includes("interstitial"), `失败原因应带阶段: ${result.error}`);
+  // 这一页只有「Not now」和「Continue」，绝不能交给 AI 点（可能点成 Continue 去创建通行密钥）
+  assert.deepEqual(g.acts, [], `不该对这一页发 AI 指令: ${JSON.stringify(g.acts)}`);
+});
+
+test("跳过文案不能含 Continue / Skip：前者会去创建通行密钥，后者会误命中「Skip to main content」（真机实测）", () => {
+  assert.ok(
+    !INTERSTITIAL_SKIP_TEXTS.some((t) => /continue|skip/i.test(t)),
+    `跳过文案含危险词: ${JSON.stringify(INTERSTITIAL_SKIP_TEXTS)}`,
+  );
+  assert.ok(INTERSTITIAL_SKIP_TEXTS.length > 0);
+});
+
+test("提示页的跳过按钮对 DOM click 不响应时：用坐标点击兜底（真机：Google 的 Material 元素）", async () => {
+  // 与「选择验证方式」页同一个真机坑：DOM click() 发出去了，页面不动 → 需要用带标记的元素做坐标点击
+  const g = new FakeGoogle({ afterTotp: "speedbump", selectionDomClickNoop: true });
+  const { result, logs } = await run(g);
+  assert.equal(result.success, true, `应当判成功，实际: ${result.error}`);
+  assert.ok(
+    g.clicks.includes('[data-abb-text-hit="1"]'),
+    `没有走坐标点击兜底: ${JSON.stringify(g.clicks)}`,
+  );
+  assert.ok(logs.some((l) => l.includes("坐标点击")), `日志里应记录坐标点击兜底: ${JSON.stringify(logs)}`);
+});
+
+test("串联多张 /speedbump 提示页时：最多再跳一轮（真机：跳掉一张后还可能落回提示页）", async () => {
+  const g = new FakeGoogle({ afterTotp: "speedbump", speedbumpChain: 1 });
+  const { result, logs } = await run(g);
+  assert.equal(result.success, true, `应当判成功，实际: ${result.error}`);
+  assert.ok(
+    logs.some((l) => l.includes("第 2 次尝试跳过")),
+    `应当再跳一轮: ${JSON.stringify(logs)}`,
+  );
 });
 
 test("窗口已以该账号登录：直接返回，不输入任何东西", async () => {

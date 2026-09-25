@@ -140,6 +140,16 @@ export const AUTHENTICATOR_OPTION_TEXTS = [
   "验证器应用",
 ];
 
+/**
+ * 「登录后提示页」（通行密钥推广等 /speedbump 页）的跳过文案。
+ *
+ * 真机（2026-09-25，用户截图 OCR）：2FA 之后 Google 会时不时插一个通行密钥页，
+ * 唯一跳过入口是「Not now」。两个「不能加」的实证：
+ *   - 不能加「Continue」——那是去创建通行密钥，不是跳过；
+ *   - 不能加裸「Skip」——真机探针在 myaccount 页点「Skip」命中的是「Skip to main content」。
+ */
+export const INTERSTITIAL_SKIP_TEXTS = ["Not now", "暂不", "以后再说", "暂时不", "不用了", "跳过"];
+
 /** 文本点击命中后打在元素上的标记属性（与 stagehand-engine 的 TEXT_HIT_ATTRIBUTE 同一个值） */
 const TEXT_HIT_SELECTOR = '[data-abb-text-hit="1"]';
 
@@ -319,6 +329,25 @@ export class LoginOperation {
         if (blocked3) return blocked3;
       }
 
+      /**
+       * 6.5 登录后的提示页（通行密钥推广等 /speedbump 页）。
+       *
+       * 真机（2026-09-25）：2FA 之后 Google 会时不时插一张「Sign in faster」通行密钥页。
+       * 它还没被跳过时登录事务没有结束 —— 直接去开 myaccount 会被弹到 www.google.com/account/about/，
+       * 于是被判成 verification_failed（真机任务历史两条；窗口 74 的浏览器历史里能看到
+       * speedbump → myaccount → /intro → /account/about 这条跳转链）。
+       * 所以在最终验证之前先按文案把提示页跳掉（最多两轮：/speedbump 有时会串联多张）；
+       * 跳不掉也照常往下走，由 myaccount 验证给结论 —— 失败信息里保留 interstitial 这个诊断。
+       */
+      for (let round = 1; round <= 2 && stage === "interstitial"; round++) {
+        const here = await this.engine.getCurrentUrl();
+        log(`检测到登录后提示页（${hostOf(here)}${pathOf(here)}），第 ${round} 次尝试跳过`);
+        const after = await this.dismissInterstitial(log);
+        // unknown 只是过渡态：不覆盖 stage，否则失败信息里就看不到「卡在提示页」这条线索
+        if (after !== "interstitial" && after !== "unknown") stage = after;
+      }
+      if (stage === "interstitial") log("提示页没有被跳掉，继续用 myaccount 验证结果");
+
       // 7. 最终验证：只有 myaccount 显示目标邮箱才算成功
       log("打开 myaccount 验证登录结果");
       const post = await this.checkSignedIn(email);
@@ -435,6 +464,11 @@ export class LoginOperation {
       return "2fa_other";
     }
     if (hasAny(text, TEXT.CHOOSER)) return "chooser";
+    // 登录后的提示页（通行密钥推广等）。真机（2026-09-25）：窗口 74 的 Chrome 历史里，那两次
+    // 「登录验证失败（最终页面 www.google.com/account/about/，登录阶段: interstitial）」对应的 URL 正是
+    // accounts.google.com/v3/signin/speedbump/passkeyenrollment —— 认 URL 里的 /speedbump/ 就够。
+    // 故意不加文案兜底：登录页/中间页也会出现「Sign in faster」这类推广文案，
+    // 一旦误判成 interstitial，本来能正常登录的流程会在等页面渲染的阶段就中断（退化成必失败）。
     if (path.includes("/speedbump/")) return "interstitial";
     if (hasAny(text, TEXT.PHONE_PROMPT)) return "2fa_prompt";
     if (hasAny(text, TEXT.VERIFY_IT_IS_YOU)) return "verify_selection";
@@ -474,6 +508,33 @@ export class LoginOperation {
     }
     log("「选择验证方式」页：没有找到验证器选项");
     return false;
+  }
+
+  /**
+   * 跳过登录后的提示页（通行密钥推广等 /speedbump 页），返回跳过后重新识别到的阶段。
+   *
+   * 顺序：按文案确定性点击（真机截图里唯一的跳过入口是「Not now」）→ 页面没动就改用坐标点击
+   * （真机教训：Google 的 Material 元素对 DOM click 不响应，与「选择验证方式」页是同一个坑）。
+   * **故意不交给 AI 点击**：这一页只有「Not now」和「Continue」两个按钮，而 Continue 是去创建通行密钥 ——
+   * AI 把「跳过这张页继续走」理解成点 Continue，就会在用户账号上多出一个通行密钥，比判失败严重得多。
+   * 返回的是**重新识别出来的阶段**，不是点击的返回值 —— 点击成功不代表页面真的动了。
+   */
+  private async dismissInterstitial(log: (msg: string) => void): Promise<LoginStage> {
+    const settled = () => this.waitForStage(["interstitial", "unknown"], 10_000);
+    const clickByText = this.engine.clickByText?.bind(this.engine);
+    if (!clickByText) return "interstitial";
+    for (const text of INTERSTITIAL_SKIP_TEXTS) {
+      const hit = await clickByText(text, "contains");
+      if (!hit) continue;
+      log(`登录后提示页：已点击「${text}」`);
+      const after = await settled();
+      if (after !== "interstitial") return after;
+      log("登录后提示页：DOM 点击后页面没动，改用坐标点击");
+      await this.engine.click(TEXT_HIT_SELECTOR);
+      return settled();
+    }
+    log("登录后提示页：页面上没有可点的跳过文案，不做任何点击");
+    return "interstitial";
   }
 
   private async anyVisible(selectors: readonly string[]): Promise<boolean> {
