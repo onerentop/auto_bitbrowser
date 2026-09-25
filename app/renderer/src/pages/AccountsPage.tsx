@@ -22,6 +22,7 @@ import {
   Empty,
   Input,
   InputNumber,
+  Modal,
   Segmented,
   Space,
   Table,
@@ -40,6 +41,7 @@ import {
   EditOutlined,
   MinusCircleOutlined,
   PlusOutlined,
+  QrcodeOutlined,
   SyncOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
@@ -76,6 +78,9 @@ import {
 import { IPC, describeError, invoke, on } from "../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, useTaskState } from "../stores/task.ts";
 import { useHostStatus } from "../stores/host-status.ts";
+import { ACCOUNT_VIEW_KEY, parseAccountView, type AccountView } from "../lib/ui-prefs.ts";
+import { WindowsView } from "./accounts/WindowsView.tsx";
+import { TotpImportPanel } from "./accounts/TotpImportPanel.tsx";
 import { BatchImportModal } from "../components/BatchImportModal.tsx";
 import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
@@ -134,6 +139,24 @@ function writeHiddenColumns(keys: string[]): void {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(keys));
   } catch {
     logLocal("列设置保存失败：localStorage 不可写");
+  }
+}
+
+/** 读视角偏好：只认 "windows"，其余回落账号视角 */
+function readView(): AccountView {
+  try {
+    return parseAccountView(localStorage.getItem(ACCOUNT_VIEW_KEY));
+  } catch {
+    return "accounts";
+  }
+}
+
+/** 写视角偏好（写不进去只是下次不记住） */
+function writeView(view: AccountView): void {
+  try {
+    localStorage.setItem(ACCOUNT_VIEW_KEY, view);
+  } catch {
+    logLocal("视角设置保存失败：localStorage 不可写");
   }
 }
 
@@ -230,7 +253,15 @@ export function AccountsPage(): ReactElement {
   /** null = 关闭；"" = 添加；邮箱 = 编辑 */
   const [editEmail, setEditEmail] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  /** 导入 TOTP 密钥（原独立页并入这里） */
+  const [totpOpen, setTotpOpen] = useState(false);
+  /** 一体列表视角：账号行 / 窗口行（原首页窗口列表并入窗口视角） */
+  const [view, setView] = useState<AccountView>(readView);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
+  const changeView = useCallback((next: AccountView) => {
+    setView(next);
+    writeView(next);
+  }, []);
   const closeBind = useCallback(() => setBindEmail(null), []);
   const closeEdit = useCallback(() => setEditEmail(null), []);
   const closeNote = useCallback(() => setNoteTarget(null), []);
@@ -356,7 +387,9 @@ export function AccountsPage(): ReactElement {
     return checkedRows.filter((r) => !shown.has(r.email)).length;
   }, [visible, checkedRows]);
 
-  // 表格高度跟随容器（卡片占满页面剩余高度）
+  // 表格高度跟随容器（卡片占满页面剩余高度）。
+  // 必须依赖 view：观测节点长在「账号视角」分支里，两个视角互斥挂载 —— 切到窗口视角再切回来是新
+  // 节点，依赖为空就没人观测它（旧节点被卸载时还会补发一次 0，把高度压到下限）。
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(400);
   useEffect(() => {
@@ -367,7 +400,7 @@ export function AccountsPage(): ReactElement {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [view]);
 
   // ---------- 提示与确认 ----------
 
@@ -839,27 +872,46 @@ export function AccountsPage(): ReactElement {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, height: "100%", minHeight: 600 }}>
-      <PageHeader
-        title="账号"
-        description="Google 账号与绑定的 ixBrowser 窗口。勾选后可以批量登录、巡检或删除，右键单个账号有更多操作；显示哪些列可在工具栏「列」里自己勾选。"
-        extra={
-          <>
-            <Button icon={<PlusOutlined />} onClick={() => setEditEmail("")}>
-              添加账号
-            </Button>
-            <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
-              批量导入
-            </Button>
-            <Tooltip title="导出勾选的账号（含密码 / 辅助邮箱 / 2FA 密钥原文）">
-              <Button icon={<UploadOutlined />} onClick={() => void exportSelected()}>
-                导出选中
-              </Button>
-            </Tooltip>
-          </>
-        }
-      />
+        <PageHeader
+          title="账号"
+          description={
+            view === "windows"
+              ? "ixBrowser 全部窗口（含未绑定账号的）。勾选后可以打开或删除，也可以按设置里的「创建参数」批量创建。"
+              : "Google 账号与绑定的 ixBrowser 窗口。勾选后可以批量登录、巡检或删除，右键单个账号有更多操作；显示哪些列可在工具栏「列」里自己勾选。"
+          }
+          extra={
+            <>
+              <Segmented<AccountView>
+                value={view}
+                onChange={changeView}
+                options={[
+                  { value: "accounts", label: "账号" },
+                  { value: "windows", label: "窗口" },
+                ]}
+              />
+              {view === "accounts" && (
+                <>
+                  <Button icon={<QrcodeOutlined />} onClick={() => setTotpOpen(true)}>
+                    导入密钥
+                  </Button>
+                  <Button icon={<PlusOutlined />} onClick={() => setEditEmail("")}>
+                    添加账号
+                  </Button>
+                  <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
+                    批量导入
+                  </Button>
+                  <Tooltip title="导出勾选的账号（含密码 / 辅助邮箱 / 2FA 密钥原文）">
+                    <Button icon={<UploadOutlined />} onClick={() => void exportSelected()}>
+                      导出选中
+                    </Button>
+                  </Tooltip>
+                </>
+              )}
+            </>
+          }
+        />
 
-      <Panel fill>
+        {view === "windows" ? <WindowsView accounts={rows} busy={busy} /> : <Panel fill>
         {/* 筛选工具栏：刷新 + 搜索 + 登录状态 + 同名 + 标签筛选 / 标签管理 / 列设置 | 计数 */}
         <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
           <Space wrap>
@@ -1037,7 +1089,7 @@ export function AccountsPage(): ReactElement {
             })}
           />
         </div>
-      </Panel>
+      </Panel>}
 
       {/* 右键菜单：在鼠标位置放一个 1px 锚点，受控打开 */}
       <Dropdown
@@ -1113,6 +1165,21 @@ export function AccountsPage(): ReactElement {
         onClose={() => setImportOpen(false)}
         onDone={() => void load()}
       />
+
+      {/* 导入 TOTP 密钥（原独立页并入这里）：关闭即卸载，下次打开是干净的初始态 */}
+      <Modal
+        open={totpOpen}
+        title="导入 TOTP 密钥"
+        width={1000}
+        footer={null}
+        destroyOnHidden
+        styles={{ body: { paddingTop: 8 } }}
+        onCancel={() => setTotpOpen(false)}
+      >
+        <div style={{ height: "64vh" }}>
+          <TotpImportPanel />
+        </div>
+      </Modal>
     </div>
   );
 }

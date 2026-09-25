@@ -1,10 +1,9 @@
 /**
- * TOTP 密钥导入页
+ * TOTP 密钥导入面板（原独立的「导入 TOTP」页并入账号页，作为「导入密钥」动作的模态内容）
  *
- * 布局：页头（标题 + 说明 + 「导入选中账号」）→ 导入面板（方式切换 + muted 说明 + QR / 文本输入）
- *       → 结果面板（全选栏 + 状态 + 结果表格，占满剩余高度）。
- * 日志区由底部全局任务坞替代，界面侧日志用 logLocal。
- * 页面切走不卸载，解析结果与勾选状态会保留。
+ * 布局：导入面板（方式切换 + muted 说明 + QR / 文本输入）→ 结果面板（全选栏 + 状态 + 结果表格）。
+ * 主操作「导入选中账号」在结果面板工具栏右侧；日志区由底部全局任务坞替代，界面侧日志用 logLocal。
+ * 面板挂在模态里，关闭即卸载（下次打开是干净的初始态）。
  *
  * 流程：图片 → 渲染层 jsQR 识别 → abb/totp/parseUris → abb/totp/match → 勾选 → abb/totp/import（后台任务）
  *       文本 → abb/totp/parseText → abb/totp/match → 勾选 → abb/totp/import
@@ -34,18 +33,16 @@ import {
   type TotpEntry,
   type TotpImportItem,
   type TotpMatchRow,
-} from "../../../shared/channels/totp.ts";
-import { IPC, describeError, invoke } from "../lib/ipc.ts";
-import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../stores/task.ts";
-import { PageHeader } from "../components/PageHeader.tsx";
-import { Panel, Section } from "../components/Section.tsx";
-import { useTokens } from "../theme/tokens.ts";
-import { decodeQrFromFile, IMAGE_ACCEPT, isImageFileName } from "./totp/qr-decode.ts";
-import { importConfirmMessage, importFinishedNotice, isImportResult } from "./totp/messages.ts";
-import { ResultTable, type ResultRow } from "./totp/ResultTable.tsx";
+} from "../../../../shared/channels/totp.ts";
+import { IPC, describeError, invoke } from "../../lib/ipc.ts";
+import { logLocal, markTaskStarted, onTaskFinished, useTaskState } from "../../stores/task.ts";
+import { Panel, Section } from "../../components/Section.tsx";
+import { useTokens } from "../../theme/tokens.ts";
+import { decodeQrFromFile, IMAGE_ACCEPT, isImageFileName } from "../totp/qr-decode.ts";
+import { importConfirmMessage, importFinishedNotice, isImportResult } from "../totp/messages.ts";
+import { ResultTable, type ResultRow } from "../totp/ResultTable.tsx";
 
 type Mode = "qr" | "text";
-
 /** 说明区文案（QR 模式按有序列表渲染，序号由 <ol> 提供） */
 const QR_HELP = [
   "打开手机 Google Authenticator → 右上角菜单 → 导出账号",
@@ -77,7 +74,7 @@ function defaultSelection(matches: readonly TotpMatchRow[]): Set<number> {
   return out;
 }
 
-export function TotpImportPage(): ReactElement {
+export function TotpImportPanel(): ReactElement {
   const { modal, notification } = App.useApp();
   const { running } = useTaskState();
   const busy = running !== null;
@@ -382,21 +379,6 @@ export function TotpImportPage(): ReactElement {
         outlineOffset: 4,
       }}
     >
-      <PageHeader
-        title="导入 TOTP 密钥"
-        description="从 Google Authenticator 导出的 QR 码截图或账号文本中读出 2FA 密钥，导入到匹配的数据库账号。"
-        extra={
-          <Button
-            type="primary"
-            icon={<CheckOutlined />}
-            disabled={visibleRows.length === 0 || busy || scanning}
-            onClick={() => void startImport()}
-          >
-            导入选中账号
-          </Button>
-        }
-      />
-
       {/* 导入区：方式切换 + 说明 + 对应的输入 */}
       <Panel>
         <Section
@@ -519,6 +501,14 @@ export function TotpImportPage(): ReactElement {
             </Checkbox>
             <Button icon={<SyncOutlined />} onClick={refreshMatch}>
               刷新匹配
+            </Button>
+            <Button
+              type="primary"
+              icon={<CheckOutlined />}
+              disabled={visibleRows.length === 0 || busy || scanning}
+              onClick={() => void startImport()}
+            >
+              导入选中账号
             </Button>
           </div>
         </div>

@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Alert, App, AutoComplete, Button, Form, Input, InputNumber, Select, Space, Tabs, Typography } from "antd";
+import { CreateParams } from "./CreateParams.tsx";
 import { CopyOutlined, ReloadOutlined, SaveOutlined, SendOutlined, SyncOutlined } from "@ant-design/icons";
 import {
   SETTINGS_NUMBER_RANGES,
@@ -411,6 +412,11 @@ export function ConfigTab(): ReactElement {
             <NumberField name="delay_after_login" label="登录后" />
             <NumberField name="delay_after_offer" label="Offer 后" />
             <NumberField name="delay_after_save" label="保存后" />
+          </Section>
+
+          {/* 创建参数独立保存（走 abb/home/saveConfig），与上面的「保存配置」无关 */}
+          <Section title="创建参数" description="账号页「窗口」视角点「创建窗口」时使用；模板窗口ID 与前缀离开输入框后自动保存">
+            <CreateParams />
           </Section>
 
           <Section title="代理设置" description="批量创建窗口时，每个代理 IP 最多分配给指定数量的窗口">

@@ -43,7 +43,7 @@ test("批量导入预览：无效行画红色状态条", () => {
 /** 身份列 / 操作列固定：文件 → 必须 fixed 的列 key */
 const FIXED = {
   "pages/AccountsPage.tsx": { left: ["email"], right: ["action"] },
-  "pages/home/BrowserListCard.tsx": { left: ["id"], right: [] },
+  "pages/accounts/WindowsView.tsx": { left: ["id"], right: [] },
   "pages/ai-tasks/AccountListCard.tsx": { left: ["email"], right: [] },
   "pages/settings/ProxiesTab.tsx": { left: [], right: ["actions"] },
 };

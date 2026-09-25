@@ -6,9 +6,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  ACCOUNT_VIEW_KEY,
   PAGE_SIZES,
   DEFAULT_PAGE_SIZE,
   pageSizeKey,
+  parseAccountView,
   parsePageSize,
   parseCollapsed,
   clampPage,
@@ -37,6 +39,15 @@ test("parsePageSize：只接受选项里的整数，其余回落 50", () => {
 test("parseCollapsed：只有 \"1\" 表示收起", () => {
   assert.equal(parseCollapsed("1"), true);
   for (const v of [null, "", "0", "true", "yes", "2"]) assert.equal(parseCollapsed(v), false, JSON.stringify(v));
+});
+
+test("账号页视角：只认 \"windows\"，其余回落账号视角", () => {
+  assert.equal(ACCOUNT_VIEW_KEY, "abb/accounts/view");
+  assert.equal(parseAccountView("windows"), "windows");
+  assert.equal(parseAccountView("accounts"), "accounts");
+  for (const bad of [null, "", "Windows", "window", "1", "{}"]) {
+    assert.equal(parseAccountView(bad), "accounts", `非法值 ${JSON.stringify(bad)} 应回落账号视角`);
+  }
 });
 
 test("clampPage：夹到 [1, 总页数]，无数据时为 1", () => {

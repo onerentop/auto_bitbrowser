@@ -492,10 +492,11 @@ test("listBrowsers：刷新后同一窗口 key 稳定；勾选重复 id 的两�
 
 // ==================== handler：配置读写 ====================
 
-test("getConfig / saveConfig：只读写 last_used_template_id 与 window_name_prefix，其他键不变", async (t) => {
+test("getConfig / saveConfig：读写 模板ID / 名称前缀 / 目标分组，其他键不变", async (t) => {
   const original = {
     last_used_template_id: 123,
     window_name_prefix: "old",
+    create_target_group_id: "7",
     theme: "dark",
     custom_section: { a: 1, b: [1, 2] },
   };
@@ -505,30 +506,49 @@ test("getConfig / saveConfig：只读写 last_used_template_id 与 window_name_p
 
   /** @type {any} */
   const got = await s.dispatch(HOME_INVOKE.homeGetConfig, []);
-  assert.deepEqual(got.data, { templateId: "123", namePrefix: "old" });
+  assert.deepEqual(got.data, { templateId: "123", namePrefix: "old", groupId: 7 });
 
   const before = new ConfigManager({ configFile: file, log: () => {} }).load();
 
   const saved = await s.dispatch(HOME_INVOKE.homeSaveConfig, [{ templateId: "  456  " }]);
   assert.equal(saved.ok, true);
-  assert.deepEqual(saved.data, { templateId: "456", namePrefix: "old" });
+  assert.deepEqual(saved.data, { templateId: "456", namePrefix: "old", groupId: 7 });
 
   /** @type {any} */
   const saved2 = await s.dispatch(HOME_INVOKE.homeSaveConfig, [{ namePrefix: " pre " }]);
-  assert.deepEqual(saved2.data, { templateId: "456", namePrefix: "pre" });
+  assert.deepEqual(saved2.data, { templateId: "456", namePrefix: "pre", groupId: 7 });
+
+  // 目标分组：可以换成别的正整数，也可以清成 null（沿用模板窗口的分组）
+  /** @type {any} */
+  const saved3 = await s.dispatch(HOME_INVOKE.homeSaveConfig, [{ groupId: 12 }]);
+  assert.deepEqual(saved3.data, { templateId: "456", namePrefix: "pre", groupId: 12 });
+  /** @type {any} */
+  const saved4 = await s.dispatch(HOME_INVOKE.homeSaveConfig, [{ groupId: null }]);
+  assert.deepEqual(saved4.data, { templateId: "456", namePrefix: "pre", groupId: null });
 
   const onDisk = JSON.parse(readFileSync(file, "utf-8"));
   assert.equal(onDisk.last_used_template_id, "456");
   assert.equal(onDisk.window_name_prefix, "pre");
+  assert.equal(onDisk.create_target_group_id, "");
   assert.equal(onDisk.theme, "dark");
   assert.deepEqual(onDisk.custom_section, { a: 1, b: [1, 2] });
 
   const after = new ConfigManager({ configFile: file, log: () => {} }).load();
-  for (const k of ["last_used_template_id", "window_name_prefix"]) {
+  for (const k of ["last_used_template_id", "window_name_prefix", "create_target_group_id"]) {
     delete before[k];
     delete after[k];
   }
   assert.deepEqual(after, before);
+});
+
+test("getConfig：目标分组非法 / 空 / ≤0 一律当「沿用模板窗口」（null）", async (t) => {
+  for (const raw of ["", "abc", "0", "-3", null, undefined]) {
+    const s = setup({}, raw === undefined ? {} : { create_target_group_id: raw });
+    t.after(s.cleanup);
+    /** @type {any} */
+    const got = await s.dispatch(HOME_INVOKE.homeGetConfig, []);
+    assert.equal(got.data.groupId, null, `原始值 ${JSON.stringify(raw)}`);
+  }
 });
 
 // ==================== handler：参数校验 ====================
@@ -551,6 +571,10 @@ test("handler 参数校验：非法参数一律 INVALID_ARGUMENT，且不会启�
     [HOME_INVOKE.homeSaveConfig, [{}]],
     [HOME_INVOKE.homeSaveConfig, [{ theme: "x" }]],
     [HOME_INVOKE.homeSaveConfig, [{ templateId: 1 }]],
+    [HOME_INVOKE.homeSaveConfig, [{ groupId: 0 }]],
+    [HOME_INVOKE.homeSaveConfig, [{ groupId: -2 }]],
+    [HOME_INVOKE.homeSaveConfig, [{ groupId: 1.5 }]],
+    [HOME_INVOKE.homeSaveConfig, [{ groupId: "7" }]],
     [HOME_INVOKE.homeSaveConfig, [["templateId"]]],
     [HOME_INVOKE.homeGetConfig, ["x"]],
     [HOME_INVOKE.homeListGroups, [1]],

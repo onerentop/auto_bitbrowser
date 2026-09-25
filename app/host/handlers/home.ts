@@ -37,6 +37,8 @@ import { computeTfaCodes, extractTfaSecrets } from "../../../src/application/tfa
 export const HOME_CONFIG_KEYS = {
   templateId: "last_used_template_id",
   namePrefix: "window_name_prefix",
+  /** 创建窗口的目标分组（字符串存库；空串 = 沿用模板窗口的分组） */
+  group: "create_target_group_id",
 } as const;
 
 /** 单次批量上限：防止误传超大数组 */
@@ -57,13 +59,27 @@ function expectNoArgs(args: unknown[]): void {
   if (args.length > 0) throw invalid("该通道不接受参数");
 }
 
-/** 校验 saveConfig 的参数：普通对象，只允许 templateId / namePrefix 两个字符串字段 */
+/**
+ * 校验 saveConfig 的参数：普通对象，只允许 templateId / namePrefix（字符串）
+ * 与 groupId（正整数或 null，null = 沿用模板窗口的分组）。
+ */
 export function parseConfigPatch(args: unknown[]): HomeConfigPatch {
   if (args.length !== 1) throw invalid("需要 1 个参数：配置补丁对象");
   const raw = args[0];
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw invalid("配置补丁必须是对象");
   const patch: HomeConfigPatch = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key === "groupId") {
+      if (value === null) {
+        patch.groupId = null;
+        continue;
+      }
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+        throw invalid("配置字段 groupId 必须是正整数或 null");
+      }
+      patch.groupId = value;
+      continue;
+    }
     if (key !== "templateId" && key !== "namePrefix") throw invalid(`不支持的配置字段: ${key}`);
     if (typeof value !== "string") throw invalid(`配置字段 ${key} 必须是字符串`);
     if (value.length > 1000) throw invalid(`配置字段 ${key} 过长`);
@@ -128,11 +144,18 @@ function configString(value: unknown): string {
   return value === null || value === undefined || value === "" ? "" : String(value);
 }
 
+/** 目标分组：配置里存字符串；空 / 非法 / ≤0 一律当「沿用模板窗口的分组」（null） */
+function configGroupId(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(configString(value).trim());
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function readConfig(ctx: HostContext): HomeConfig {
   const cfg = ctx.config();
   return {
     templateId: configString(cfg.get(HOME_CONFIG_KEYS.templateId, "")),
     namePrefix: configString(cfg.get(HOME_CONFIG_KEYS.namePrefix, "")),
+    groupId: configGroupId(cfg.get(HOME_CONFIG_KEYS.group, "")),
   };
 }
 
@@ -157,6 +180,9 @@ export function createHomeHandlers(ctx: HostContext): HostHandlerTable {
       const cfg = ctx.config();
       if (patch.templateId !== undefined) cfg.set(HOME_CONFIG_KEYS.templateId, patch.templateId.trim());
       if (patch.namePrefix !== undefined) cfg.set(HOME_CONFIG_KEYS.namePrefix, patch.namePrefix.trim());
+      if (patch.groupId !== undefined) {
+        cfg.set(HOME_CONFIG_KEYS.group, patch.groupId === null ? "" : String(patch.groupId));
+      }
       return readConfig(ctx);
     },
 

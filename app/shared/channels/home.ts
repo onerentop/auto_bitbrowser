@@ -32,10 +32,12 @@ export const HOME_INVOKE = {
 
 // ==================== 数据类型 ====================
 
-/** 「创建参数配置」两个输入框，对应配置键 last_used_template_id / window_name_prefix */
+/** 「创建参数」三个字段，对应配置键 last_used_template_id / window_name_prefix / create_target_group_id */
 export interface HomeConfig {
   templateId: string;
   namePrefix: string;
+  /** 创建窗口的目标分组；null = 沿用模板窗口的分组 */
+  groupId: number | null;
 }
 
 /** 写回时只传需要改的字段 */

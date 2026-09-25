@@ -33,3 +33,13 @@ export function clampPage(page: number, total: number, pageSize: number): number
   const pages = Math.max(1, Math.ceil(total / pageSize));
   return Math.min(Math.max(1, page), pages);
 }
+
+/** 账号页的视角：账号行 / 窗口行 */
+export type AccountView = "accounts" | "windows";
+/** localStorage 键：账号页当前视角 */
+export const ACCOUNT_VIEW_KEY = "abb/accounts/view";
+
+/** 账号页视角：只认 "windows"，其余（含 null / 脏值）回落账号视角 */
+export function parseAccountView(raw: string | null): AccountView {
+  return raw === "windows" ? "windows" : "accounts";
+}
