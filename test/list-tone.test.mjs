@@ -14,6 +14,7 @@ import {
   totpTone,
   runOutcomeTone,
   historyItemTone,
+  proxyCheckTone,
 } from "../app/renderer/src/lib/list-tone.ts";
 
 test("railClass：每种色调对应一个行类，none 不加类", () => {
@@ -59,4 +60,10 @@ test("任务历史：运行结果与条目状态", () => {
   assert.equal(historyItemTone("处理中"), "busy");
   assert.equal(historyItemTone("跳过"), "none");
   assert.equal(historyItemTone(null), "none");
+});
+
+test("代理连通性：可达 ok / 不可达 bad / 没测过 none", () => {
+  assert.equal(proxyCheckTone(true), "ok");
+  assert.equal(proxyCheckTone(false), "bad");
+  assert.equal(proxyCheckTone(null), "none");
 });

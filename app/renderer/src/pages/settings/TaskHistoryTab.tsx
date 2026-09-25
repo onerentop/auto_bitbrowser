@@ -2,15 +2,27 @@
  * 「任务历史」标签 —— 本地新增能力（原本批量任务结果只打在界面日志里，关掉就没了）
  *
  * 数据来自 TaskRunner 收尾时落库的两张表：task_run_history（任务级）+ task_run_items（逐条目）。
- * 上面是任务列表，选中一条后下面是该次运行的逐条目结果；右上角可导出 CSV。
+ * 上面是任务列表（可按类型 / 结果 / 时间 / 账号筛选，筛选在后端 SQL 里做），选中一条后下面是该次运行的
+ * 逐条目结果；右上角可导出 CSV。每行还能「重跑」——用该次运行的参数快照重新启动同类型任务，
+ * 能不能重跑由 shared/logic/task-history.ts 判定（与后端 abb/taskhistory/rerun 同一套规则）。
  */
-import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { App, Button, Empty, Space, Table, Typography } from "antd";
-import { DownloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { App, Button, Empty, Input, Segmented, Select, Space, Table, Tooltip, Typography } from "antd";
+import { DownloadOutlined, RedoOutlined, SyncOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import type { TaskRunItemRow, TaskRunRow } from "../../../../shared/channels/task-history.ts";
+import type { TaskRunItemRow, TaskRunQuery, TaskRunRow } from "../../../../shared/channels/task-history.ts";
+import {
+  TASK_HISTORY_OUTCOMES,
+  TASK_HISTORY_RANGES,
+  rangeBounds,
+  rerunBlockReason,
+  taskTypeLabel,
+  taskTypeOptions,
+  type TaskHistoryRangeKey,
+} from "../../../../shared/logic/task-history.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
-import { onTaskFinished } from "../../stores/task.ts";
+import { markTaskStarted, onTaskFinished, useTaskState } from "../../stores/task.ts";
+import { useHostStatus } from "../../stores/host-status.ts";
 import { Panel, Section } from "../../components/Section.tsx";
 import { rowSelect } from "../../components/row-select.ts";
 import { usePagination } from "../../components/use-pagination.ts";
@@ -26,18 +38,37 @@ function outcomeLabel(outcome: string | null): string {
 }
 
 export function TaskHistoryTab(): ReactElement {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
+  const { running } = useTaskState();
   const [runs, setRuns] = useState<TaskRunRow[]>([]);
   const [items, setItems] = useState<TaskRunItemRow[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 筛选：类型 / 结果 / 时间范围（都下推到后端 SQL），账号按回车或点搜索才应用
+  const [taskType, setTaskType] = useState<string>("");
+  const [outcome, setOutcome] = useState<string>("");
+  const [range, setRange] = useState<TaskHistoryRangeKey>("all");
+  const [emailInput, setEmailInput] = useState("");
+  const [email, setEmail] = useState("");
+  const hasFilter = taskType !== "" || outcome !== "" || range !== "all" || email !== "";
+
+  /** 当前筛选对应的查询（等价于「筛选条件 → 查询」，见 test/task-history-logic.test.mjs） */
+  const query = useMemo((): TaskRunQuery => {
+    const q: TaskRunQuery = {};
+    if (taskType) q.taskType = taskType;
+    if (outcome) q.outcome = outcome;
+    if (email) q.itemEmail = email;
+    Object.assign(q, rangeBounds(range, new Date()));
+    return q;
+  }, [taskType, outcome, email, range]);
+
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     try {
-      const rows = await invoke(IPC.invoke.taskHistoryList);
+      const rows = await invoke(IPC.invoke.taskHistoryList, query);
       setRuns(rows);
-      // 选中的那条可能已经不在了（例如换了数据目录），退回第一条
+      // 选中的那条可能已经不在了（被筛掉 / 换了数据目录），退回第一条
       setSelectedRunId((current) =>
         current !== null && rows.some((r) => r.id === current) ? current : (rows[0]?.id ?? null),
       );
@@ -46,11 +77,16 @@ export function TaskHistoryTab(): ReactElement {
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, query]);
 
+  // 后端就绪后加载；筛选条件变了（query 变）也要重新拉——所以这里不能加「只跑一次」的守卫，
+  // 它会把筛选后的重拉一起挡掉（真机踩过：点了「今天」列表纹丝不动）。就绪前的挂载不发请求，
+  // 避免拿到 HOST_UNAVAILABLE 后一片空白。
+  const hostReady = useHostStatus()?.state === "ready";
   useEffect(() => {
+    if (!hostReady) return;
     void refresh();
-  }, [refresh]);
+  }, [hostReady, refresh]);
 
   // 任务刚结束时历史里已经有这一条：自动刷新，免得用户以为没记上
   useEffect(() => onTaskFinished(() => void refresh()), [refresh]);
@@ -96,6 +132,43 @@ export function TaskHistoryTab(): ReactElement {
     }
   }, [message]);
 
+  /** 重跑：用该次运行的参数快照重新启动同类型任务（同时只能有一个任务） */
+  const rerun = (row: TaskRunRow): void => {
+    const blocked = rerunBlockReason(row);
+    if (blocked) {
+      void message.warning(blocked);
+      return;
+    }
+    modal.confirm({
+      title: "确认重跑",
+      content: `用这次运行的参数快照再跑一次「${row.label ?? taskTypeLabel(row.task_type)}」。\n\n会立刻启动新任务（后端同时只允许一个任务），请确认当前没有别的重要任务在跑。`,
+      okText: "开始",
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const info = await invoke(IPC.invoke.taskHistoryRerun, row.id);
+          markTaskStarted(info);
+          void message.success(`已启动：${info.label}`);
+        } catch (error) {
+          void message.error(describeError(error));
+        }
+      },
+    });
+  };
+
+  const resetFilters = (): void => {
+    setTaskType("");
+    setOutcome("");
+    setRange("all");
+    setEmailInput("");
+    setEmail("");
+  };
+
+  const typeOptions = useMemo(
+    () => [{ value: "", label: "全部任务" }, ...taskTypeOptions(runs)],
+    [runs],
+  );
+
   const runColumns: ColumnsType<TaskRunRow> = [
     {
       title: "结束时间",
@@ -127,6 +200,31 @@ export function TaskHistoryTab(): ReactElement {
       ellipsis: { showTitle: true },
       render: (v: string | null) => <Typography.Text type="secondary">{v ?? ""}</Typography.Text>,
     },
+    {
+      title: "操作",
+      key: "action",
+      width: 90,
+      fixed: "right",
+      render: (_, r) => {
+        const blocked = rerunBlockReason(r);
+        return (
+          <Tooltip title={blocked ?? "用这次的参数快照重新跑一次"}>
+            {/* disabled 的按钮收不到鼠标事件，包一层 span 才能挂上 Tooltip */}
+            <span style={{ display: "inline-block" }}>
+              <Button
+                type="link"
+                size="small"
+                icon={<RedoOutlined />}
+                disabled={blocked !== null || running !== null}
+                onClick={() => rerun(r)}
+              >
+                重跑
+              </Button>
+            </span>
+          </Tooltip>
+        );
+      },
+    },
   ];
 
   const itemColumns: ColumnsType<TaskRunItemRow> = [
@@ -149,7 +247,7 @@ export function TaskHistoryTab(): ReactElement {
   });
 
   // 分页：任务列表刷新不跳页（数据变少时夹到最后一页）；换一条任务时逐条目结果回到第 1 页
-  const runsPager = usePagination("taskHistory", runs.length, []);
+  const runsPager = usePagination("taskHistory", runs.length, [query]);
   const itemsPager = usePagination("taskHistoryItems", items.length, [selectedRunId]);
 
   return (
@@ -159,9 +257,9 @@ export function TaskHistoryTab(): ReactElement {
         title="最近任务"
         description={
           <>
-            每次批量任务（登录 / 5 个 AI 任务 / 导入 TOTP / 打开与删除窗口等）结束后，运行结果会落库；这里查看最近 100 次。
+            每次批量任务（登录 / 6 个 AI 任务 / 导入 TOTP / 打开与删除窗口等）结束后，运行结果会落库；这里查看最近 100 次。
             选中一行可看该次的逐账号结果，同一账号只保留最终状态。「总数」是条目数，「成功」「失败」只统计终态条目，
-            因此「跳过」等中间状态不计入这两列。
+            因此「跳过」等中间状态不计入这两列。筛选与重跑都基于落库的参数快照。
           </>
         }
         extra={
@@ -175,13 +273,49 @@ export function TaskHistoryTab(): ReactElement {
           </Space>
         }
       >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Select
+            value={taskType}
+            onChange={setTaskType}
+            options={typeOptions}
+            style={{ width: 180 }}
+            placeholder="全部任务"
+          />
+          <Select
+            value={outcome}
+            onChange={setOutcome}
+            options={[{ value: "", label: "全部结果" }, ...TASK_HISTORY_OUTCOMES]}
+            style={{ width: 140 }}
+          />
+          <Segmented<TaskHistoryRangeKey>
+            value={range}
+            onChange={setRange}
+            options={TASK_HISTORY_RANGES.map((r) => ({ value: r.value, label: r.label }))}
+          />
+          <Input.Search
+            placeholder="按账号（邮箱）筛选"
+            allowClear
+            style={{ width: 220 }}
+            value={emailInput}
+            onChange={(e) => {
+              setEmailInput(e.target.value);
+              // 清空时立即生效，免得筛完了还以为没筛
+              if (e.target.value === "") setEmail("");
+            }}
+            onSearch={(v) => setEmail(v.trim())}
+          />
+          <Button onClick={resetFilters} disabled={!hasFilter}>
+            重置筛选
+          </Button>
+        </Space>
+
         <Table<TaskRunRow>
           rowKey="id"
           size="small"
           columns={runColumns}
           dataSource={runs}
           loading={loading}
-          locale={{ emptyText: <Empty description="还没有任务记录" /> }}
+          locale={{ emptyText: <Empty description={hasFilter ? "没有符合条件的记录" : "还没有任务记录"} /> }}
           pagination={runsPager.pagination}
           rowSelection={{
             type: "radio",
@@ -190,6 +324,8 @@ export function TaskHistoryTab(): ReactElement {
           }}
           rowClassName={(r) => railClass(runOutcomeTone(r.outcome))}
           onRow={historyRow}
+          // 筛选栏多了以后表格更宽：横向放不下时在表格内部滚动，操作列固定在右侧
+          scroll={{ x: "max-content" }}
         />
       </Section>
 

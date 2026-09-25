@@ -18,6 +18,7 @@ const RAIL_LISTS = {
   "pages/accounts/TaskPanel.tsx": "aiItemTone",
   "pages/totp/ResultTable.tsx": "totpTone",
   "pages/settings/TaskHistoryTab.tsx": "runOutcomeTone",
+  "pages/settings/ProxiesTab.tsx": "proxyCheckTone",
 };
 
 for (const [rel, toneFn] of Object.entries(RAIL_LISTS)) {

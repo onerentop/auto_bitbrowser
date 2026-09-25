@@ -82,6 +82,7 @@ import { ACCOUNT_VIEW_KEY, parseAccountView, type AccountView } from "../lib/ui-
 import { WindowsView } from "./accounts/WindowsView.tsx";
 import { TotpImportPanel } from "./accounts/TotpImportPanel.tsx";
 import { TaskPanel } from "./accounts/TaskPanel.tsx";
+import { BatchEditModal } from "./accounts/BatchEditModal.tsx";
 import { BatchImportModal } from "../components/BatchImportModal.tsx";
 import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
@@ -258,6 +259,8 @@ export function AccountsPage(): ReactElement {
   const [totpOpen, setTotpOpen] = useState(false);
   /** 任务抽屉：登录 / 巡检 / 6 种 Google 修改 / 删除统一从它启动 */
   const [taskOpen, setTaskOpen] = useState(false);
+  /** 批量编辑小窗（标签 / 备注）开关 */
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
   /** 一体列表视角：账号行 / 窗口行（原首页窗口列表并入窗口视角） */
   const [view, setView] = useState<AccountView>(readView);
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
@@ -1000,6 +1003,12 @@ export function AccountsPage(): ReactElement {
                 </Button>
               </Tooltip>
             </Dropdown>
+            {/* 批量编辑：给勾选账号的窗口写标签 / 备注（备注是用户数据，只有这里显式发起才写） */}
+            <Tooltip title={hasChecked ? "批量给勾选账号的窗口写标签 / 备注" : "先勾选账号"}>
+              <Button disabled={!hasChecked} onClick={() => setBatchEditOpen(true)}>
+                批量编辑
+              </Button>
+            </Tooltip>
             {/* 任务统一收在抽屉里：登录 / 巡检 / 6 种 Google 修改 / 删除（原来这里是 6 个按钮 + 参数） */}
             <Tooltip title={hasChecked ? "登录、巡检、Google 账号修改、删除都在这里" : "先勾选账号"}>
               <Button
@@ -1176,6 +1185,15 @@ export function AccountsPage(): ReactElement {
         closeWindow={closeWindow}
         onCloseWindowChange={setCloseWindow}
         onRunAccountAction={(action, options) => runAction(action, undefined, options)}
+      />
+
+      {/* 批量编辑小窗：标签 / 备注写在窗口上（用户显式发起才写备注） */}
+      <BatchEditModal
+        open={batchEditOpen}
+        rows={checkedRows}
+        vocabulary={vocabulary}
+        onClose={() => setBatchEditOpen(false)}
+        onDone={() => void load()}
       />
     </div>
   );

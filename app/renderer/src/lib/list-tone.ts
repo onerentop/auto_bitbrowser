@@ -60,3 +60,9 @@ export function historyItemTone(status: string | null): ListTone {
   if (status === "处理中") return "busy";
   return "none";
 }
+
+/** 代理连通性检测结果（null = 还没测过） */
+export function proxyCheckTone(ok: boolean | null): ListTone {
+  if (ok === null) return "none";
+  return ok ? "ok" : "bad";
+}

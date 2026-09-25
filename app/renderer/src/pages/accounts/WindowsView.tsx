@@ -43,6 +43,7 @@ import { rowSelect } from "../../components/row-select.ts";
 import { PAGINATION_HEIGHT, crossPageSelections, usePagination } from "../../components/use-pagination.ts";
 import { IPC, describeError, invoke } from "../../lib/ipc.ts";
 import { logLocal, markTaskStarted, onTaskFinished } from "../../stores/task.ts";
+import { useHostStatus } from "../../stores/host-status.ts";
 
 const HOME_TASKS: ReadonlySet<string> = new Set(Object.values(HOME_TASK_TYPES));
 /** 表格外框与表头占用的高度（表体高度 = 容器高度 - 该值） */
@@ -115,14 +116,16 @@ export function WindowsView({ accounts, busy }: WindowsViewProps): ReactElement 
     }
   };
 
-  // 首次挂载自动加载一次（后端就绪由外壳保证；这里失败也只是列表为空，可手动刷新）
+  // 后端首次就绪后自动加载一次：窗口可能早于后端 ready 打开，过早请求会拿到 HOST_UNAVAILABLE，
+  // 列表就一直是空的（得手点刷新）——任务历史页真机踩过同一个坑，这里一并等就绪。
+  const hostReady = useHostStatus()?.state === "ready";
   useEffect(() => {
-    if (autoLoaded.current) return;
+    if (!hostReady || autoLoaded.current) return;
     autoLoaded.current = true;
     void refreshList();
     void refreshGroups();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hostReady]);
 
   // 打开 / 删除任务结束后刷新列表
   useEffect(

@@ -1511,3 +1511,97 @@ test("filterAccounts：按标签多选筛（命中任一即显示）；applyTags
   );
   assert.equal(applyTagsUpdate(rows, "ghost@x.com", []), rows);
 });
+// ==================== 批量编辑（标签 / 备注） ====================
+
+test("批量编辑：标签按词表转名、备注原文写窗口；未绑定窗口的账号跳过并计数", async () => {
+  const s = setup({
+    tags: VOCAB_BUSY,
+    windows: [
+      { profile_id: 11, name: "a@x.com" },
+      { profile_id: 12, name: "b@x.com" },
+    ],
+  });
+  seed(s.ctx, [
+    { email: "a@x.com", browser_profile_id: "11" },
+    { email: "b@x.com", browser_profile_id: "12" },
+    { email: "c@x.com" },
+  ]);
+
+  const r = await s.call(CH.accountsBatchEdit, ["a@x.com", "b@x.com", "c@x.com"], {
+    tagIds: [7],
+    note: "已过手机号验证",
+  });
+
+  assert.deepEqual(r, { updated: 2, skipped: 1, failed: [] });
+  const writes = s.ix.calls.filter(([k]) => k === "updateProfile");
+  assert.deepEqual(
+    writes.map(([, id, f]) => [id, f.tag, f.note]),
+    [
+      [11, ["忙碌后仍可见"], "已过手机号验证"],
+      [12, ["忙碌后仍可见"], "已过手机号验证"],
+    ],
+  );
+});
+
+test("批量编辑：只给一个字段时就只写那个字段（空串 = 清空备注，不是「不改」）", async () => {
+  const s = setup({ windows: [{ profile_id: 11, name: "a@x.com" }] });
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+
+  await s.call(CH.accountsBatchEdit, ["a@x.com"], { note: "" });
+
+  const writes = s.ix.calls.filter(([k]) => k === "updateProfile");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0][2], { note: "" }, "只发 note 一个字段");
+});
+
+test("批量编辑：空标签数组 = 清空标签（仍然要写一次窗口）", async () => {
+  const s = setup({ windows: [{ profile_id: 11, name: "a@x.com" }] });
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+
+  await s.call(CH.accountsBatchEdit, ["a@x.com"], { tagIds: [] });
+
+  const writes = s.ix.calls.filter(([k]) => k === "updateProfile");
+  assert.deepEqual(writes.map(([, id, f]) => [id, f.tag]), [[11, []]]);
+});
+
+test("批量编辑：词表里没有的标签 id 直接拒绝，一个窗口都不写", async () => {
+  const s = setup({ windows: [{ profile_id: 11, name: "a@x.com" }] });
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, ["a@x.com"], { tagIds: [123] }), /标签不存在/);
+  assert.equal(s.ix.calls.filter(([k]) => k === "updateProfile").length, 0);
+});
+
+test("批量编辑：库里没有的账号记失败，其它账号照写（单条失败不影响整批）", async () => {
+  const s = setup({ windows: [{ profile_id: 11, name: "a@x.com" }] });
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+
+  const r = await s.call(CH.accountsBatchEdit, ["ghost@x.com", "a@x.com"], { note: "x" });
+
+  assert.equal(r.updated, 1);
+  assert.deepEqual(r.failed, [{ email: "ghost@x.com", error: "账号不存在" }]);
+});
+
+test("批量编辑：窗口写入返回 false 时记为失败（不静默当成写了）", async () => {
+  const s = setup({ windows: [{ profile_id: 11, name: "a@x.com" }] });
+  seed(s.ctx, [{ email: "a@x.com", browser_profile_id: "11" }]);
+  s.ix.updateProfile = async () => false;
+
+  const r = await s.call(CH.accountsBatchEdit, ["a@x.com"], { note: "x" });
+
+  assert.deepEqual(r, { updated: 0, skipped: 0, failed: [{ email: "a@x.com", error: "写入窗口失败" }] });
+});
+
+test("参数校验：批量编辑只认 tagIds / note，且至少要给一个、账号数组不能为空", async () => {
+  const s = setup();
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, ["a@x.com"], {}), /没有要修改的内容/);
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, ["a@x.com"], { name: "x" }), /不支持的字段/);
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, ["a@x.com"], { note: 5 }), /备注必须是字符串/);
+  await assert.rejects(
+    () => s.call(CH.accountsBatchEdit, ["a@x.com"], { note: "x".repeat(2001) }),
+    /备注最多/,
+  );
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, "a@x.com", { note: "x" }), /必须是数组/);
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, [], { note: "x" }), /不能为空/);
+  await assert.rejects(() => s.call(CH.accountsBatchEdit, ["a@x.com"], null), /必须是对象/);
+});

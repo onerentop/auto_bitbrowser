@@ -558,13 +558,14 @@ test("重跑：账号快照（action=login）会真的重新启动一个 login �
     },
   };
   const { ctx, nextFinished } = makeContext({ ixClient: ix });
-  ctx.accountRepo().upsertAccount({ email: "rerun@x.com", browser_profile_id: "5", password: "p" });
+  // 全假夹具：邮箱与窗口 ID 都用明显不存在的值，别写成真实账号的样子（曾借用真实窗口 id 配假邮箱，被误读成系统记错账号）
+  ctx.accountRepo().upsertAccount({ email: "fixture-rerun@example.com", browser_profile_id: "9001", password: "p" });
 
   const id = ctx.taskHistoryRepo().record(
     recordOf({
       taskType: "login",
       outcome: "failed",
-      params: { action: "login", rows: [{ email: "rerun@x.com", browserId: "5" }], options: { concurrency: 1 } },
+      params: { action: "login", rows: [{ email: "fixture-rerun@example.com", browserId: "9001" }], options: { concurrency: 1 } },
     }),
   );
 

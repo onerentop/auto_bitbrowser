@@ -15,6 +15,8 @@ import {
   ACCOUNTS_ACTIONS,
   ACCOUNTS_INVOKE,
   type AccountsAction,
+  type AccountsBatchEditPatch,
+  type AccountsBatchEditResult,
   type AccountsBindCandidates,
   type AccountsBindResult,
   type AccountsDefaults,
@@ -26,6 +28,7 @@ import {
   type TagRef,
   MANUAL_FAILED_REASON,
   MANUAL_LOGIN_STATUSES,
+  MAX_BATCH_EDIT,
   MAX_SET_LOGIN_STATUS,
   type ManualLoginStatus,
 } from "../../shared/channels/accounts.ts";
@@ -182,6 +185,27 @@ function requireTagTitle(value: unknown): string {
   if (t === "") throw invalid("标签名不能为空");
   if (t.length > MAX_TAG_TITLE_LENGTH) throw invalid(`标签名最多 ${MAX_TAG_TITLE_LENGTH} 个字符`);
   return t;
+}
+
+/**
+ * 解析批量编辑要改的字段：只认登记过的键，且至少要给一个
+ * （否则「什么都不改」会被当成成功返回，用户以为改了）。
+ */
+export function parseBatchEditPatch(value: unknown): AccountsBatchEditPatch {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw invalid("修改内容必须是对象");
+  const raw = value as Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (key !== "tagIds" && key !== "note") throw invalid(`不支持的字段: ${key}`);
+  }
+  const out: AccountsBatchEditPatch = {};
+  if (raw["tagIds"] !== undefined) out.tagIds = requireTagIds(raw["tagIds"]);
+  if (raw["note"] !== undefined) {
+    if (typeof raw["note"] !== "string") throw invalid("备注必须是字符串");
+    if (raw["note"].length > MAX_NOTE_LENGTH) throw invalid(`备注最多 ${MAX_NOTE_LENGTH} 个字符`);
+    out.note = raw["note"];
+  }
+  if (out.tagIds === undefined && out.note === undefined) throw invalid("没有要修改的内容");
+  return out;
 }
 
 function requireOptions(value: unknown): AccountsRunOptions {
@@ -467,6 +491,51 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       const id = account.browser_profile_id ? String(account.browser_profile_id) : "";
       if (!/^\d+$/.test(id)) throw invalid(`账号 ${e} 未绑定窗口，无法编辑窗口备注`);
       return ctx.ix().updateProfile(Number(id), { note });
+    },
+    /**
+     * 批量编辑窗口字段：标签（按词表转成标签名数组）/ 备注。
+     *
+     * 逐条写 ixBrowser（没有批量接口）：单条失败不影响其它账号，未绑定窗口的账号跳过并计数，
+     * 结果一次性返回给界面。两个字段都是**窗口**上的字段，所以都必须有绑定窗口。
+     *
+     * 备注是用户自己的数据：只有用户在界面上显式发起这次调用才会写（自动化任务一律不碰备注）。
+     */
+    [ACCOUNTS_INVOKE.accountsBatchEdit]: async (emails: unknown, patch: unknown): Promise<AccountsBatchEditResult> => {
+      const list = requireEmails(emails, MAX_BATCH_EDIT);
+      if (list.length === 0) throw invalid("emails 不能为空");
+      const p = parseBatchEditPatch(patch);
+
+      // 字段一次算好（词表只取一次），逐条复用
+      const fields: { tag?: string[]; note?: string } = {};
+      if (p.tagIds !== undefined) {
+        const vocabulary = await listTags();
+        const unknown = unknownTagIds(p.tagIds, vocabulary);
+        if (unknown.length > 0) throw invalid(`标签不存在（可能已被删除）: ${unknown.join(", ")}`);
+        fields.tag = tagTitles(p.tagIds, vocabulary);
+      }
+      if (p.note !== undefined) fields.note = p.note;
+
+      const out: AccountsBatchEditResult = { updated: 0, skipped: 0, failed: [] };
+      for (const email of list) {
+        const account = repo().getAccountByEmail(email);
+        if (!account) {
+          out.failed.push({ email, error: "账号不存在" });
+          continue;
+        }
+        const profileId = account.browser_profile_id ? String(account.browser_profile_id) : "";
+        if (!/^\d+$/.test(profileId)) {
+          out.skipped += 1;
+          continue;
+        }
+        try {
+          const ok = await ctx.ix().updateProfile(Number(profileId), fields);
+          if (ok) out.updated += 1;
+          else out.failed.push({ email, error: "写入窗口失败" });
+        } catch (error) {
+          out.failed.push({ email, error: errorText(error) });
+        }
+      }
+      return out;
     },
     /**
      * 设置窗口标签：**只写 tag 一个字段**，值是**标签名数组**（官方文档：profile-update 的 tag，

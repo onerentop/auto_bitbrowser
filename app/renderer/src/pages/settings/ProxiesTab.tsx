@@ -2,8 +2,9 @@
  * 「代理」标签（列表 / 增删改 / 批量导入 / 绑定详情）
  */
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { Alert, App, Button, Empty, Form, Input, List, Modal, Select, Space, Table, Typography } from "antd";
+import { Alert, App, Button, Empty, Form, Input, List, Modal, Select, Space, Table, Tooltip, Typography } from "antd";
 import {
+  ApiOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -31,6 +32,8 @@ import { Panel } from "../../components/Section.tsx";
 import { useTokens, type Palette } from "../../theme/tokens.ts";
 import { rowSelect } from "../../components/row-select.ts";
 import { usePagination } from "../../components/use-pagination.ts";
+import { StatusDot } from "../../components/StatusDot.tsx";
+import { proxyCheckTone, railClass } from "../../lib/list-tone.ts";
 
 const EMPTY_PROXY: ProxyInputDto = { proxy_type: "socks5", host: "", port: "", username: "", password: "" };
 
@@ -39,6 +42,15 @@ function usageColor(t: Palette, p: ProxyListItemDto): string {
   if (p.is_full) return t.bad;
   if (p.used_count > 0) return t.warn;
   return t.ok;
+}
+
+/** 「连通性」列的悬停说明：上次检测时间 / 出站 IP / 失败原因（都没有时不显示 tooltip） */
+function checkReason(p: ProxyListItemDto): string | null {
+  const parts: string[] = [];
+  if (p.last_check_at) parts.push(`上次检测：${p.last_check_at}`);
+  if (p.outbound_ip) parts.push(`出站 IP：${p.outbound_ip}`);
+  if (p.last_check_error) parts.push(`原因：${p.last_check_error}`);
+  return parts.length > 0 ? parts.join("\n") : null;
 }
 
 /** 新增 / 编辑代理弹窗 */
@@ -197,6 +209,8 @@ export function ProxiesTab(): ReactElement {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
+  /** 「测试选中」进行中 */
+  const [checking, setChecking] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<ProxyListItemDto | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -222,6 +236,38 @@ export function ProxiesTab(): ReactElement {
     }
   }, []);
 
+
+  /** 检测选中的代理：逐条经代理出网回读出站 IP，结果由后端写回数据库 */
+  const checkSelected = async (): Promise<void> => {
+    const rows = items.filter((p) => selected.includes(p.index));
+    if (rows.length === 0) {
+      message.info("请先选择要检测的代理");
+      return;
+    }
+    setChecking(true);
+    try {
+      const results = await invoke(
+        IPC.invoke.settingsProxiesCheck,
+        rows.map((p) => ({ index: p.index, key: p.key })),
+      );
+      const ok = results.filter((r) => r.ok).length;
+      const bad = results.length - ok;
+      const head = `已检测 ${results.length} 个代理：可达 ${ok} 个${bad > 0 ? `，不可达 ${bad} 个` : ""}`;
+      if (bad > 0) {
+        const lines = [head, ...results.filter((r) => !r.ok).slice(0, 5).map((r) => `${r.key}：${r.error ?? "不可达"}`)];
+        if (bad > 5) lines.push(`…还有 ${bad - 5} 个不可达`);
+        modal.warning({ title: "代理检测结果", content: <div style={{ whiteSpace: "pre-line" }}>{lines.join("\n")}</div> });
+      } else {
+        void message.success(head);
+      }
+      // 检测结果已写回库：重新拉一次，状态灯与悬停说明跟着更新
+      await load();
+    } catch (e) {
+      void message.error(`检测失败：${describeError(e)}`);
+    } finally {
+      setChecking(false);
+    }
+  };
   useEffect(() => {
     if (hostReady && !loaded) void load();
   }, [hostReady, loaded, load]);
@@ -310,6 +356,18 @@ export function ProxiesTab(): ReactElement {
       ),
     },
     {
+      title: "连通性",
+      key: "check",
+      width: 110,
+      render: (_, p) => (
+        <StatusDot
+          tone={proxyCheckTone(p.last_check_ok)}
+          text={p.last_check_ok === null ? "未检测" : p.last_check_ok ? "可达" : "不可达"}
+          reason={checkReason(p)}
+        />
+      ),
+    },
+    {
       title: "操作",
       key: "actions",
       width: 110,
@@ -347,6 +405,16 @@ export function ProxiesTab(): ReactElement {
           <Button icon={<DownloadOutlined />} onClick={() => setImportOpen(true)}>
             批量导入
           </Button>
+          <Tooltip title="经每个选中的代理出网并回读出站 IP（结果写回数据库，状态灯随之更新）">
+            <Button
+              icon={<ApiOutlined />}
+              loading={checking}
+              disabled={selected.length === 0}
+              onClick={() => void checkSelected()}
+            >
+              测试选中{selected.length > 0 ? `（${selected.length}）` : ""}
+            </Button>
+          </Tooltip>
           <Button icon={<DeleteOutlined />} onClick={deleteSelected}>
             删除选中
           </Button>
@@ -371,6 +439,7 @@ export function ProxiesTab(): ReactElement {
         onRow={proxyRow}
         pagination={pager.pagination}
         locale={{ emptyText: <Empty description="暂无代理" /> }}
+        rowClassName={(p) => railClass(proxyCheckTone(p.last_check_ok))}
         // 横向放不下时表格内部滚动，操作列固定在右侧
         scroll={{ x: "max-content" }}
         style={{ marginTop: 12 }}

@@ -17,6 +17,7 @@ import type { HostContext } from "../context.ts";
 import type { HostHandlerTable } from "../dispatch.ts";
 import { createAccountsHandlers } from "./accounts.ts";
 import { createAiTasksHandlers } from "./ai-tasks.ts";
+import { RERUNNABLE_ACCOUNT_ACTIONS, parseRunSnapshot } from "../../shared/logic/task-history.ts";
 
 /** 列表/导出的条数上限（防止一次拉爆界面） */
 const MAX_LIMIT = 1000;
@@ -24,8 +25,6 @@ const MAX_LIMIT = 1000;
 /** 筛选文本的长度上限（类型 / 结果 / 账号 / 时间） */
 const MAX_FILTER_LENGTH = 200;
 
-/** 账号类批量任务里可重跑的动作（与 accounts handler start 的动作名一致） */
-const RERUNNABLE_ACCOUNT_ACTIONS = new Set(["login", "health_check", "batch_delete"]);
 
 function invalid(message: string): CodedError {
   return new CodedError(ERROR_CODES.INVALID_ARGUMENT, message);
@@ -76,18 +75,6 @@ export function parseRunQuery(value: unknown): TaskRunQuery {
   return query;
 }
 
-/** 参数快照 → 对象；缺失或非法返回 null（此时不允许重跑） */
-function parseSnapshot(row: TaskRunRow): Record<string, unknown> | null {
-  if (!row.params) return null;
-  try {
-    const value: unknown = JSON.parse(row.params);
-    return value !== null && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
 
 export function createTaskHistoryHandlers(ctx: HostContext): HostHandlerTable {
   const repo = () => ctx.taskHistoryRepo();
@@ -105,8 +92,8 @@ export function createTaskHistoryHandlers(ctx: HostContext): HostHandlerTable {
     const id = requireRunId(runId);
     const row = repo().getRun(id);
     if (!row) throw invalid(`任务记录不存在: ${id}`);
-    const snapshot = parseSnapshot(row);
-    if (!snapshot) throw invalid("该记录没有参数快照（旧记录），无法重跑");
+    const snapshot = parseRunSnapshot(row.params);
+    if (!snapshot) throw invalid("该记录没有参数快照（旧记录或无需参数的任务），无法重跑");
 
     const type = String(row.task_type);
 

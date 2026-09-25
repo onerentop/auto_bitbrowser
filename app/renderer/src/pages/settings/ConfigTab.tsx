@@ -4,7 +4,7 @@
  * 布局：顶部固定操作条（刷新 / 恢复默认 / 保存配置）+ 左对齐分节表单；字段、范围、默认值与文案沿用原有定义。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { Alert, App, AutoComplete, Button, Form, Input, InputNumber, Select, Space, Tabs, Typography } from "antd";
+import { Alert, App, AutoComplete, Button, Form, Input, InputNumber, Select, Space, Switch, Tabs, Typography } from "antd";
 import { CreateParams } from "./CreateParams.tsx";
 import { CopyOutlined, ReloadOutlined, SaveOutlined, SendOutlined, SyncOutlined } from "@ant-design/icons";
 import {
@@ -19,8 +19,26 @@ import { useHostStatus } from "../../stores/host-status.ts";
 import { normalizeThemeMode, setThemeMode } from "../../stores/theme.ts";
 import { Panel, Section } from "../../components/Section.tsx";
 import { useTokens } from "../../theme/tokens.ts";
+import { NOTIFY_FINISH_KEY, parseNotifyEnabled } from "../../lib/ui-prefs.ts";
 
 const APP_PASSWORDS_URL = "https://myaccount.google.com/apppasswords";
+
+/** 任务结束通知开关：读 / 写都放在这里（ui-prefs 只提供纯解析函数） */
+function readNotifyEnabled(): boolean {
+  try {
+    return parseNotifyEnabled(localStorage.getItem(NOTIFY_FINISH_KEY));
+  } catch {
+    return true; // 拿不到 localStorage（禁用 / 异常）时按默认（开）
+  }
+}
+
+function writeNotifyEnabled(on: boolean): void {
+  try {
+    localStorage.setItem(NOTIFY_FINISH_KEY, on ? "1" : "0");
+  } catch {
+    // 写不进去只是下次不记住，界面照常可用
+  }
+}
 
 /** 模型下拉选项 */
 const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
@@ -98,6 +116,12 @@ export function ConfigTab(): ReactElement {
   const [copied, setCopied] = useState(false);
   const [dataDirInput, setDataDirInput] = useState("");
   const [applyingDir, setApplyingDir] = useState(false);
+  /** 任务结束通知开关（纯界面偏好：localStorage，与后端配置无关） */
+  const [notifyOn, setNotifyOn] = useState(readNotifyEnabled);
+  const onNotifyChange = useCallback((v: boolean): void => {
+    setNotifyOn(v);
+    writeNotifyEnabled(v);
+  }, []);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostReady = useHostStatus()?.state === "ready";
   const t = useTokens();
@@ -425,6 +449,16 @@ export function ConfigTab(): ReactElement {
 
           <Section title="其他设置">
             <NumberField name="default_thread_count" label="默认并发数" />
+          </Section>
+
+          {/* 通知是纯界面偏好（localStorage），与后端配置无关，因此不在上面的表单里 */}
+          <Section title="通知" description="任务结束时弹一条系统通知（关掉窗口也能知道跑完没有）；关闭后完全不发">
+            <Form.Item label=" " colon={false}>
+              <Space size={8}>
+                <Switch checked={notifyOn} onChange={onNotifyChange} />
+                <Typography.Text type="secondary">{notifyOn ? "已开启" : "已关闭"}</Typography.Text>
+              </Space>
+            </Form.Item>
           </Section>
 
           <Section title="外观">

@@ -60,6 +60,8 @@ export const ACCOUNTS_INVOKE = {
   accountsExportText: "abb/accounts/exportText",
   /** 手动设置登录状态（批量；写库后广播 abb/accounts/event/loginStatusChanged） */
   accountsSetLoginStatus: "abb/accounts/setLoginStatus",
+  /** 批量编辑：给勾选账号的窗口写标签 / 备注（逐条写 ixBrowser） */
+  accountsBatchEdit: "abb/accounts/batchEdit",
 } as const;
 
 // ==================== 数据类型 ====================
@@ -326,4 +328,27 @@ export interface AccountsInvokeMap {
   "abb/accounts/updateTag": { args: [id: number, title: string]; result: boolean };
   "abb/accounts/deleteTag": { args: [id: number]; result: boolean };
   "abb/accounts/setLoginStatus": { args: [emails: string[], status: ManualLoginStatus]; result: number };
+  "abb/accounts/batchEdit": { args: [emails: string[], patch: AccountsBatchEditPatch]; result: AccountsBatchEditResult };
 }
+
+/**
+ * 批量编辑能改的字段：**都写在窗口上**（标签 / 备注），因此未绑定窗口的账号会被跳过。
+ * `undefined` = 这个字段不动；`tagIds: []` = 清空标签；`note: ""` = 清空备注。
+ */
+export interface AccountsBatchEditPatch {
+  tagIds?: number[];
+  note?: string;
+}
+
+/** 批量编辑结果：逐条写窗口，单条失败不影响其它账号 */
+export interface AccountsBatchEditResult {
+  /** 成功写入窗口的账号数 */
+  updated: number;
+  /** 未绑定窗口 / 窗口不存在，跳过的账号数 */
+  skipped: number;
+  /** 写入失败的账号与原因 */
+  failed: { email: string; error: string }[];
+}
+
+/** 一次批量编辑的账号上限 */
+export const MAX_BATCH_EDIT = 500;
