@@ -1,5 +1,6 @@
 /**
- * 侧栏底部的状态灯：后端进程 + ixBrowser 本地服务（圆点 + 文字），点击进入运行状态页
+ * 侧栏底部的状态灯：后端进程 + ixBrowser 本地服务（圆点 + 文字），点击进入运行状态页；
+ * 侧栏收起时只显示圆点
  */
 import type { ReactElement } from "react";
 import { Tooltip, Typography } from "antd";
@@ -20,7 +21,8 @@ function toneColor(t: Palette, tone: Tone): string {
   return tone === "ok" ? t.ok : tone === "warn" ? t.warn : tone === "bad" ? t.bad : t.idle;
 }
 
-export function StatusLights({ onOpen }: { onOpen: () => void }): ReactElement {
+/** compact：侧栏收起时只显示两个圆点（名称与状态放进悬停提示） */
+export function StatusLights({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }): ReactElement {
   const t = useTokens();
   const host = useHostStatus();
   const ix = useIxStatus();
@@ -51,6 +53,10 @@ export function StatusLights({ onOpen }: { onOpen: () => void }): ReactElement {
   // 读屏 / 键盘用户拿不到悬停提示，把状态与原因一起放进按钮的可访问名称
   const spoken = [hostLight, ixLight].map((l) => `${l.label}${l.text}：${l.tip.replace(/\n/g, "，")}`).join("；");
 
+  const dot = (l: Light): ReactElement => (
+    <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", background: toneColor(t, l.tone), flex: "none" }} />
+  );
+
   return (
     <button
       type="button"
@@ -59,9 +65,10 @@ export function StatusLights({ onOpen }: { onOpen: () => void }): ReactElement {
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 6,
+        alignItems: compact ? "center" : "stretch",
+        gap: compact ? 10 : 6,
         width: "100%",
-        padding: "12px 20px",
+        padding: compact ? "14px 0" : "12px 20px",
         border: "none",
         borderTop: `1px solid ${t.line}`,
         background: "transparent",
@@ -71,19 +78,25 @@ export function StatusLights({ onOpen }: { onOpen: () => void }): ReactElement {
       }}
     >
       {[hostLight, ixLight].map((l) => (
-        <Tooltip key={l.label} title={<span style={{ whiteSpace: "pre-line" }}>{l.tip}</span>} placement="right">
-          <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-            <span
-              aria-hidden
-              style={{ width: 7, height: 7, borderRadius: "50%", background: toneColor(t, l.tone), flex: "none" }}
-            />
-            <Typography.Text type="secondary" style={{ fontSize: 12, flex: 1 }}>
-              {l.label}
-            </Typography.Text>
-            <Typography.Text style={{ fontSize: 12, color: l.tone === "idle" ? t.muted : toneColor(t, l.tone) }}>
-              {l.text}
-            </Typography.Text>
-          </span>
+        <Tooltip
+          key={l.label}
+          // 收起时圆点旁没有文字，提示里补上「名称 状态」
+          title={<span style={{ whiteSpace: "pre-line" }}>{compact ? `${l.label} ${l.text}\n${l.tip}` : l.tip}</span>}
+          placement="right"
+        >
+          {compact ? (
+            <span style={{ display: "flex", padding: 2 }}>{dot(l)}</span>
+          ) : (
+            <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+              {dot(l)}
+              <Typography.Text type="secondary" style={{ fontSize: 12, flex: 1 }}>
+                {l.label}
+              </Typography.Text>
+              <Typography.Text style={{ fontSize: 12, color: l.tone === "idle" ? t.muted : toneColor(t, l.tone) }}>
+                {l.text}
+              </Typography.Text>
+            </span>
+          )}
         </Tooltip>
       ))}
     </button>

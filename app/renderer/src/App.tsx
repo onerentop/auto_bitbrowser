@@ -1,12 +1,12 @@
 /**
- * 应用外壳：左侧分组导航 + 状态灯 + 内容区 + 底部任务坞
+ * 应用外壳：左侧分组导航（可收起为图标窄栏）+ 状态灯 + 内容区 + 底部任务坞
  *
  * 侧栏按 工作台 / Google 操作 / 工具 / 系统 分组；底部状态灯显示后端与 ixBrowser，点击进入运行状态页。
  * 不引路由库：页面只有几个，用 state 切换即可；切走的页面保持挂载（display:none），
  * 避免表格筛选、滚动位置等状态在切换时丢失。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Layout, Menu, Typography, type MenuProps } from "antd";
+import { Button, Layout, Menu, Tooltip, Typography, type MenuProps } from "antd";
 import {
   DashboardOutlined,
   DisconnectOutlined,
@@ -19,6 +19,8 @@ import {
   SafetyOutlined,
   SettingOutlined,
   TeamOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { TaskDock } from "./components/TaskDock.tsx";
 import { StatusPage } from "./pages/StatusPage.tsx";
@@ -32,6 +34,7 @@ import { useHostStatus } from "./stores/host-status.ts";
 import { setIxPolling } from "./stores/ix-status.ts";
 import { useTokens } from "./theme/tokens.ts";
 import { initThemeFromConfig } from "./pages/settings/theme-init.ts";
+import { SIDER_COLLAPSED_KEY, parseCollapsed } from "./lib/ui-prefs.ts";
 import type { AiTaskKind } from "../../shared/channels/ai-tasks.ts";
 
 const { Sider, Content } = Layout;
@@ -93,6 +96,31 @@ const MENU_ITEMS: MenuProps["items"] = PAGE_GROUPS.map((g) => ({
   children: PAGES.filter((p) => p.group === g).map((p) => ({ key: p.key, label: p.label, icon: p.icon })),
 }));
 
+/** 侧栏收起时的菜单：只剩图标，分组标题换成分隔线（菜单名由 antd 在悬停时提示） */
+const MENU_ITEMS_COLLAPSED: MenuProps["items"] = PAGE_GROUPS.flatMap((g, i) => [
+  ...(i > 0 ? [{ type: "divider" as const, key: `divider:${g}` }] : []),
+  ...PAGES.filter((p) => p.group === g).map((p) => ({ key: p.key, label: p.label, icon: p.icon })),
+]);
+
+/** 侧栏收起后的宽度 */
+const SIDER_COLLAPSED_WIDTH = 64;
+
+function readCollapsed(): boolean {
+  try {
+    return parseCollapsed(localStorage.getItem(SIDER_COLLAPSED_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function writeCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(SIDER_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // 写不进去只是下次不记住，界面照常可用
+  }
+}
+
 export function App(): ReactElement {
   const [page, setPage] = useState<PageKey>("home");
   const [visited, setVisited] = useState<Set<PageKey>>(() => new Set(["home"]));
@@ -119,28 +147,63 @@ export function App(): ReactElement {
     setVisited((v) => (v.has(key) ? v : new Set(v).add(key)));
   };
 
+  // 侧栏收起：记在 localStorage（纯界面偏好）
+  const [collapsed, setCollapsed] = useState<boolean>(readCollapsed);
+  const toggleCollapsed = (): void => {
+    const next = !collapsed;
+    setCollapsed(next);
+    writeCollapsed(next);
+  };
+
   return (
     <Layout style={{ height: "100vh" }}>
-      <Sider width={208} style={{ borderRight: `1px solid ${t.line}` }}>
+      <Sider
+        width={208}
+        collapsible
+        collapsed={collapsed}
+        collapsedWidth={SIDER_COLLAPSED_WIDTH}
+        trigger={null}
+        style={{ borderRight: `1px solid ${t.line}` }}
+      >
         <nav aria-label="主导航" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-          <div style={{ padding: "18px 20px 10px" }}>
-            <Typography.Text strong style={{ fontSize: 14, display: "block" }}>
-              ixBrowser 管理工具
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Google 账号批量管理
-            </Typography.Text>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: collapsed ? "center" : "space-between",
+              gap: 4,
+              padding: collapsed ? "16px 0 8px" : "18px 8px 10px 20px",
+            }}
+          >
+            {!collapsed && (
+              <div style={{ minWidth: 0 }}>
+                <Typography.Text strong style={{ fontSize: 14, display: "block" }}>
+                  ixBrowser 管理工具
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Google 账号批量管理
+                </Typography.Text>
+              </div>
+            )}
+            <Tooltip title={collapsed ? "展开侧栏" : "收起侧栏"} placement="right">
+              <Button
+                type="text"
+                aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={toggleCollapsed}
+              />
+            </Tooltip>
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
             <Menu
               mode="inline"
               selectedKeys={[page]}
-              items={MENU_ITEMS}
+              items={collapsed ? MENU_ITEMS_COLLAPSED : MENU_ITEMS}
               onClick={(e) => go(e.key as PageKey)}
               style={{ borderInlineEnd: "none" }}
             />
           </div>
-          <StatusLights onOpen={() => go("status")} />
+          <StatusLights onOpen={() => go("status")} compact={collapsed} />
         </nav>
       </Sider>
       {/* minWidth: 0：flex 子项默认 min-width:auto，会被宽表格撑破窗口；宽表格应在表格内部横向滚动 */}
