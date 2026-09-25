@@ -33,6 +33,8 @@ export const IPC = {
     hostPing: "abb/host/ping",
     /** ixBrowser 本地服务可达性（转给后端进程） */
     ixbrowserPing: "abb/ixbrowser/ping",
+    /** 系统通知（主进程本地）：任务完成 / 失败时由渲染层调用 */
+    appNotify: "abb/app/notify",
     /** 当前运行中的任务（无则 null） */
     taskGetCurrent: "abb/task/getCurrent",
     /** 请求停止当前任务（协作式） */
@@ -97,6 +99,8 @@ export const LOCAL_CHANNELS: ReadonlySet<InvokeChannel> = new Set<InvokeChannel>
   IPC.invoke.appGetVersion,
   IPC.invoke.hostGetStatus,
   IPC.invoke.hostRestart,
+  // 系统通知由主进程直接弹（Electron Notification），不需要后端进程参与
+  IPC.invoke.appNotify,
 ]);
 
 /** 需要转给后端进程处理的通道 */
@@ -235,6 +239,7 @@ export interface InvokeMap
   "abb/ixbrowser/ping": { args: []; result: IxBrowserPingResult };
   "abb/task/getCurrent": { args: []; result: TaskInfo | null };
   "abb/task/stop": { args: []; result: boolean };
+  "abb/app/notify": { args: [payload: AppNotifyPayload]; result: boolean };
 }
 
 /** event 通道的载荷类型 */
@@ -245,6 +250,12 @@ export interface EventMap {
   "abb/task/event/finished": TaskFinishedEvent;
   "abb/task/event/item": TaskItemEvent;
   "abb/accounts/event/loginStatusChanged": LoginStatusChangedEvent;
+}
+
+/** 系统通知的载荷（标题 + 正文；由渲染层组装，主进程只负责弹） */
+export interface AppNotifyPayload {
+  title: string;
+  body: string;
 }
 
 export type InvokeArgs<C extends InvokeChannel> = InvokeMap[C]["args"];

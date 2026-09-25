@@ -10,6 +10,13 @@ export interface ProxyRow {
   port: string | number | null;
   username: string | null;
   password: string | null;
+  /** 最近一次连通性检测时间（本地时间串），从未检测为 null */
+  last_check_at?: string | null;
+  /** 1=可达 / 0=不可达 / null=未检测 */
+  last_check_ok?: number | null;
+  last_check_error?: string | null;
+  /** 经该代理出网的 IP */
+  outbound_ip?: string | null;
   [key: string]: unknown;
 }
 
@@ -22,6 +29,14 @@ export interface ProxyLike {
   password?: string | null;
 }
 
+
+/** Date → 本地时间串（与任务历史同一格式，界面直接读） */
+function localStamp(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(
+    d.getMinutes(),
+  )}:${pad(d.getSeconds())}`;
+}
 export interface ProxyUsageStat {
   proxy_id: number;
   proxy_type: string | null;
@@ -238,6 +253,30 @@ export class ProxyRepository {
     } catch (error) {
       console.error(`[DB ERROR] get_proxy_bindings 失败: ${error}`);
       return [];
+    }
+  }
+  /**
+   * 写下一次连通性检测的结果。
+   * 时间取**本地时间串**（与任务历史一致，界面直接显示无需换算）；
+   * 失败写原因，成功写 null（清掉旧原因）。
+   */
+  updateCheckResult(
+    proxyId: number,
+    result: { ok: boolean; outboundIp: string | null; error: string | null },
+    checkedAt = new Date(),
+  ): boolean {
+    try {
+      this.db
+        .prepare(
+          `UPDATE proxies
+             SET last_check_at = ?, last_check_ok = ?, last_check_error = ?, outbound_ip = ?
+           WHERE id = ?`,
+        )
+        .run(localStamp(checkedAt), result.ok ? 1 : 0, result.ok ? null : result.error, result.outboundIp, proxyId);
+      return true;
+    } catch (error) {
+      console.error(`[DB ERROR] update_check_result 失败: ${error}`);
+      return false;
     }
   }
 }

@@ -104,7 +104,7 @@ test("TaskHistoryRepository：多次运行按倒序返回，limit 生效，条�
     runs.map((r) => r.label),
     ["第二次", "第一次"],
   );
-  assert.equal(repo.listRuns(1).length, 1);
+  assert.equal(repo.listRuns({ limit: 1 }).length, 1);
   const firstRun = at(runs, 1); // 倒序：第一次在数组末尾
   const secondRun = at(runs, 0);
   assert.equal(at(repo.listItems(firstRun.id), 0).item_key, "first@x.com");
@@ -389,4 +389,193 @@ test("handler：list / items / export 走通；非法参数 → INVALID_ARGUMENT
     call(TASK_HISTORY_INVOKE.taskHistoryExport, 0),
     (e) => /** @type {any} */ (e).code === ERROR_CODES.INVALID_ARGUMENT,
   );
+});
+
+// ==================== 参数快照 / 筛选 / 重跑（2026-09-26 新增） ====================
+
+test("TaskRunner：启动时传的参数快照会随运行一起落库（重跑的依据）", async () => {
+  const { ctx, nextFinished } = makeContext();
+  const finished = nextFinished();
+  /** @type {unknown} */
+  const snapshot = { action: "login", rows: [{ email: "a@x.com", browserId: "5" }], options: { concurrency: 1 } };
+
+  ctx.tasks.start("login", "登录（1 个账号）", async () => "done", snapshot);
+  await finished;
+
+  const run = at(ctx.taskHistoryRepo().listRuns(), 0);
+  assert.ok(run.params, "快照必须落库");
+  assert.deepEqual(JSON.parse(String(run.params)), snapshot);
+  assert.equal(ctx.taskHistoryRepo().listItems(run.id).length, 0, "本用例没上报条目");
+});
+
+test("TaskRunner：不传参数时 params 为 null（旧记录/无参数任务 → 界面重跑按钮禁用）", async () => {
+  const { ctx, nextFinished } = makeContext();
+  const finished = nextFinished();
+  ctx.tasks.start("demo_task", "无参数任务", async () => null);
+  await finished;
+  assert.equal(at(ctx.taskHistoryRepo().listRuns(), 0).params, null);
+});
+
+
+test("listRuns：itemEmail 里的 _ 与 % 按字面匹配，不当 LIKE 通配符（审查修正）", () => {
+  const repo = new TaskHistoryRepository(makeDb());
+  const item = (key) => [{ key, status: "成功", message: "" }];
+  repo.record(recordOf({ taskType: "a_task", items: item("john_doe@x.com") }));
+  repo.record(recordOf({ taskType: "b_task", items: item("johnXdoe@x.com") }));
+  repo.record(recordOf({ taskType: "c_task", items: item("50%@x.com") }));
+  repo.record(recordOf({ taskType: "d_task", items: item("plain@x.com") }));
+
+  // _ 是「任意单字符」：不转义时会连带命中 johnXdoe
+  assert.deepEqual(
+    repo.listRuns({ itemEmail: "john_doe@x.com" }).map((r) => r.task_type),
+    ["a_task"],
+    "下划线必须按字面匹配",
+  );
+  // % 是「任意长度」：不转义时会命中全部
+  assert.deepEqual(
+    repo.listRuns({ itemEmail: "50%@x.com" }).map((r) => r.task_type),
+    ["c_task"],
+    "百分号必须按字面匹配",
+  );
+  // 反斜杠本身也要能按字面查（转义字符不能把查询搞乱）
+  assert.deepEqual(repo.listRuns({ itemEmail: "x\\y@x.com" }), []);
+});
+test("TaskHistoryRepository：listRuns 可按类型 / 结果 / 账号 / 时间段筛选（都在 SQL 里做）", () => {
+  const repo = new TaskHistoryRepository(makeDb());
+  repo.record(
+    recordOf({
+      taskType: "ai_kick_devices",
+      outcome: "succeeded",
+      startedAt: Date.parse("2026-09-24T10:00:00"),
+      finishedAt: Date.parse("2026-09-24T10:00:10"),
+      items: [{ key: "a@x.com", status: "成功", message: "" }],
+    }),
+  );
+  repo.record(
+    recordOf({
+      taskType: "login",
+      outcome: "failed",
+      label: "登录（2 个账号）",
+      startedAt: Date.parse("2026-09-25T11:00:00"),
+      finishedAt: Date.parse("2026-09-25T11:00:20"),
+      items: [{ key: "b@x.com", status: "失败", message: "需要先登录账号" }],
+    }),
+  );
+
+  assert.equal(repo.listRuns().length, 2);
+  assert.deepEqual(repo.listRuns({ taskType: "login" }).map((r) => r.task_type), ["login"]);
+  assert.deepEqual(repo.listRuns({ outcome: "succeeded" }).map((r) => r.task_type), ["ai_kick_devices"]);
+  assert.deepEqual(repo.listRuns({ itemEmail: "b@x.com" }).map((r) => r.task_type), ["login"]);
+  assert.deepEqual(repo.listRuns({ itemEmail: "@x.com" }).length, 2, "模糊匹配命中两条");
+  assert.deepEqual(repo.listRuns({ itemEmail: "不存在@x.com" }), []);
+  assert.deepEqual(
+    repo.listRuns({ from: "2026-09-25 00:00:00" }).map((r) => r.task_type),
+    ["login"],
+    "起始时间下限生效",
+  );
+  assert.deepEqual(
+    repo.listRuns({ to: "2026-09-24 23:59:59" }).map((r) => r.task_type),
+    ["ai_kick_devices"],
+    "结束时间上限生效",
+  );
+  assert.equal(repo.listRuns({ taskType: "login", outcome: "succeeded" }).length, 0, "条件之间是 AND");
+  assert.equal(repo.listRuns({ limit: 1 }).length, 1);
+});
+
+test("TaskHistoryRepository：getRun 取单条；不存在的返回 null", () => {
+  const repo = new TaskHistoryRepository(makeDb());
+  const id = repo.record(recordOf({ params: { kind: "replace_phone" } }));
+  assert.equal(at([repo.getRun(id)], 0)?.task_type, "ai_kick_devices");
+  assert.equal(repo.getRun(999), null);
+});
+
+test("handler：list 的筛选参数透传；非法查询条件 → INVALID_ARGUMENT", async () => {
+  const { ctx } = makeContext();
+  ctx.taskHistoryRepo().record(recordOf({ taskType: "login", items: [{ key: "a@x.com", status: "成功", message: "" }] }));
+  ctx.taskHistoryRepo().record(recordOf({ taskType: "ai_kick_devices", items: [{ key: "b@x.com", status: "成功", message: "" }] }));
+  const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+
+  const filtered = await dispatch(TASK_HISTORY_INVOKE.taskHistoryList, [{ taskType: "login" }]);
+  assert.equal(filtered.ok, true);
+  assert.deepEqual(
+    /** @type {any[]} */ (filtered.ok ? filtered.data : []).map((r) => r.task_type),
+    ["login"],
+  );
+
+  const byEmail = await dispatch(TASK_HISTORY_INVOKE.taskHistoryList, [{ itemEmail: "b@x.com" }]);
+  assert.deepEqual(
+    /** @type {any[]} */ (byEmail.ok ? byEmail.data : []).map((r) => r.task_type),
+    ["ai_kick_devices"],
+  );
+
+  for (const bad of [-5, "x", 42, { taskType: 7 }, { taskType: "a".repeat(201) }]) {
+    const env = await dispatch(TASK_HISTORY_INVOKE.taskHistoryList, [bad]);
+    assert.equal(env.ok, false, `应拒绝: ${JSON.stringify(bad)}`);
+    assert.equal(env.ok === false && env.error.code, ERROR_CODES.INVALID_ARGUMENT);
+  }
+});
+
+test("重跑：没有参数快照的旧记录直接拒绝（不猜参数）", async () => {
+  const { ctx } = makeContext();
+  const id = ctx.taskHistoryRepo().record(recordOf({ params: undefined }));
+  const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+
+  const env = await dispatch(TASK_HISTORY_INVOKE.taskHistoryRerun, [id]);
+  assert.equal(env.ok, false);
+  assert.equal(env.ok === false && env.error.code, ERROR_CODES.INVALID_ARGUMENT);
+  assert.match(env.ok === false ? env.error.message : "", /没有参数快照/);
+});
+
+test("重跑：类型不支持（导入 / 建窗等）直接拒绝", async () => {
+  const { ctx } = makeContext();
+  const id = ctx.taskHistoryRepo().record(
+    recordOf({ taskType: "totp_import", params: { items: [] } }),
+  );
+  const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+
+  const env = await dispatch(TASK_HISTORY_INVOKE.taskHistoryRerun, [id]);
+  assert.equal(env.ok, false);
+  assert.match(env.ok === false ? env.error.message : "", /不支持重跑/);
+});
+
+test("重跑：不存在的 runId → INVALID_ARGUMENT", async () => {
+  const { ctx } = makeContext();
+  const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+  for (const bad of [999, 0, "1", null]) {
+    const env = await dispatch(TASK_HISTORY_INVOKE.taskHistoryRerun, [bad]);
+    assert.equal(env.ok, false, `应拒绝: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("重跑：账号快照（action=login）会真的重新启动一个 login 任务并落一条新记录", async () => {
+  // 假 ixBrowser：登录一碰就连不上，任务会失败，但「重跑确实启动了同类型任务」这件事可验证
+  const ix = {
+    async getProfileList() {
+      throw new Error("ixBrowser 不可用（测试替身）");
+    },
+    async openProfile() {
+      throw new Error("ixBrowser 不可用（测试替身）");
+    },
+  };
+  const { ctx, nextFinished } = makeContext({ ixClient: ix });
+  ctx.accountRepo().upsertAccount({ email: "rerun@x.com", browser_profile_id: "5", password: "p" });
+
+  const id = ctx.taskHistoryRepo().record(
+    recordOf({
+      taskType: "login",
+      outcome: "failed",
+      params: { action: "login", rows: [{ email: "rerun@x.com", browserId: "5" }], options: { concurrency: 1 } },
+    }),
+  );
+
+  const dispatch = createDispatcher(createTaskHistoryHandlers(ctx));
+  const finished = nextFinished();
+  const env = await dispatch(TASK_HISTORY_INVOKE.taskHistoryRerun, [id]);
+  assert.equal(env.ok, true, env.ok === false ? env.error.message : "");
+  assert.equal(env.ok === true && /** @type {any} */ (env.data).type, "login", "重跑起的是同类型任务");
+
+  await finished;
+  const runs = ctx.taskHistoryRepo().listRuns({ taskType: "login" });
+  assert.equal(runs.length, 2, "原记录 + 重跑产生的新记录");
+  assert.ok(runs.some((r) => r.id !== id), "应新增一条运行记录");
 });

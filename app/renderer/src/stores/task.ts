@@ -61,6 +61,21 @@ function refreshCurrent(): void {
   );
 }
 
+/**
+ * 任务结束时发系统通知（R5）。
+ * 失败一律静默：通知只是提示，绝不能因为它抛错影响任务收尾或界面。
+ */
+function notifyTaskFinished(e: TaskFinishedEvent): void {
+  try {
+    const title = e.outcome === "succeeded" ? "任务完成" : e.outcome === "stopped" ? "任务已停止" : "任务失败";
+    const seconds = Math.max(0, Math.round((e.finishedAt - e.startedAt) / 1000));
+    const body = e.error ? `${e.label}：${e.error}` : `${e.label}（耗时 ${seconds}s）`;
+    void invoke(IPC.invoke.appNotify, { title, body }).catch(() => {});
+  } catch {
+    /* 通知失败不影响任务 */
+  }
+}
+
 function ensureStarted(): void {
   if (started) return;
   started = true;
@@ -77,6 +92,7 @@ function ensureStarted(): void {
     // 只清除对应的那个任务（旧任务迟到的结束事件不应清掉新任务）
     const running = state.running && state.running.id !== e.taskId ? state.running : null;
     set({ running, lastFinished: e });
+    notifyTaskFinished(e);
     for (const fn of finishedListeners) fn(e);
   });
 

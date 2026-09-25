@@ -155,8 +155,11 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
       };
 
 
-      return ctx.tasks.start(def.taskType, `${def.taskName}（${parsed.items.length} 个账号）`, (api) =>
-        runAiTask(api, parsed, {
+      return ctx.tasks.start(
+        def.taskType,
+        `${def.taskName}（${parsed.items.length} 个账号）`,
+        (api) =>
+          runAiTask(api, parsed, {
           automation,
           getAccount: (email) => ctx.accountRepo().getAccountByEmail(email),
           modifyAuthDeps,
@@ -186,7 +189,9 @@ export function createAiTasksHandlers(ctx: HostContext, options: AiTasksHandlerO
               });
             },
           },
-        }),
+          }),
+        // 启动参数快照（重跑用）：只含账号与用户填的参数，不含任何凭据
+        { kind: parsed.kind, items: parsed.items, params: parsed.params },
       );
     },
   };

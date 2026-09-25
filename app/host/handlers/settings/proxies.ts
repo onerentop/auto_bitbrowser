@@ -5,12 +5,13 @@
  * 后端按同一纯函数重新解析导入文本，不信任渲染层的预览结果。
  */
 import { parseImportText, parseProxyImportLine, type ImportedProxy } from "../../../shared/logic/settings-data.ts";
-import { createProxySettings, type ProxySettings } from "../../../../src/application/proxy-settings.ts";
+import { createProxySettings, type ProxySettings, type ProxySettingsDeps } from "../../../../src/application/proxy-settings.ts";
 import {
   PROXY_TYPES,
   SETTINGS_INVOKE,
   type ImportResultDto,
   type ProxyBindingDto,
+  type ProxyCheckResultDto,
   type ProxyInputDto,
   type ProxyListItemDto,
   type ProxyRefDto,
@@ -48,11 +49,19 @@ export function parseProxyRefArg(value: unknown, name = "ref"): ProxyRefDto {
   };
 }
 
-export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
+/** 单次检测的条数上限（防止误传超大数组） */
+const MAX_CHECK_REFS = 500;
+
+/** 测试注入点（生产环境不传） */
+export interface ProxiesHandlerDeps {
+  /** 替换真实探测（真机会连代理出网） */
+  checkProxy?: ProxySettingsDeps["checkProxy"];
+}
+
+export function createProxiesHandlers(ctx: HostContext, deps: ProxiesHandlerDeps = {}): HostHandlerTable {
   let service: ProxySettings | null = null;
-  /** 首次调用时才建（打开数据库推迟到真正用到时）；各通道都先校验参数再调它 */
   const proxies = (): ProxySettings =>
-    (service ??= createProxySettings({ repo: ctx.proxyRepo(), config: ctx.config() }));
+    (service ??= createProxySettings({ repo: ctx.proxyRepo(), config: ctx.config(), ...deps }));
 
   return {
     [SETTINGS_INVOKE.settingsProxiesList]: (): ProxyListItemDto[] => proxies().list(),
@@ -97,6 +106,17 @@ export function createProxiesHandlers(ctx: HostContext): HostHandlerTable {
       const id = asString(browserId, "browserId").trim();
       if (!id) invalid("browserId 不能为空");
       return proxies().unbind(id);
+    },
+
+    /**
+     * 连通性检测：经每个代理出网并回读出站 IP；结果写库（界面刷新后仍在）。
+     * 单条失败不报错——那是真实结果，逐条返回 ok:false + 原因。
+     */
+    [SETTINGS_INVOKE.settingsProxiesCheck]: async (refs: unknown): Promise<ProxyCheckResultDto[]> => {
+      const list = asArray(refs, "refs");
+      if (list.length === 0) invalid("请先选择要检测的代理");
+      if (list.length > MAX_CHECK_REFS) invalid(`一次最多检测 ${MAX_CHECK_REFS} 个代理`);
+      return proxies().check(list.map((r, i) => parseProxyRefArg(r, `refs[${i}]`)));
     },
   };
 }

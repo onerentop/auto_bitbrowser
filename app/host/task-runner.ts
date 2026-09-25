@@ -60,6 +60,8 @@ interface RunningTask {
   items: TaskRunItemRecord[];
   /** item key → items 下标：同一个 key 重复上报时只保留最终一条（见 api.item） */
   itemIndex: Map<string, number>;
+  /** 启动参数快照（重跑用）；没有传时为 null */
+  params: unknown;
 }
 
 export class TaskRunner {
@@ -88,7 +90,7 @@ export class TaskRunner {
   }
 
   /** 启动任务；已有任务在跑时抛 TASK_BUSY */
-  start(type: string, label: string, fn: TaskFn): TaskInfo {
+  start(type: string, label: string, fn: TaskFn, params?: unknown): TaskInfo {
     if (this.running) {
       const r = this.running.info;
       throw new CodedError(ERROR_CODES.TASK_BUSY, `已有任务正在运行：${r.label}，请等待完成或先停止`);
@@ -102,7 +104,7 @@ export class TaskRunner {
       current: 0,
       total: 0,
     };
-    const task: RunningTask = { info, stopHooks: [], items: [], itemIndex: new Map() };
+    const task: RunningTask = { info, stopHooks: [], items: [], itemIndex: new Map(), params: params ?? null };
     this.running = task;
 
     const api: TaskApi = {
@@ -196,6 +198,7 @@ export class TaskRunner {
         finishedAt: event.finishedAt,
         items: task.items,
         error,
+        params: task.params,
       });
     } catch {
       /* 落库失败只影响历史记录 */

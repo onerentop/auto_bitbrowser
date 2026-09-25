@@ -340,17 +340,20 @@ test("注册器：不允许为已路由到后端的通道登记本地 handler", 
   assert.throws(() => registrar.handle(IPC.invoke.hostPing, () => 1), /已路由到后端进程/);
 });
 
-test("registerAppHandlers：三个本地通道全部接上", async () => {
+test("registerAppHandlers：四个本地通道全部接上（版本 / 后端状态 / 重启 / 系统通知）", async () => {
   const registrar = createIpcRegistrar(fakeIpcMain(), createBackendRouter(fakeHost()));
   /** @type {any} */ const status = { state: "ready", pid: 9, since: 1, seq: 3, detail: null };
   registerAppHandlers(registrar, {
     getVersionInfo: () => /** @type {any} */ ({ appName: "a", appVersion: "1", electron: "e", chrome: "c", node: "n", platform: "win32", arch: "x64" }),
     host: { getStatus: () => status, restart: async () => ({ ...status, state: "starting" }) },
+    notify: () => true,
   });
   assert.equal((await registrar.invoke(IPC.invoke.appGetVersion, [])).ok, true);
   assert.deepEqual(await registrar.invoke(IPC.invoke.hostGetStatus, []), okEnvelope(status));
   const restarted = await registrar.invoke(IPC.invoke.hostRestart, []);
   assert.equal(restarted.ok && /** @type {any} */ (restarted.data).state, "starting");
+  const notified = await registrar.invoke(IPC.invoke.appNotify, [{ title: "t", body: "b" }]);
+  assert.deepEqual(notified, okEnvelope(true));
 });
 
 // ==================== 审查修正：来源校验 / 事件通道 / 导航 ====================

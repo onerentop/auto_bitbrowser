@@ -10,7 +10,7 @@
  * 主进程**不 import 任何业务模块**（src/**）：批量任务、引擎、数据库
  * 全部跑在后端进程里，崩了也不影响窗口。
  */
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, Notification } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { IPC, isEventChannel, type AppVersionInfo, type HostStatus } from "../shared/ipc.ts";
@@ -100,6 +100,17 @@ function bootstrap(): void {
     host: {
       getStatus: () => host.getStatus(),
       restart: () => host.restart(),
+    },
+    // 系统通知：任务完成 / 失败时由渲染层调用；平台不支持或抛出都只记日志（不能影响任务）
+    notify: (payload: { title: string; body: string }): boolean => {
+      try {
+        if (!Notification.isSupported()) return false;
+        new Notification({ title: payload.title || app.getName(), body: payload.body }).show();
+        return true;
+      } catch (error) {
+        log(`通知发送失败: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
     },
   });
   registrar.install();

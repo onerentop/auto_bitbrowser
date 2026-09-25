@@ -28,6 +28,8 @@ export interface TaskRunRecord {
   finishedAt: number;
   items: readonly TaskRunItemRecord[];
   error: string | null;
+  /** 启动参数快照（重跑用）；无则 null */
+  params?: unknown;
 }
 
 export interface TaskRunRow {
@@ -41,7 +43,22 @@ export interface TaskRunRow {
   success_count: number;
   failed_count: number;
   error: string | null;
+  /** 启动参数快照的 JSON 文本；旧记录为 null */
+  params: string | null;
   [key: string]: unknown;
+}
+
+/** 任务历史列表的筛选条件（都可选；limit 默认 TASK_HISTORY_DEFAULT_LIMIT） */
+export interface TaskRunQuery {
+  limit?: number;
+  taskType?: string;
+  outcome?: string;
+  /** 按条目 key（邮箱）模糊匹配：筛出「涉及这个账号」的运行 */
+  itemEmail?: string;
+  /** 起始时间下限（含），本地时间串前缀比较 */
+  from?: string;
+  /** 结束时间上限（含） */
+  to?: string;
 }
 
 export interface TaskRunItemRow {
@@ -82,6 +99,25 @@ function csvCell(value: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
+/** 启动参数 → 存库文本；没有参数或序列化失败时写 null（重跑按钮据此禁用） */
+function toParamsJson(params: unknown): string | null {
+  if (params === undefined || params === null) return null;
+  try {
+    return JSON.stringify(params);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LIKE 模式的字面量转义：`\` / `%` / `_` 都是 LIKE 的元字符，用户输入要按字面匹配。
+ * 配套 SQL 里的 `ESCAPE '\'`；不转义时 `_` 会匹配任意单字符、`%` 匹配任意长度，
+ * 按邮箱搜历史时会多命中一批无关记录。
+ */
+function escapeLike(text: string): string {
+  return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export class TaskHistoryRepository {
   private readonly db: Db;
 
@@ -101,8 +137,8 @@ export class TaskHistoryRepository {
       const info = this.db
         .prepare(
           `INSERT INTO task_run_history
-             (task_type, label, outcome, started_at, finished_at, total, success_count, failed_count, error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (task_type, label, outcome, started_at, finished_at, total, success_count, failed_count, error, params)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           record.taskType,
@@ -114,6 +150,7 @@ export class TaskHistoryRepository {
           successCount,
           failedCount,
           record.error,
+          toParamsJson(record.params),
         );
 
       const runId = Number((info as { lastInsertRowid?: number | bigint }).lastInsertRowid ?? 0);
@@ -131,12 +168,49 @@ export class TaskHistoryRepository {
     }
   }
 
-  /** 最近的任务运行（倒序） */
-  listRuns(limit: number = TASK_HISTORY_DEFAULT_LIMIT): TaskRunRow[] {
-    return this.db
-      .prepare("SELECT * FROM task_run_history ORDER BY id DESC LIMIT ?")
-      .all(limit) as TaskRunRow[];
+  /**
+   * 任务运行列表（倒序），支持按类型 / 结果 / 时间段 / 账号（条目）筛选。
+   * 筛选全部在 SQL 里做（界面只给条件），时间按 started_at 的本地时间串比较。
+   */
+  listRuns(query: TaskRunQuery = {}): TaskRunRow[] {
+    const where: string[] = [];
+    const args: (string | number)[] = [];
+    if (query.taskType) {
+      where.push("h.task_type = ?");
+      args.push(query.taskType);
+    }
+    if (query.outcome) {
+      where.push("h.outcome = ?");
+      args.push(query.outcome);
+    }
+    if (query.from) {
+      where.push("h.started_at >= ?");
+      args.push(query.from);
+    }
+    if (query.to) {
+      where.push("h.started_at <= ?");
+      args.push(query.to);
+    }
+    if (query.itemEmail) {
+      where.push(
+        "EXISTS (SELECT 1 FROM task_run_items i WHERE i.run_id = h.id AND i.item_key LIKE ? ESCAPE '\\')",
+      );
+      args.push(`%${escapeLike(query.itemEmail)}%`);
+    }
+    const limit = query.limit ?? TASK_HISTORY_DEFAULT_LIMIT;
+    const sql =
+      `SELECT * FROM task_run_history h` +
+      (where.length ? ` WHERE ${where.join(" AND ")}` : "") +
+      ` ORDER BY h.id DESC LIMIT ?`;
+    return this.db.prepare(sql).all(...args, limit) as TaskRunRow[];
   }
+
+  /** 单次运行（含 params 快照）；不存在返回 null */
+  getRun(runId: number): TaskRunRow | null {
+    const row = this.db.prepare("SELECT * FROM task_run_history WHERE id = ?").get(runId);
+    return (row as TaskRunRow) ?? null;
+  }
+
 
   /** 某次运行的逐条目结果 */
   listItems(runId: number): TaskRunItemRow[] {

@@ -32,6 +32,8 @@ export const SETTINGS_INVOKE = {
   settingsProxiesImport: "abb/settings/proxiesImport",
   settingsProxiesBindings: "abb/settings/proxiesBindings",
   settingsProxiesUnbind: "abb/settings/proxiesUnbind",
+  /** 连通性检测：经代理出网并回读出站 IP */
+  settingsProxiesCheck: "abb/settings/proxiesCheck",
 } as const;
 
 // ==================== 配置 ====================
@@ -158,6 +160,23 @@ export interface ProxyListItemDto extends ProxyInputDto {
   is_full: boolean;
   /** 使用统计里的 proxy_id，没有匹配统计时为 null */
   proxy_id: number | null;
+  /** 最近一次连通性检测（本地时间串）；从未检测为 null */
+  last_check_at: string | null;
+  /** true=可达 / false=不可达 / null=未检测 */
+  last_check_ok: boolean | null;
+  /** 不可达原因 */
+  last_check_error: string | null;
+  /** 经该代理出网的 IP */
+  outbound_ip: string | null;
+}
+
+/** 一次连通性检测的结果（按 host:port 与列表行对应） */
+export interface ProxyCheckResultDto {
+  index: number;
+  key: string;
+  ok: boolean;
+  outbound_ip: string | null;
+  error: string | null;
 }
 
 /** 写操作定位一条代理：下标 + 期望的 host:port */
@@ -196,4 +215,5 @@ export interface SettingsInvokeMap {
   "abb/settings/proxiesImport": { args: [text: string]; result: ImportResultDto };
   "abb/settings/proxiesBindings": { args: [proxyId: number]; result: ProxyBindingDto[] };
   "abb/settings/proxiesUnbind": { args: [browserId: string]; result: boolean };
+  "abb/settings/proxiesCheck": { args: [refs: ProxyRefDto[]]; result: ProxyCheckResultDto[] };
 }

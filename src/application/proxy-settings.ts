@@ -12,21 +12,29 @@
 import type {
   ImportResultDto,
   ProxyBindingDto,
+  ProxyCheckResultDto,
   ProxyInputDto,
   ProxyListItemDto,
   ProxyRefDto,
 } from "../../app/shared/channels/settings.ts";
 import { dedupeProxiesByKey, proxyKey, type ImportedProxy } from "../../app/shared/logic/settings-data.ts";
 import type { ConfigManager } from "../core/config-manager.ts";
-import type { ProxyRepository } from "../db/proxy-repository.ts";
+import { Semaphore } from "../core/semaphore.ts";
+import type { ProxyRepository, ProxyRow } from "../db/proxy-repository.ts";
 import { DataStore, makeProxyInfo, type ProxyInfo } from "../services/data-store.ts";
 import { DEFAULT_MAX_WINDOWS_PER_IP, ProxyAllocator } from "../services/proxy-allocator.ts";
 import { InvalidInputError } from "./errors.ts";
+import { checkProxy, type ProxyCheckInput, type ProxyCheckOutcome } from "./proxy-check.ts";
+
+/** 连通性检测的并发上限（探测是外网请求，别一次打太多） */
+export const PROXY_CHECK_CONCURRENCY = 4;
 
 export interface ProxySettingsDeps {
   repo: ProxyRepository;
   /** 每次构造分配器时现读「每个 IP 可绑定的窗口数」 */
   config: Pick<ConfigManager, "get">;
+  /** 测试注入：替换真实探测 */
+  checkProxy?: (input: ProxyCheckInput, options?: unknown) => Promise<ProxyCheckOutcome>;
 }
 
 export function createProxySettings(deps: ProxySettingsDeps) {
@@ -63,9 +71,16 @@ export function createProxySettings(deps: ProxySettingsDeps) {
       for (const stat of alloc.getAllUsageStats()) {
         usageMap.set(`${stat.host ?? ""}:${stat.port ?? ""}`, stat);
       }
+      // 检测结果只写库、不进 DataStore（DataStore 是「全量回写」模型，把它当缓存会被回写覆盖），
+      // 所以列表要显示状态灯时按 host:port 现读一次库。
+      const checkMap = new Map<string, ProxyRow>();
+      for (const row of deps.repo.getAllProxies()) {
+        checkMap.set(`${row.host ?? ""}:${row.port ?? ""}`, row);
+      }
       return proxies.map((p, index) => {
         const key = proxyKey(p);
         const stat = usageMap.get(key);
+        const check = checkMap.get(key);
         return {
           index,
           key,
@@ -79,8 +94,60 @@ export function createProxySettings(deps: ProxySettingsDeps) {
           max_count: stat?.max_count ?? 3,
           is_full: stat?.is_full ?? false,
           proxy_id: stat?.proxy_id ?? null,
+          // 检测状态：null 表示从未检测（界面显示灰点）
+          last_check_at: check?.last_check_at ?? null,
+          last_check_ok: check?.last_check_ok === 1 ? true : check?.last_check_ok === 0 ? false : null,
+          last_check_error: check?.last_check_error ?? null,
+          outbound_ip: check?.outbound_ip ?? null,
         };
       });
+    },
+
+    /**
+     * 连通性检测：逐条经代理出网并回读出站 IP，结果写库后返回。
+     * 下标漂移时按 checkRef 拒绝（与其它写操作一致）。
+     * 单条探测失败**不**中断整批：那是真实结果（代理不可达），逐条返回 ok:false + 原因。
+     */
+    async check(refs: readonly ProxyRefDto[]): Promise<ProxyCheckResultDto[]> {
+      const proxies = freshStore().getProxies();
+      for (const r of refs) checkRef(proxies, r);
+
+      const idByKey = new Map<string, number>();
+      for (const row of deps.repo.getAllProxies()) {
+        idByKey.set(`${row.host ?? ""}:${row.port ?? ""}`, row.id);
+      }
+
+      const probe = deps.checkProxy ?? checkProxy;
+      const sem = new Semaphore(PROXY_CHECK_CONCURRENCY);
+      return Promise.all(
+        refs.map((ref) =>
+          sem.run(async (): Promise<ProxyCheckResultDto> => {
+            const p = proxies[ref.index] as ProxyInfo;
+            const outcome = await probe({
+              proxy_type: p.proxy_type,
+              host: p.host,
+              port: p.port,
+              username: p.username,
+              password: p.password,
+            });
+            const id = idByKey.get(ref.key);
+            if (id !== undefined) {
+              deps.repo.updateCheckResult(id, {
+                ok: outcome.ok,
+                outboundIp: outcome.outbound_ip,
+                error: outcome.error,
+              });
+            }
+            return {
+              index: ref.index,
+              key: ref.key,
+              ok: outcome.ok,
+              outbound_ip: outcome.outbound_ip,
+              error: outcome.error,
+            };
+          }),
+        ),
+      );
     },
 
     /** 新增代理 */

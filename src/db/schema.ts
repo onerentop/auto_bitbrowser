@@ -60,9 +60,21 @@ const CREATE_PROXIES = `
                     password TEXT,
                     host TEXT NOT NULL,
                     port TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_check_at TIMESTAMP,
+                    last_check_ok INTEGER,
+                    last_check_error TEXT,
+                    outbound_ip TEXT
                 )
             `;
+
+/** proxies 表的迁移列：老库补列（幂等） */
+const PROXY_MIGRATIONS: readonly string[] = [
+  "ALTER TABLE proxies ADD COLUMN last_check_at TIMESTAMP",
+  "ALTER TABLE proxies ADD COLUMN last_check_ok INTEGER",
+  "ALTER TABLE proxies ADD COLUMN last_check_error TEXT",
+  "ALTER TABLE proxies ADD COLUMN outbound_ip TEXT",
+];
 
 const CREATE_PROXY_WINDOW_BINDINGS = `
                 CREATE TABLE IF NOT EXISTS proxy_window_bindings (
@@ -129,11 +141,11 @@ const CREATE_TASK_RUN_HISTORY = `
                     total INTEGER DEFAULT 0,
                     success_count INTEGER DEFAULT 0,
                     failed_count INTEGER DEFAULT 0,
-                    error TEXT
+                    error TEXT,
+                    params TEXT
                 )
             `;
 
-/** 批量任务运行结果（逐条目） */
 const CREATE_TASK_RUN_ITEMS = `
                 CREATE TABLE IF NOT EXISTS task_run_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,9 +157,25 @@ const CREATE_TASK_RUN_ITEMS = `
                 )
             `;
 
+/** task_run_history 表的迁移列（老库补 params） */
+const TASK_RUN_MIGRATIONS: readonly string[] = [
+  "ALTER TABLE task_run_history ADD COLUMN params TEXT",
+];
+
 /** 列已存在（duplicate column name）时 SQLite 报的错误 */
 function isDuplicateColumn(error: unknown): boolean {
   return error instanceof Error && /duplicate column name/i.test(error.message);
+}
+
+/** 幂等执行一批建列/加列语句：只吞「列已存在」，其它错误照常抛出 */
+function applyMigrations(db: Db, sqls: readonly string[]): void {
+  for (const sql of sqls) {
+    try {
+      db.exec(sql);
+    } catch (error) {
+      if (!isDuplicateColumn(error)) throw error;
+    }
+  }
 }
 
 /**
@@ -158,17 +186,13 @@ function isDuplicateColumn(error: unknown): boolean {
  */
 export function initDb(db: Db): void {
   db.exec(CREATE_ACCOUNTS);
-  for (const sql of ACCOUNT_MIGRATIONS) {
-    try {
-      db.exec(sql);
-    } catch (error) {
-      if (!isDuplicateColumn(error)) throw error;
-    }
-  }
+  applyMigrations(db, ACCOUNT_MIGRATIONS);
   db.exec(CREATE_PROXIES);
+  applyMigrations(db, PROXY_MIGRATIONS);
   db.exec(CREATE_PROXY_WINDOW_BINDINGS);
   db.exec(CREATE_REFRESH_TASKS);
   db.exec(CREATE_REFRESH_TASK_ITEMS);
   db.exec(CREATE_TASK_RUN_HISTORY);
+  applyMigrations(db, TASK_RUN_MIGRATIONS);
   db.exec(CREATE_TASK_RUN_ITEMS);
 }

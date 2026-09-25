@@ -315,7 +315,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
 
   // ---------- 各类任务的执行体 ----------
 
-  const runTask = (spec: TaskSpec, options: AccountsRunOptions): TaskInfo => {
+  const runTask = (spec: TaskSpec, options: AccountsRunOptions, snapshot: unknown): TaskInfo => {
     switch (spec.kind) {
       case "login":
         return ctx.tasks.start("login", spec.label, async (api: TaskApi) => {
@@ -339,7 +339,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           });
           for (const line of workerFinishedLogLines(result)) api.log(line);
           return result;
-        });
+        }, snapshot);
 
       case "delete":
         return ctx.tasks.start("batch_delete", spec.label, async (api) => {
@@ -372,7 +372,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           api.log(`批量删除完成: 删除账号 ${results.deleted_accounts}/${results.total}, 失败 ${results.failed_count}`);
           if (spec.withWindows) api.log(`已删除 ${results.deleted_windows} 个窗口`);
           return results;
-        });
+        }, snapshot);
 
       // ---------- 账号健康巡检（本地新增：只读判定，不产生新登录会话） ----------
       case "health_check": {
@@ -395,7 +395,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
           });
           api.log(healthCheckSummaryLine(summary));
           return summary;
-        });
+        }, snapshot);
       }
     }
   };
@@ -531,7 +531,7 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
       }
       const plan = await planAction(a, r, planEnv(false));
       if (!plan.ok) throw invalid(plan.message);
-      return runTask(plan.task, o);
+      return runTask(plan.task, o, { action: a, rows: r, options: o });
     },
 
     [ACCOUNTS_INVOKE.accountsBindCandidates]: async (email: unknown): Promise<AccountsBindCandidates> => {
