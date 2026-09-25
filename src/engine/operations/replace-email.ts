@@ -219,7 +219,11 @@ export class ReplaceEmailOperation {
 
       const resultText = String(JSON.stringify(extracted.data ?? {})).toLowerCase();
 
-      if (resultText.includes(newEmail.toLowerCase())) return createReplaceEmailResult({ success: true });
+      // 空串要单独挡掉：includes("") 恒为 true，留空（= 移除辅助邮箱）时会把每个账号都判成成功，
+      // 实际有没有删掉根本无从核对。留空时只能靠页面提示（已更新 / 成功）或错误词来判定。
+      if (newEmail !== "" && resultText.includes(newEmail.toLowerCase())) {
+        return createReplaceEmailResult({ success: true });
+      }
 
       const okWords = ["updated", "已更新", "success", "成功"];
       if (okWords.some((k) => resultText.includes(k))) return createReplaceEmailResult({ success: true });

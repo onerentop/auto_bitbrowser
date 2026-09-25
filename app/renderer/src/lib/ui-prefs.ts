@@ -43,3 +43,15 @@ export const ACCOUNT_VIEW_KEY = "abb/accounts/view";
 export function parseAccountView(raw: string | null): AccountView {
   return raw === "windows" ? "windows" : "accounts";
 }
+
+/** localStorage 键：任务结束时是否发系统通知（"0" = 关闭） */
+export const NOTIFY_FINISH_KEY = "abb/notify/finish";
+
+/**
+ * 任务结束通知开关：只有显式写过 "0" 才算关闭。
+ * 默认开（没写过时也开）：这是「关窗后还能知道任务跑完没有」的基础能力；
+ * 纯界面偏好，与任务本身无关，因此不进 config.json。
+ */
+export function parseNotifyEnabled(raw: string | null): boolean {
+  return raw !== "0";
+}

@@ -446,15 +446,20 @@ export function AccountsPage(): ReactElement {
    * 批量操作统一入口：（有隐藏勾选时先确认）→ precheck → 逐个确认 → start。
    * 不传 target 时作用于全部勾选（含被筛选隐藏的）；不传 options 时用当前界面的并发 / 关窗设置
    * （任务抽屉会显式传它自己那份）。
-   * 返回启动的任务；中途停下（取消 / 前置检查不过 / 出错）返回 null，任务抽屉据此保留上一轮结果。
+   * 返回启动的任务与后端将要处理的账号数（precheck 的 total：勾选里已被删掉的账号后端会静默丢掉，
+   * 用它对账才不会让任务抽屉一直显示「未完成」）；中途停下（取消 / 前置检查不过 / 出错）返回 null。
    */
   const runAction = useCallback(
     async (
       action: AccountsAction,
       target?: SelectedRow[],
       options?: AccountsRunOptions,
-    ): Promise<TaskInfo | null> => {
-      if (actionPending.current) return null;
+    ): Promise<{ info: TaskInfo; total: number } | null> => {
+      if (actionPending.current) {
+        // 上一次操作还在确认 / 预检中：说清楚，别让点的人以为按钮坏了
+        notify("warning", "请稍等", "上一个操作还在处理中，请等它走完再开始。");
+        return null;
+      }
       actionPending.current = true;
       const targetRows = target ?? checkedRows.map(toSelected);
       try {
@@ -481,7 +486,7 @@ export function AccountsPage(): ReactElement {
           options ?? { concurrency, closeWindow },
         );
         markTaskStarted(info);
-        return info;
+        return { info, total: pre.total };
       } catch (e) {
         logLocal(`错误: ${describeError(e)}`);
         notify("error", "错误", `任务执行出错:\n${describeError(e)}`);

@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from "react";
 import type { TaskFinishedEvent, TaskInfo, TaskItemEvent } from "../../../shared/ipc.ts";
 import { IPC, invoke, on } from "../lib/ipc.ts";
+import { NOTIFY_FINISH_KEY, parseNotifyEnabled } from "../lib/ui-prefs.ts";
 
 export const LOG_LIMIT = 2000;
 
@@ -63,10 +64,18 @@ function refreshCurrent(): void {
 
 /**
  * 任务结束时发系统通知（R5）。
+ * 开关是纯界面偏好（localStorage，见 lib/ui-prefs.ts）：关掉就完全不发。
  * 失败一律静默：通知只是提示，绝不能因为它抛错影响任务收尾或界面。
  */
 function notifyTaskFinished(e: TaskFinishedEvent): void {
   try {
+    let enabled = true;
+    try {
+      enabled = parseNotifyEnabled(localStorage.getItem(NOTIFY_FINISH_KEY));
+    } catch {
+      // 拿不到 localStorage（禁用 / 异常）时按默认（开）走
+    }
+    if (!enabled) return;
     const title = e.outcome === "succeeded" ? "任务完成" : e.outcome === "stopped" ? "任务已停止" : "任务失败";
     const seconds = Math.max(0, Math.round((e.finishedAt - e.startedAt) / 1000));
     const body = e.error ? `${e.label}：${e.error}` : `${e.label}（耗时 ${seconds}s）`;
@@ -119,6 +128,9 @@ export function useTaskState(): TaskState {
 /** 任务启动后由页面调用：立刻标记为运行中（不必等第一条进度事件） */
 export function markTaskStarted(info: TaskInfo): void {
   ensureStarted();
+  // 同一个任务只记一次：账号动作的启动同时经发起页面与账号页 runAction 两处调用，
+  // 不去重就会在任务坞里出现两条「▶ 开始任务」
+  if (state.running?.id === info.id) return;
   appendLog(`▶ 开始任务：${info.label}`, info.startedAt);
   // 结束事件已先到：任务已经跑完，不能再标记为运行中
   if (finishedIds.has(info.id)) return;

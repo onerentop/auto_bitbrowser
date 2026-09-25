@@ -33,9 +33,9 @@ const SECRET = "JBSWY3DPEHPK3PXP";
  * 假引擎：state 由 navigate / fill 驱动。
  *   reauthShape: "totp"（直接要验证码，真机形态）| "password_then_totp" | null
  *   needsEmailCode: true 时，第二次 extract（提交后的检查）返回「检测到验证码框」
- * @param {{ reauthShape?: string | null, signedOut?: boolean, needsEmailCode?: boolean }} [options]
+ * @param {{ reauthShape?: string | null, signedOut?: boolean, needsEmailCode?: boolean, finalExtract?: object }} [options]
  */
-function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = false } = {}) {
+function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = false, finalExtract = { recovery_email_shown: NEW_EMAIL } } = {}) {
   /** @type {{ navigate: any[], fill: any[], act: any[] }} */
   const calls = { navigate: [], fill: [], act: [] };
   const initialState = signedOut
@@ -109,7 +109,7 @@ function fakeEngine({ reauthShape = null, signedOut = false, needsEmailCode = fa
             data: needsEmailCode ? { extraction: "验证码输入框 - 验证码" } : { nothing_required: true },
           };
         }
-        return { success: true, data: { recovery_email_shown: NEW_EMAIL } };
+        return { success: true, data: finalExtract };
       },
     }),
   };
@@ -184,4 +184,16 @@ test("缺陷 2 回归：出现新邮箱验证码框时不判失败（真机上�
 
   assert.equal(result.success, true, result.message);
   assert.ok(!result.message.includes("需要手动输入验证码"), result.message);
+});
+
+test("缺陷回归：留空（移除辅助邮箱）时不能因为 includes(\"\") 恒真而假报成功", async () => {
+  // 页面文本里既没有新邮箱、也没有「已更新 / 成功 / 错误」这类词：无从核对，必须如实报「无法确定」
+  const { engine } = fakeEngine({ finalExtract: { page: "辅助邮箱\n（未设置）" } });
+  const result = await new ReplaceEmailOperation(engine).execute("", null, {
+    password: PASSWORD,
+    totpSecret: SECRET,
+  });
+
+  assert.equal(result.success, false, `空邮箱时不该报成功（${result.message}）`);
+  assert.equal(result.message, "无法确定替换结果");
 });

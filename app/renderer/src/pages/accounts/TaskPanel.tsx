@@ -8,12 +8,13 @@
  * 分工：
  *   - 账号动作（批量登录 / 健康巡检 / 删除）：账号页负责「隐藏勾选确认 → precheck → 逐个确认 → 启动」
  *     （onRunAccountAction，勾选集合也由账号页取），这里只负责选择、运行时参数与结果展示；
- *     返回值是启动的任务，用户取消时为 null。
- *   - AI 任务（6 种）：这里直接经 abb/aiTasks/start 启动，破坏性的按任务表 danger 二次确认。
+ *     返回启动的任务与后端将要处理的账号数（null = 没启动：取消 / 前置检查没过 / 上一个操作还在跑）。
+ *   - AI 任务（6 种）：这里直接经 abb/aiTasks/start 启动，全部按任务表二次确认（都会改真实账号）。
  * 全局进度、日志与结束汇总仍由底部任务坞（components/TaskDock.tsx）负责，这里只补「哪个账号成功 / 失败」。
  *
  * 结果按任务 id 认领：只有本抽屉启动的那次任务（ownTaskId）的条目事件会进结果表，
  * 别处启动的任务（例如任务历史里的重跑）不会串进来。启动请求返回前到达的事件先缓存再回放。
+ * 后端重启后任务 id 会从 1 重新计数，因此后端状态一旦离开 ready 就放弃认领（见 hostStatus 订阅）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
@@ -46,7 +47,7 @@ import {
   type TaskPanelTaskDef,
   type TaskResultRow,
 } from "../../../../shared/logic/task-panel.ts";
-import { IPC, describeError, invoke } from "../../lib/ipc.ts";
+import { IPC, describeError, invoke, on } from "../../lib/ipc.ts";
 import { aiItemTone, railClass } from "../../lib/list-tone.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, stopTask, useTaskState } from "../../stores/task.ts";
 import { StatusDot } from "../../components/StatusDot.tsx";
@@ -65,6 +66,12 @@ interface PendingStart {
   finished: TaskFinishedEvent | null;
 }
 
+/** 启动成功后的信息：任务本身 + 后端实际要处理的账号数（汇总用） */
+interface StartedTask {
+  info: TaskInfo;
+  total: number;
+}
+
 export interface TaskPanelProps {
   open: boolean;
   onClose: () => void;
@@ -79,10 +86,10 @@ export interface TaskPanelProps {
   closeWindow: boolean;
   onCloseWindowChange: (v: boolean) => void;
   /**
-   * 账号动作：账号页负责「隐藏勾选确认 → precheck → 逐个确认 → 启动」（勾选集合也由它自己取），
-   * 返回启动的任务；未启动（用户取消 / 前置检查没过）返回 null。
+   * 账号动作：账号页负责「隐藏勾选确认 → precheck → 逐个确认 → 启动」（勾选集合也由它自己取）。
+   * 返回启动的任务与将处理的账号数；未启动返回 null。
    */
-  onRunAccountAction: (action: AccountsAction, options: AccountsRunOptions) => Promise<TaskInfo | null>;
+  onRunAccountAction: (action: AccountsAction, options: AccountsRunOptions) => Promise<StartedTask | null>;
 }
 
 export function TaskPanel(props: TaskPanelProps): ReactElement {
@@ -105,7 +112,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
   /** AI 任务的额外输入（新手机号 / 新辅助邮箱）；换任务时清空，避免把上个任务的值带过去 */
   const [extra, setExtra] = useState("");
   const [results, setResults] = useState<Record<string, TaskResultRow>>({});
-  /** 本次任务的账号数（汇总用） */
+  /** 本次任务的账号数（汇总用；取后端 precheck 的 total，勾选里已被删掉的账号不算） */
   const [total, setTotal] = useState(0);
   const [outcome, setOutcome] = useState<string | null>(null);
   /** 本抽屉启动的任务 id；null = 没有（结果表仍显示上一次的） */
@@ -129,12 +136,19 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     setExtra("");
   }, []);
 
-  const applyFinished = useCallback((e: TaskFinishedEvent): void => {
+  const forgetOwnTask = useCallback((): void => {
     ownRef.current = null;
     setOwnTaskId(null);
-    setOutcome(OUTCOME_TEXT[e.outcome]);
-    logLocal(`[任务] ${e.label}：${OUTCOME_TEXT[e.outcome]}${e.error ? ` — ${e.error}` : ""}`);
   }, []);
+
+  const applyFinished = useCallback(
+    (e: TaskFinishedEvent): void => {
+      forgetOwnTask();
+      setOutcome(OUTCOME_TEXT[e.outcome]);
+      logLocal(`[任务] ${e.label}：${OUTCOME_TEXT[e.outcome]}${e.error ? ` — ${e.error}` : ""}`);
+    },
+    [forgetOwnTask],
+  );
 
   // 逐账号结果：只认领本抽屉启动的那次任务（pendingRef 非空时先缓存，启动返回后回放）
   useEffect(
@@ -163,20 +177,30 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     [applyFinished],
   );
 
+  // 后端重启后任务 id 从 1 重新计数：再按旧 id 认领就会把别人的任务算成自己的（还会显示它的停止按钮）
+  useEffect(
+    () =>
+      on(IPC.event.hostStatus, (s) => {
+        if (s.state !== "ready") forgetOwnTask();
+      }),
+    [forgetOwnTask],
+  );
+
   /** 统一启动流程：拿任务 id → 清空上一轮结果 → 回放启动期间到达的事件 */
   const launch = useCallback(
-    async (count: number, run: () => Promise<TaskInfo | null>): Promise<void> => {
+    async (run: () => Promise<StartedTask | null>): Promise<void> => {
       if (startingRef.current) return;
       startingRef.current = true;
       setStarting(true);
       pendingRef.current = { items: [], finished: null };
       try {
-        const info = await run();
+        const started = await run();
         const pending = pendingRef.current;
         pendingRef.current = null;
-        if (!info) return; // 没启动（取消 / 前置检查没过）：保留上一次的结果
+        if (!started) return; // 没启动（取消 / 前置检查没过）：保留上一次的结果
+        const info = started.info;
         setResults({});
-        setTotal(count);
+        setTotal(started.total);
         setOutcome(null);
         ownRef.current = info.id;
         setOwnTaskId(info.id);
@@ -197,20 +221,21 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     [applyFinished, message],
   );
 
-  /** 账号动作：交给账号页（勾选确认 / precheck / 逐个确认 / 启动都在那边），这里只要任务 id */
+  /** 账号动作：交给账号页（勾选确认 / precheck / 逐个确认 / 启动都在那边），这里只要任务与账号数 */
   const runAccountAction = useCallback(
     (d: TaskPanelTaskDef): void => {
-      void launch(rows.length, () => onRunAccountAction(d.id as AccountsAction, { concurrency, closeWindow }));
+      void launch(() => onRunAccountAction(d.id as AccountsAction, { concurrency, closeWindow }));
     },
-    [rows, concurrency, closeWindow, launch, onRunAccountAction],
+    [concurrency, closeWindow, launch, onRunAccountAction],
   );
 
   /** AI 任务：这里启动（参数取当前输入） */
   const runAiTask = useCallback(
     (d: TaskPanelTaskDef, items: AiTaskStartItem[]): void => {
-      void launch(items.length, () =>
-        invoke(IPC.invoke.aiTasksStart, d.id as AiTaskKind, items, aiParamsFor(d, extra)),
-      );
+      void launch(async () => {
+        const info = await invoke(IPC.invoke.aiTasksStart, d.id as AiTaskKind, items, aiParamsFor(d, extra));
+        return { info, total: items.length };
+      });
     },
     [extra, launch],
   );
@@ -227,21 +252,32 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
       runAccountAction(d);
       return;
     }
-    const { items, skipped } = aiItems;
-    if (items.length === 0) {
+    // 额外输入为空：两种语义完全不同，分开处理（留空 = 移除，不是「没填」）
+    const param = extra.trim();
+    const lines = [
+      `将对 ${aiItems.items.length} 个账号逐个执行「${d.label}」，此操作会修改账号。`,
+    ];
+    if (d.extraField && param === "") {
+      if (d.id === "modify_2sv") {
+        void message.warning("请先填写新的两步验证手机号");
+        return;
+      }
+      lines.push(`「${d.extraField.label}」留空 = 删除现有的${d.id === "replace_phone" ? "辅助手机号" : "辅助邮箱"}（不是不改）。`);
+      lines.push("删除结果以页面提示为准，执行后请在账号上人工复核一次。");
+    }
+    if (aiItems.skipped > 0) lines.push(`其中 ${aiItems.skipped} 个账号没有绑定窗口，会被跳过。`);
+    if (hiddenChecked > 0) lines.push(`另有 ${hiddenChecked} 个已勾选账号不在当前视图里，也会一起执行。`);
+    if (aiItems.items.length === 0) {
       void message.warning("勾选的账号都没有绑定窗口，无法执行这个任务");
       return;
     }
-    const lines = [`将对 ${items.length} 个账号逐个执行「${d.label}」，此操作会修改账号。`];
-    if (skipped > 0) lines.push(`其中 ${skipped} 个账号没有绑定窗口，会被跳过。`);
-    if (hiddenChecked > 0) lines.push(`另有 ${hiddenChecked} 个已勾选账号不在当前视图里（不参与本次任务）。`);
     modal.confirm({
       title: `确认${d.label}`,
       content: <div style={{ whiteSpace: "pre-line" }}>{lines.join("\n")}</div>,
       okText: "开始",
       cancelText: "取消",
-      okButtonProps: d.danger ? { danger: true } : undefined,
-      onOk: () => runAiTask(d, items),
+      okButtonProps: { danger: true },
+      onOk: () => runAiTask(d, aiItems.items),
     });
   };
 
@@ -301,7 +337,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
           rows.length === 0
             ? "还没有勾选账号：先在账号列表里勾选，再回来执行任务。"
             : hiddenChecked > 0
-              ? `已勾选 ${rows.length} 个账号，其中 ${hiddenChecked} 个不在当前视图里。`
+              ? `已勾选 ${rows.length} 个账号，其中 ${hiddenChecked} 个不在当前视图里（也会执行）。`
               : `已勾选 ${rows.length} 个账号。`
         }
       >
