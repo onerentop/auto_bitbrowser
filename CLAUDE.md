@@ -201,6 +201,7 @@ pnpm run typecheck:test     # 测试代码类型检查（tsconfig.test.json）�
    - 判定标准锚定真实页面文本 / DOM / URL，**绝不相信 `act()` 或 AI 抽取的成功返回**；
    - 凭据（密码 / 密钥）不进日志、不进任务历史、不进提交；记录里一律掩码。**唯一例外**：账号列表按用户要求下发明文密码，只用于界面显示与复制（见 `ARCHITECTURE.md` §6）；
    - 只操作用户指定的测试账号与窗口，跑完关窗，跑前备份 `accounts.db`。
+   - **桌面界面点检一律用 computer-use 插件的后台模式**（`get_app_state` / `click` / `set_value` 等，`delivery_mode` 默认 background），**不用自写的 PowerShell 抢前台脚本**（它会移动真实鼠标、覆盖剪贴板、强行置顶窗口）。先用 `get_app_state`（`include_screenshot=false`，`max_tree_depth=40`）读元素树，再按 `element_index` 操作；点击结果用 `wait_for` 或再读一次元素树来确认，不重复点击。Electron 网页内容在元素树较深处，`max_tree_nodes` 太小会截断。插件确实做不到的步骤（例如需要真实右键或悬停展开子菜单）要先告诉用户，再决定是否临时切到前台模式。
 
 ## 安全
 
