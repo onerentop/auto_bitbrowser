@@ -6,9 +6,9 @@
  *   1. 侧栏状态灯要求设置页打开「运行状态」标签：外壳与页面各持一份标签状态，外壳再点一次
  *      （值没变）React 直接 bail out，effect 不重跑 → 页面停在上次手点的标签，状态灯永久失效。
  *      所以外壳必须是标签的唯一持有者，页面受控。
- *   2. 账号表体高度用 ResizeObserver 跟随容器：观测节点长在「账号视角」分支里，两个视角互斥挂载，
- *      切到窗口视角再切回来时旧节点被卸载（观测器盯着脱离文档的节点），新节点没人观测 →
- *      表体高度卡在下限。所以观测必须在 view 变化时重新建立。
+ *   2. 账号页的两个视角（账号 / 窗口）曾经互斥挂载：切到窗口视角再切回来要重新拉 325 个窗口（约 3.5s），
+ *      窗口视角的搜索 / 筛选 / 勾选也一起丢。现在两个视角都留在 DOM 里、用 display 互相隐藏（窗口视角
+ *      首次进入才挂载），表体高度的 ResizeObserver 因此还要忽略隐藏期间的 0 高度测量。
  *
  * 断言只针对代码（先剥掉注释）：注释里正当地提到这些反例名字时，不该把测试弄红。
  */
@@ -64,4 +64,31 @@ test("账号表体高度在切换视角后重新测量", () => {
   const tail = accounts.slice(i, end + 3);
   // 观测节点在两个互斥分支里，切回账号视角是新节点：依赖里少了 view 就再也不会被观测
   assert.match(tail, /\}, \[[^\]]*\bview\b[^\]]*\]\);/, "观测的 effect 必须依赖 view");
+});
+
+test("账号页两个视角都留在 DOM 里，用 display 互相隐藏（切回来不重新拉窗口列表）", () => {
+  const accounts = code(read("pages/AccountsPage.tsx"));
+  // 互斥挂载：切走再切回来是全新的组件实例，内部 state 与已加载的列表全丢
+  assert.doesNotMatch(accounts, /\{view === "windows" \? <WindowsView/, "两个视角不能互斥挂载");
+  assert.match(
+    accounts,
+    /const \[windowsMounted, setWindowsMounted\] = useState\(view === "windows"\)/,
+    "窗口视角首次进入才挂载：启动即多拉一次窗口列表没必要",
+  );
+  assert.match(accounts, /if \(next === "windows"\) setWindowsMounted\(true\)/, "切到窗口视角时补挂载");
+  assert.match(accounts, /\{windowsMounted && \(/, "窗口视角挂载后一直留着（用 display 隐藏）");
+  assert.match(accounts, /display: view === "windows" \? "flex" : "none"/, "窗口视角靠 display 隐藏");
+  assert.match(accounts, /display: view === "accounts" \? "flex" : "none"/, "账号视角靠 display 隐藏");
+});
+
+test("表体高度忽略隐藏期间的 0 高度测量（display:none 的容器量出来是 0）", () => {
+  for (const rel of ["pages/AccountsPage.tsx", "pages/accounts/WindowsView.tsx"]) {
+    const src = read(rel);
+    const i = src.indexOf("new ResizeObserver");
+    assert.ok(i > 0, `${rel} 没找到 ResizeObserver`);
+    const end = src.indexOf("]);", i);
+    assert.ok(end > i, `${rel} 没找到该 effect 的依赖数组`);
+    const tail = src.slice(i, end + 3);
+    assert.match(tail, /contentRect\.height < 1\) return;/, `${rel} 的测量必须忽略 0 高度`);
+  }
 });

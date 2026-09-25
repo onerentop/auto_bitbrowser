@@ -7,6 +7,7 @@
  * - 搜索：窗口ID 前缀 / 名称 / 备注 / **绑定账号**，不区分大小写；与分组标签、未绑定标签叠加
  * - 勾选：以行 key 记录；被筛选隐藏的行保留勾选，工具栏提示「其中 M 个不在当前视图」
  * - 创建窗口：模板 / 前缀 / 目标分组来自设置页「创建参数」（这里只给个数）
+ * - 首次进入后由账号页一直挂着（只用 display 隐藏）：切回窗口视角不再重拉列表，这里的搜索 / 筛选 / 勾选都还在
  * 纯逻辑在 app/shared/logic/home-list.ts 与 unified-list.ts。
  */
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
@@ -164,14 +165,16 @@ export function WindowsView({ accounts, busy }: WindowsViewProps): ReactElement 
   const tfa = useTfaCodes(tfaIds, version, (keys) => invoke(IPC.invoke.homeTfaCodes, keys.map(Number)));
   const invalidSet = useMemo(() => new Set(tfa?.invalid ?? []), [tfa]);
 
-  // 表格高度跟随容器（面板占满页面剩余高度）
+  // 表格高度跟随容器（面板占满页面剩余高度）。
+  // 被账号页用 display:none 隐藏时容器量出来是 0，直接用会把表体压到下限 —— 0 高度只当「还没显示」忽略。
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(400);
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
+      if (!entry || entry.contentRect.height < 1) return;
+      setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
     });
     ro.observe(el);
     return () => ro.disconnect();

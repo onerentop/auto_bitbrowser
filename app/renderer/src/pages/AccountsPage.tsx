@@ -263,10 +263,17 @@ export function AccountsPage(): ReactElement {
   const [batchEditOpen, setBatchEditOpen] = useState(false);
   /** 一体列表视角：账号行 / 窗口行（原首页窗口列表并入窗口视角） */
   const [view, setView] = useState<AccountView>(readView);
+  /**
+   * 窗口视角是否已挂载：首次切进去才挂（启动就多拉一次 325 个窗口没必要），之后一直留在 DOM 里、
+   * 只靠 display 隐藏 —— 互斥挂载的话每次切回来都是新实例，窗口列表要重拉一遍，窗口视角的
+   * 搜索 / 筛选 / 勾选也全丢。
+   */
+  const [windowsMounted, setWindowsMounted] = useState(view === "windows");
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState | null>(null);
   const changeView = useCallback((next: AccountView) => {
     setView(next);
     writeView(next);
+    if (next === "windows") setWindowsMounted(true);
   }, []);
   const closeBind = useCallback(() => setBindEmail(null), []);
   const closeEdit = useCallback(() => setEditEmail(null), []);
@@ -394,15 +401,16 @@ export function AccountsPage(): ReactElement {
   }, [visible, checkedRows]);
 
   // 表格高度跟随容器（卡片占满页面剩余高度）。
-  // 必须依赖 view：观测节点长在「账号视角」分支里，两个视角互斥挂载 —— 切到窗口视角再切回来是新
-  // 节点，依赖为空就没人观测它（旧节点被卸载时还会补发一次 0，把高度压到下限）。
+  // 依赖 view：切回来时重新观测一次量到真实高度。隐藏期间容器是 display:none，量出来 0，直接用会把
+  // 表体压到下限，所以 0 高度只当「还没显示」忽略掉，保留上一次量到的值。
   const boxRef = useRef<HTMLDivElement>(null);
   const [bodyHeight, setBodyHeight] = useState(400);
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
+      if (!entry || entry.contentRect.height < 1) return;
+      setBodyHeight(Math.max(200, Math.floor(entry.contentRect.height) - TABLE_CHROME - PAGINATION_HEIGHT));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -916,7 +924,9 @@ export function AccountsPage(): ReactElement {
           }
         />
 
-        {view === "windows" ? <WindowsView accounts={rows} busy={busy} /> : <Panel fill>
+        {/* 账号视角：与窗口视角都在 DOM 里，只靠 display 互相隐藏（窗口视角见文件末尾的 windowsMounted） */}
+        <div style={{ display: view === "accounts" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+        <Panel fill>
         {/* 筛选工具栏：刷新 + 搜索 + 登录状态 + 同名 + 标签筛选 / 标签管理 / 列设置 | 计数 */}
         <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>
           <Space wrap>
@@ -1081,7 +1091,15 @@ export function AccountsPage(): ReactElement {
             })}
           />
         </div>
-      </Panel>}
+      </Panel>
+        </div>
+
+      {/* 窗口视角：首次进入后一直挂着，切回来不再重拉窗口列表，搜索 / 筛选 / 勾选也都保留 */}
+      {windowsMounted && (
+        <div style={{ display: view === "windows" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+          <WindowsView accounts={rows} busy={busy} />
+        </div>
+      )}
 
       {/* 右键菜单：在鼠标位置放一个 1px 锚点，受控打开 */}
       <Dropdown
