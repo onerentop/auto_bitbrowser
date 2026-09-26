@@ -41,8 +41,9 @@ export type CaptchaFailureReason =
   | "no_raw_image" // 未取到原始图 —— 不调打码
   | "unsupported_object" // 挑战对象不在 kg 支持列表 —— 不调打码
   | "api_error" // CapSolver 报错 / 网络失败 / 超时
-  | "round_limit" // 打满轮次仍未通过
-  | "not_passed"; // 最后一轮打码完成但页面仍在验证码页
+  | "round_limit" // 单次求解的打码次数达到硬上限（动态题补图等），仍未通过
+  | "not_passed" // 打满轮次仍停在验证码页
+  | "off_viewport"; // 可见弹层的点击点在视口外（页面滚动 / 窗口过小）—— 点了也没用
 
 /** 求解结果：ok 只表示「已离开验证码页或拿到 token」，调用方仍须用 detectStage / myaccount 终检复核 */
 export type CaptchaSolveResult =

@@ -12,7 +12,9 @@ import {
   CAPSOLVER_KG_IDS,
   buildCreateTaskBody,
   classifyImage,
+  classifyTile,
   parseCreateTaskResponse,
+  parseSingleTileResponse,
   resolveQuestion,
 } from "../src/engine/captcha/capsolver.ts";
 import {
@@ -179,6 +181,52 @@ test("classifyImage：网络异常 → 失败，detail 保留错误文本且不�
   assert.equal(result.ok, false);
   if (result.ok) throw new Error("不该成功");
   assert.ok(result.detail.includes("ECONNREFUSED"), result.detail);
+  assert.equal(result.detail.includes(API_KEY), false, result.detail);
+});
+
+// 真机实测（2026-09-26，research §6）：100×100 单图 → {type:"single", hasObject, size:1}；300×300 → multi
+test("parseSingleTileResponse：只认布尔 hasObject；multi 形态 / 缺字段 / errorId≠0 一律失败", () => {
+  assert.deepEqual(parseSingleTileResponse({ errorId: 0, status: "ready", solution: { hasObject: true, size: 1, type: "single" } }), {
+    ok: true,
+    hasObject: true,
+  });
+  assert.deepEqual(parseSingleTileResponse({ errorId: 0, solution: { hasObject: false, size: 1, type: "single" } }), {
+    ok: true,
+    hasObject: false,
+  });
+  assert.equal(parseSingleTileResponse({ errorId: 0, solution: { objects: [1], size: 3, type: "multi" } }).ok, false, "multi 形态不是单图结论");
+  assert.equal(parseSingleTileResponse({ errorId: 0, solution: { hasObject: "true" } }).ok, false, "非布尔不猜");
+  const failed = parseSingleTileResponse({ errorId: 1, errorCode: "ERROR_ZERO_BALANCE" });
+  assert.ok(!failed.ok && failed.detail.includes("ERROR_ZERO_BALANCE"));
+  assert.equal(parseSingleTileResponse(null).ok, false);
+  // 反过来：把单图的 single 响应当 multi 解析必须失败（原图误取成单图时不会被当成「一格都没有」）
+  assert.equal(parseCreateTaskResponse({ errorId: 0, solution: { hasObject: false, size: 1, type: "single" } }).ok, false);
+});
+
+test("classifyTile：请求体与 multi 相同（image 单数 + kg ID），解析 single 形态", { timeout: 5000 }, async () => {
+  /** @type {{ url: string, init: any }[]} */
+  const calls = [];
+  /** @type {import("../src/engine/captcha/types.ts").FetchLike} */
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    const payload = JSON.stringify({ errorId: 0, status: "ready", solution: { hasObject: true, size: 1, type: "single" } });
+    return { ok: true, status: 200, text: async () => payload };
+  };
+  const result = await classifyTile({ apiKey: API_KEY, imageBase64: "TILE64", questionId: "/m/01pns0", fetchImpl, timeoutMs: 5000 });
+  assert.deepEqual(result, { ok: true, hasObject: true });
+  assert.equal(calls[0]?.url, CAPSOLVER_CREATE_TASK_URL);
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), {
+    clientKey: API_KEY,
+    task: { type: "ReCaptchaV2Classification", image: "TILE64", question: "/m/01pns0" },
+  });
+});
+
+test("classifyTile：errorId≠0 → 失败，detail 掩码密钥", { timeout: 5000 }, async () => {
+  const { fn } = fakeClassifyFetch({ errorId: 1, errorCode: "ERROR_KEY_DENIED_ACCESS", errorDescription: `key ${API_KEY}` });
+  const result = await classifyTile({ apiKey: API_KEY, imageBase64: "B", questionId: "/m/0199g", fetchImpl: fn, timeoutMs: 5000 });
+  assert.equal(result.ok, false);
+  if (result.ok) throw new Error("不该成功");
+  assert.ok(result.detail.includes("ERROR_KEY_DENIED_ACCESS"), result.detail);
   assert.equal(result.detail.includes(API_KEY), false, result.detail);
 });
 

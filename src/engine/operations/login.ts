@@ -508,6 +508,14 @@ export class LoginOperation {
         return fail("captcha_required", "captcha_api_error", "人机验证自动打码不可用（无法连接窗口调试端口）", {
           status: "blocked",
         });
+      case "off_viewport":
+        // 弹层可见但落点在视口外（页面滚动 / 窗口过小），按坐标点击会全部落空 —— 如实报告，不假装试过
+        return fail(
+          "captcha_required",
+          "captcha_api_error",
+          `人机验证控件不在可视区域（点了也没用: ${String(solved.detail ?? "").slice(0, 120)}）`,
+          { status: "blocked" },
+        );
       case "no_raw_image":
       case "unsupported_object": {
         const why = solved.reason === "no_raw_image" ? "未取到原始图" : "挑战对象不支持";
@@ -525,7 +533,7 @@ export class LoginOperation {
           status: "blocked",
         });
       case "round_limit":
-        return fail("captcha_required", "captcha_not_passed", `已达到打码轮次上限（${solved.rounds} 轮）仍未通过`, {
+        return fail("captcha_required", "captcha_not_passed", `已达到单次打码次数上限仍未通过（已尝试 ${solved.rounds} 轮）`, {
           status: "blocked",
         });
       case "not_passed":

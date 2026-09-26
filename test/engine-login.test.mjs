@@ -776,11 +776,11 @@ test("验证码：未取到原始图 / 挑战对象不支持 → 归到打码未
   }
 });
 
-test("验证码：达到轮次上限 → 原因里带轮次数", async () => {
+test("验证码：达到单次打码次数上限 → 原因里带轮次数", async () => {
   const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: false, reason: "round_limit", rounds: 3 }));
   const { result } = await run(g);
   assert.equal(result.error_type, "captcha_not_passed");
-  assert.match(result.error ?? "", /已达到打码轮次上限（3 轮）/);
+  assert.match(result.error ?? "", /已达到单次打码次数上限仍未通过（已尝试 3 轮）/);
   assert.equal(result.status, "blocked");
 });
 

@@ -1,18 +1,22 @@
 /**
  * CapSolver 打码客户端（ReCaptchaV2Classification）。
  *
- * 契约全部来自真机实证（.trellis/tasks/09-26-captcha-capsolver-integration/research/real-machine-recaptcha.md §3）：
+ * 契约全部来自真机实证（.trellis/tasks/09-26-captcha-capsolver-integration/research/real-machine-recaptcha.md §3、§6）：
  *   POST https://api.capsolver.com/createTask
- *   { clientKey, task: { type: "ReCaptchaV2Classification", image: "<原始JPEG base64>", question: "<kg ID>" } }
- *   → { errorId: 0, status: "ready", solution: { objects: [0-based 格子索引], size, type: "multi" } }
+ *   { clientKey, task: { type: "ReCaptchaV2Classification", image: "<JPEG base64>", question: "<kg ID>" } }
+ *
+ * 响应形态**由图片尺寸决定**（2026-09-26 实测，官方文档 Response Example 同）：
+ *   - 300×300（3×3 原图）/ 450×450（4×4 原图）→ `{ type: "multi", objects: [0-based 格子索引], size: 3|4 }`
+ *   - 100×100（动态题里换上来的单张新图）   → `{ type: "single", hasObject: boolean, size: 1 }`
  *
  * 坑（都踩过，不要改回去）：
  *   - 字段名是 `image`（单数）。`imageBody` / `images: [...]` 实测全部报 `ERROR_INVALID_TASK_DATA`。
  *   - `question` 必须是知识图谱 ID；写自然语言报 `ERROR_UNSUPPORTED_QUESTION`。
  *   - `solution.objects` 是 0-based。
- *   - 必须用原始图（payload 的 30–50KB JPEG），屏幕截图识别不出（`{hasObject:false,size:0}`）。
+ *   - 必须用原始图（payload JPEG），屏幕截图识别不出（`{hasObject:false,size:0}`）。
+ *   - 把 100×100 的单张新图当原图送 multi，只会拿到 single 形态的响应 —— 原图必须取自 `-33/-44` 格子。
  *
- * 打码平台只回「哪些格子」；token 由我们自己的浏览器环境生成，不存在 token 与环境不匹配的问题。
+ * 打码平台只回「哪些格子 / 这张有没有」；token 由我们自己的浏览器环境生成，不存在 token 与环境不匹配的问题。
  * 密钥只出现在请求体里，绝不进返回值 / 日志 / detail。
  */
 
@@ -147,8 +151,23 @@ export function buildCreateTaskBody(clientKey: string, imageBase64: string, ques
   };
 }
 
+/** 取出 `errorId≠0` 的错误描述；无错误返回 null */
+function responseError(record: Record<string, unknown>): string | null {
+  const errorId = record["errorId"];
+  if (typeof errorId !== "number" || errorId === 0) return null;
+  const code = pickText(record["errorCode"]).trim();
+  const description = pickText(record["errorDescription"]).trim();
+  return truncate([code, description].filter(Boolean).join(": ") || `errorId=${errorId}`, 200);
+}
+
+/** 取 `solution` 对象；缺失返回 null */
+function solutionOf(record: Record<string, unknown>): Record<string, unknown> | null {
+  const solution = record["solution"];
+  return typeof solution === "object" && solution !== null ? (solution as Record<string, unknown>) : null;
+}
+
 /**
- * 解析 createTask 响应（纯函数）。
+ * 解析 createTask 响应（纯函数，multi 形态：整张 3×3 / 4×4 原图）。
  * `objects` 只保留非负整数索引（小数 / 负数 / 字符串一律丢弃）；**原样保持 0-based**。
  */
 export function parseCreateTaskResponse(json: unknown): { ok: true; objects: number[] } | { ok: false; detail: string } {
@@ -156,23 +175,35 @@ export function parseCreateTaskResponse(json: unknown): { ok: true; objects: num
     return { ok: false, detail: "响应不是 JSON 对象" };
   }
   const record = json as Record<string, unknown>;
-  const errorId = record["errorId"];
-  if (typeof errorId === "number" && errorId !== 0) {
-    const code = pickText(record["errorCode"]).trim();
-    const description = pickText(record["errorDescription"]).trim();
-    return { ok: false, detail: truncate([code, description].filter(Boolean).join(": ") || `errorId=${errorId}`, 200) };
-  }
-  const solution = record["solution"];
-  const objectsRaw =
-    typeof solution === "object" && solution !== null ? (solution as Record<string, unknown>)["objects"] : undefined;
+  const error = responseError(record);
+  if (error) return { ok: false, detail: error };
+  const objectsRaw = solutionOf(record)?.["objects"];
   if (!Array.isArray(objectsRaw)) {
-    return { ok: false, detail: `solution.objects 缺失（errorId=${pickText(errorId) || "?"}）` };
+    return { ok: false, detail: `solution.objects 缺失（errorId=${pickText(record["errorId"]) || "?"}）` };
   }
   const objects: number[] = [];
   for (const item of objectsRaw) {
     if (typeof item === "number" && Number.isInteger(item) && item >= 0) objects.push(item);
   }
   return { ok: true, objects };
+}
+
+/**
+ * 解析 createTask 响应（纯函数，single 形态：动态题里换上来的 100×100 单张新图）。
+ * 只认布尔 `solution.hasObject`；缺失 / 非布尔一律按失败处理（不猜）。
+ */
+export function parseSingleTileResponse(json: unknown): { ok: true; hasObject: boolean } | { ok: false; detail: string } {
+  if (typeof json !== "object" || json === null) {
+    return { ok: false, detail: "响应不是 JSON 对象" };
+  }
+  const record = json as Record<string, unknown>;
+  const error = responseError(record);
+  if (error) return { ok: false, detail: error };
+  const hasObject = solutionOf(record)?.["hasObject"];
+  if (typeof hasObject !== "boolean") {
+    return { ok: false, detail: `solution.hasObject 缺失（errorId=${pickText(record["errorId"]) || "?"}）` };
+  }
+  return { ok: true, hasObject };
 }
 
 export interface ClassifyImageOptions {
@@ -188,12 +219,10 @@ export interface ClassifyImageOptions {
 }
 
 /**
- * 调 CapSolver 识别图片网格。
+ * 发 createTask 并把响应解析成 JSON（不解释 solution）。
  * 失败一律返回 `{ok:false, detail}`（detail ≤200 字符、已掩码密钥），不抛异常。
  */
-export async function classifyImage(
-  options: ClassifyImageOptions,
-): Promise<{ ok: true; objects: number[] } | { ok: false; detail: string }> {
+async function postCreateTask(options: ClassifyImageOptions): Promise<{ ok: true; json: unknown } | { ok: false; detail: string }> {
   const timeoutMs = Math.max(1, Math.round(options.timeoutMs ?? DEFAULT_CAPTCHA_TIMEOUT_SECONDS * 1000));
   const doFetch: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
   const body = JSON.stringify(buildCreateTaskBody(options.apiKey, options.imageBase64, options.questionId));
@@ -217,17 +246,40 @@ export async function classifyImage(
     return { ok: false, detail: safeDetail(`读取响应失败: ${errorText(error)}`, options.apiKey) };
   }
 
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    return { ok: true, json: JSON.parse(text) };
   } catch {
     return {
       ok: false,
       detail: safeDetail(`HTTP ${response.status} 响应不是 JSON: ${pickText(text).slice(0, 120)}`, options.apiKey),
     };
   }
+}
 
-  const result = parseCreateTaskResponse(parsed);
+/**
+ * 调 CapSolver 识别整张原图（3×3 / 4×4 网格，multi 形态）。
+ * 失败一律返回 `{ok:false, detail}`（detail ≤200 字符、已掩码密钥），不抛异常。
+ */
+export async function classifyImage(
+  options: ClassifyImageOptions,
+): Promise<{ ok: true; objects: number[] } | { ok: false; detail: string }> {
+  const posted = await postCreateTask(options);
+  if (!posted.ok) return posted;
+  const result = parseCreateTaskResponse(posted.json);
+  if (!result.ok) return { ok: false, detail: safeDetail(result.detail, options.apiKey) };
+  return result;
+}
+
+/**
+ * 调 CapSolver 判定单张新图（动态题换上来的 100×100 图，single 形态）：这张里有没有目标对象。
+ * 失败一律返回 `{ok:false, detail}`（detail ≤200 字符、已掩码密钥），不抛异常。
+ */
+export async function classifyTile(
+  options: ClassifyImageOptions,
+): Promise<{ ok: true; hasObject: boolean } | { ok: false; detail: string }> {
+  const posted = await postCreateTask(options);
+  if (!posted.ok) return posted;
+  const result = parseSingleTileResponse(posted.json);
   if (!result.ok) return { ok: false, detail: safeDetail(result.detail, options.apiKey) };
   return result;
 }
