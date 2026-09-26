@@ -87,7 +87,6 @@ import { BatchImportModal } from "../components/BatchImportModal.tsx";
 import { AccountEditModal } from "./accounts/AccountEditModal.tsx";
 import { BindWindowModal } from "./accounts/BindWindowModal.tsx";
 import { loginView } from "./accounts/status.ts";
-import { finishedNotice } from "./accounts/finished-notice.ts";
 import { TfaCell, useTfaCodes } from "../components/TfaCodeCell.tsx";
 import { NoteModal, type NoteTarget } from "./accounts/NoteModal.tsx";
 import { TagEditModal, type TagEditTarget } from "./accounts/TagEditModal.tsx";
@@ -340,11 +339,9 @@ export function AccountsPage(): ReactElement {
       onTaskFinished((e) => {
         if (!ACCOUNT_TASK_TYPES.has(e.type)) return;
         void load();
-        // 任务成功后弹提示；failed / stopped 由全局任务坞提示
-        const notice = finishedNotice(e);
-        if (notice) notification.info({ message: notice.title, description: <Multiline text={notice.message} /> });
+        // 结果不再在这里发卡片：任务结束只在底部任务坞呈现（见 lib/task-result.ts）
       }),
-    [load, notification],
+    [load],
   );
 
   // 批量登录运行中逐行更新：后端每完成一个账号就发一条条目事件，这里立刻改那一行的登录状态
@@ -468,7 +465,7 @@ export function AccountsPage(): ReactElement {
     ): Promise<{ info: TaskInfo; total: number } | null> => {
       if (actionPending.current) {
         // 上一次操作还在确认 / 预检中：说清楚，别让点的人以为按钮坏了
-        notify("warning", "请稍等", "上一个操作还在处理中，请等它走完再开始。");
+        void message.warning("上一个操作还在处理中，请等它走完再开始。");
         return null;
       }
       actionPending.current = true;

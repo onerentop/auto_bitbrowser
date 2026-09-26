@@ -22,6 +22,7 @@ import { createIpcRegistrar, senderFrameUrl } from "./ipc/registrar.ts";
 import { registerAppHandlers } from "./ipc/app-handlers.ts";
 import { isAppUrl } from "./navigation.ts";
 import { createMainWindow, resolveAppOrigin } from "./window.ts";
+import { anyWindowFocused } from "./notify-policy.ts";
 import { initRendererLog } from "./renderer-log.ts";
 
 /** 打包后本文件位于 out/main/index.js；后端入口与之同目录 */
@@ -104,9 +105,19 @@ function bootstrap(): void {
       getStatus: () => host.getStatus(),
       restart: () => host.restart(),
     },
-    // 系统通知：任务完成 / 失败时由渲染层调用；平台不支持或抛出都只记日志（不能影响任务）
+    /**
+     * 系统通知：任务结束（完成 / 失败 / 停止）时由渲染层调用。
+     *
+     * 应用在前台时**不发**：此时任务坞里已经有结果行，再弹一条系统通知只是重复打扰
+     * （真机 2026-09-26：一次删除同时出现结果弹窗 + 卡片 + 系统通知三处）。
+     * 判定放主进程而不是渲染层：`isFocused()` 是权威信号。
+     *
+     * 返回值语义：**是否真的弹了**（前台抑制、平台不支持、发送抛错都返回 false）。
+     * 平台不支持或抛出都只记日志，绝不能影响任务本身。
+     */
     notify: (payload: { title: string; body: string }): boolean => {
       try {
+        if (anyWindowFocused(BrowserWindow.getAllWindows())) return false;
         if (!Notification.isSupported()) return false;
         new Notification({ title: payload.title || app.getName(), body: payload.body }).show();
         return true;

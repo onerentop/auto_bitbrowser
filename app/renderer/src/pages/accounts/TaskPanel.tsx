@@ -49,16 +49,13 @@ import {
 } from "../../../../shared/logic/task-panel.ts";
 import { IPC, describeError, invoke, on } from "../../lib/ipc.ts";
 import { aiItemTone, railClass } from "../../lib/list-tone.ts";
+import { OUTCOME_TEXT } from "../../lib/task-result.ts";
 import { logLocal, markTaskStarted, onTaskFinished, onTaskItem, stopTask, useTaskState } from "../../stores/task.ts";
 import { StatusDot } from "../../components/StatusDot.tsx";
 import { usePagination } from "../../components/use-pagination.ts";
 import { Section } from "../../components/Section.tsx";
 
-const OUTCOME_TEXT: Record<TaskFinishedEvent["outcome"], string> = {
-  succeeded: "已完成",
-  failed: "失败",
-  stopped: "已停止",
-};
+// 结论文案与任务坞共用一份（lib/task-result.ts），不在这里另写一份
 
 /** 启动请求返回前到达的事件先缓存（跨进程时事件可能先于返回值到达，同原 AI 任务页） */
 interface PendingStart {
@@ -105,7 +102,7 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
     onCloseWindowChange,
     onRunAccountAction,
   } = props;
-  const { message, modal } = App.useApp();
+  const { message, modal, notification } = App.useApp();
   const tk = useTaskState();
 
   const [taskId, setTaskId] = useState<TaskPanelId>("login");
@@ -283,7 +280,11 @@ export function TaskPanel(props: TaskPanelProps): ReactElement {
 
   const onStop = (): void => {
     logLocal(`正在停止「${running?.label ?? "任务"}」...`);
-    stopTask().catch((e: unknown) => void message.error(describeError(e)));
+    // 停止失败是「需要读」的错误：按提示面分工走右上卡片，不自动消失（见 lib/task-result.ts 顶部与
+    // .trellis/tasks/09-26-ui-notifications/design.md 的分工表）——任务坞那个停止按钮同此口径。
+    stopTask().catch((e: unknown) => {
+      notification.error({ message: "停止失败", description: describeError(e) });
+    });
   };
 
   const columns: TableColumnsType<TaskResultRow> = [

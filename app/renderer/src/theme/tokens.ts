@@ -148,6 +148,10 @@ export function buildTheme(dark: boolean, reduceMotion = false): ThemeConfig {
       Tabs: { horizontalMargin: "0 0 12px 0" },
       Tag: { defaultBg: p.canvas, defaultColor: p.ink },
       Segmented: { itemSelectedBg: p.surface, trackBg: p.canvas },
+      // 短条与卡片跟值班台统一。antd 5.29 里这两个组件各自只有很少的专属 token
+      // （Message: zIndexPopup/contentBg/contentPadding；Notification: zIndexPopup/width/color*Bg），
+      // 所以只钉底色（调色板）与内边距（收紧），其余沿用全局 token 派生。
+      Message: { contentBg: p.surface, contentPadding: "8px 12px" },
     },
   };
 }

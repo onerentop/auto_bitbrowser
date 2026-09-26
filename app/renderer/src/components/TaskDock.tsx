@@ -1,77 +1,34 @@
 /**
- * 全局任务坞：底部状态条（运行时顶边一条细进度条）+ 日志抽屉 + 结果汇总弹窗
+ * 全局任务坞：底部状态条（运行时顶边一条细进度条）+ 日志抽屉
  *
  * 各页面的日志区、进度与「停止」按钮统一收在这里。
  * 合成一个全局的即可，因为后端本来就只允许一个任务同时运行。
+ *
+ * 任务结束**不弹任何模态弹窗**：结果作为坞里的一行呈现，明细与完整日志在日志抽屉里。
+ * 为什么这样分工、以及每个提示面各自的职责，见
+ * `.trellis/tasks/09-26-ui-notifications/design.md`；结果文案见 `lib/task-result.ts`。
  */
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { Button, Descriptions, Drawer, Modal, Space, Typography } from "antd";
+import { App, Button, Descriptions, Drawer, Typography } from "antd";
 import { StopOutlined, UnorderedListOutlined } from "@ant-design/icons";
-import type { TaskFinishedEvent } from "../../../shared/ipc.ts";
 import { describeError } from "../lib/ipc.ts";
-import { clearLogs, onTaskFinished, stopTask, useTaskState } from "../stores/task.ts";
+import { taskResultView } from "../lib/task-result.ts";
+import { clearLogs, stopTask, useTaskState } from "../stores/task.ts";
 import { useTokens } from "../theme/tokens.ts";
-
-const OUTCOME_TEXT: Record<TaskFinishedEvent["outcome"], string> = {
-  succeeded: "已完成",
-  failed: "失败",
-  stopped: "已停止",
-};
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return d.toTimeString().slice(0, 8);
 }
 
-/** 常见结果字段的中文名；未列出的字段原样显示键名 */
-const RESULT_LABELS: Record<string, string> = {
-  total: "总数",
-  total_count: "总数",
-  success_count: "成功",
-  failed_count: "失败",
-  fail_count: "失败",
-  failed_ids: "失败窗口",
-  failed_list: "失败列表",
-  warning_list: "警告",
-  skipped_count: "跳过",
-  results: "明细",
-  deleted_accounts: "已删除账号",
-  deleted_windows: "已删除窗口",
-  password_count: "写入密码",
-  bind_count: "绑定窗口",
-  ix_update_count: "写入窗口 2FA 密钥",
-  success_rate: "成功率",
-  duration_seconds: "耗时（秒）",
-};
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-
-/** 把任务结果对象平铺成「字段: 值」行，列表字段只显示条数 */
-function summarize(result: unknown): Array<[string, string]> {
-  if (!isPlainObject(result)) {
-    return result === null || result === undefined ? [] : [["结果", JSON.stringify(result)]];
-  }
-  // 账号管理的批量任务返回 { type, result: {...} }，展开内层统计
-  const flat = typeof result["type"] === "string" && isPlainObject(result["result"]) ? result["result"] : result;
-  return Object.entries(flat).map(([k, v]) => {
-    const label = RESULT_LABELS[k] ?? k;
-    if (Array.isArray(v)) return [label, `${v.length} 项`];
-    if (v !== null && typeof v === "object") return [label, JSON.stringify(v)];
-    return [label, String(v)];
-  });
-}
-
 export function TaskDock(): ReactElement {
-  const { running, logs } = useTaskState();
+  const { running, logs, lastFinished } = useTaskState();
+  const { notification } = App.useApp();
   const t = useTokens();
   const [open, setOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [finished, setFinished] = useState<TaskFinishedEvent | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => onTaskFinished((e) => setFinished(e)), []);
   useEffect(() => {
     if (!running) setStopping(false);
   }, [running]);
@@ -81,7 +38,11 @@ export function TaskDock(): ReactElement {
 
   const percent = running && running.total > 0 ? Math.round((running.current / running.total) * 100) : 0;
   const last = logs.at(-1);
-  const rows = finished ? summarize(finished.result) : [];
+  /** 最近一次结束的任务；结果行与抽屉里的明细都用它 */
+  const result = lastFinished ? taskResultView(lastFinished) : null;
+  const toneColor = result
+    ? { ok: t.ok, warn: t.warn, bad: t.bad, none: t.muted }[result.tone]
+    : t.muted;
 
   return (
     <>
@@ -116,12 +77,30 @@ export function TaskDock(): ReactElement {
                   setStopping(true);
                   stopTask().catch((e: unknown) => {
                     setStopping(false);
-                    Modal.error({ title: "停止失败", content: describeError(e) });
+                    notification.error({ message: "停止失败", description: describeError(e) });
                   });
                 }}
               >
                 {stopping ? "正在停止" : "停止"}
               </Button>
+            </>
+          ) : result && lastFinished ? (
+            // 任务结束后唯一的提示面：任务名 + 一句人话摘要（配色按结果色调取令牌）
+            <>
+              <Typography.Text strong>{lastFinished.label}</Typography.Text>
+              <Typography.Text
+                title={result.summary}
+                style={{
+                  color: toneColor,
+                  fontSize: 13,
+                  maxWidth: "45%",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {result.summary}
+              </Typography.Text>
             </>
           ) : (
             <Typography.Text type="secondary">没有正在运行的任务</Typography.Text>
@@ -147,34 +126,25 @@ export function TaskDock(): ReactElement {
           </Button>
         }
       >
+        {result && lastFinished && result.details.length > 0 ? (
+          <div style={{ marginBottom: 16 }}>
+            <Typography.Text strong style={{ fontSize: 12 }}>
+              {lastFinished.label} 的结果明细
+            </Typography.Text>
+            <Descriptions
+              size="small"
+              column={1}
+              bordered
+              style={{ marginTop: 8 }}
+              items={result.details.map(([k, v], i) => ({ key: i, label: k, children: v }))}
+            />
+          </div>
+        ) : null}
         <pre className="abb-mono" style={{ margin: 0, fontSize: 12, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
           {logs.map((l) => `${formatTime(l.at)}  ${l.message}`).join("\n")}
         </pre>
         <div ref={bottomRef} />
       </Drawer>
-
-      <Modal
-        title={finished ? `${finished.label}：${OUTCOME_TEXT[finished.outcome]}` : ""}
-        open={finished !== null}
-        onCancel={() => setFinished(null)}
-        footer={
-          <Space>
-            <Button onClick={() => setOpen(true)}>查看日志</Button>
-            <Button type="primary" onClick={() => setFinished(null)}>
-              知道了
-            </Button>
-          </Space>
-        }
-      >
-        {finished?.error ? (
-          <Typography.Paragraph type="danger" style={{ marginBottom: 12 }}>
-            {finished.error}
-          </Typography.Paragraph>
-        ) : null}
-        {finished && rows.length > 0 ? (
-          <Descriptions size="small" column={1} bordered items={rows.map(([k, v], i) => ({ key: i, label: k, children: v }))} />
-        ) : null}
-      </Modal>
     </>
   );
 }

@@ -16,7 +16,6 @@ import { createHostContext } from "../app/host/context.ts";
 import { createDispatcher } from "../app/host/dispatch.ts";
 import { createAccountsHandlers, createDefaultProcessor, readLlmParams } from "../app/host/handlers/accounts.ts";
 import { createAccountDataHandlers } from "../app/host/handlers/account-data.ts";
-import { finishedNotice } from "../app/renderer/src/pages/accounts/finished-notice.ts";
 import { createBatchResult } from "../src/automation/batch/types.ts";
 import { loginView } from "../app/renderer/src/pages/accounts/status.ts";
 import {
@@ -916,28 +915,6 @@ test("默认 createProcessor 注入了 db（批处理器拿到仓储，不打「
   assert.equal(msgs.some((m) => m.includes("未注入")), false);
 });
 
-test("finishedNotice：照搬 Python 完成提示；failed / stopped 不弹", () => {
-  /**
-   * 构造任务结束事件：type / result 由用例给，extra 覆盖 label / outcome
-   * @param {string} type
-   * @param {unknown} result
-   * @param {{ label?: string, outcome?: import("../app/shared/ipc.ts").TaskOutcome }} [extra]
-   * @returns {Pick<import("../app/shared/ipc.ts").TaskFinishedEvent, "type" | "label" | "outcome" | "result">}
-   */
-  const ev = (type, result, extra = {}) => ({ type, label: "", outcome: "succeeded", result, ...extra });
-  assert.equal(finishedNotice(ev("batch_bind", { total: 3, success_count: 2 })), null, "批量绑定已删除");
-  assert.deepEqual(finishedNotice(ev("batch_delete", { deleted_accounts: 2, deleted_windows: 1 }, { label: "删除选中" })), {
-    title: "删除完成",
-    message: "已删除 2 个账号",
-  });
-  assert.deepEqual(finishedNotice(ev("batch_delete", { deleted_accounts: 2, deleted_windows: 1 }, { label: "删除+窗口" })), {
-    title: "删除完成",
-    message: "已删除 2 个账号\n已删除 1 个窗口",
-  });
-  assert.equal(finishedNotice(ev("batch_delete", {}, { outcome: "stopped" })), null);
-  assert.equal(finishedNotice(ev("login", {})), null);
-});
-
 test("readLlmParams：照搬 get_config_from_manager —— 无 provider / 无 key 时全部为 null", () => {
   const cfg = (provider, key, model) => ({
     getAiDefaultProvider: () => provider,
@@ -1084,23 +1061,6 @@ test("health_check：未绑定窗口的账号记 window_error，不去连引擎�
     ["b@x.com", "错误", "窗口打不开: Target closed"],
     ["c@x.com", "成功", "已登录"],
   ]);
-});
-
-test("finishedNotice：巡检完成弹汇总（成功才弹）", () => {
-  const notice = finishedNotice({
-    type: "health_check",
-    label: "健康巡检（3 个账号）",
-    outcome: "succeeded",
-    result: { total: 3, ok: 1, need_login: 1, suspended: 0, window_error: 1 },
-  });
-  assert.deepEqual(notice, {
-    title: "巡检完成",
-    message: "正常 1 个\n需要登录 1 个\n已停用 0 个\n窗口异常 1 个",
-  });
-  assert.equal(
-    finishedNotice({ type: "health_check", label: "x", outcome: "stopped", result: {} }),
-    null,
-  );
 });
 
 // ==================== 渲染层纯函数 ====================
