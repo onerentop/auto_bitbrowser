@@ -83,6 +83,9 @@ function baseSnapshot(overrides = {}) {
     theme: "dark",
     data_dir: "",
     data_separator: "----",
+    captcha_api_key: "",
+    captcha_enabled: true,
+    captcha_max_rounds: 3,
     ...overrides,
   };
 }
@@ -552,6 +555,7 @@ test("SettingsService：加载后原样保存，密钥不被重复加密，表�
   cm.setAiProviderApiKey("gemini", "G-KEY");
   cm.setAiProviderApiKey("anthropic", "A-KEY");
   cm.setGmailImapPassword("app pass");
+  cm.set("captcha.api_key", "CAP-KEY");
   // Sub2API / SMS-Bus 功能已删除，但它们的加密字段仍可能由 Python 版写入，必须原样保留
   cm.set("sub2api.admin_token", "SUB-TOKEN");
   cm.set("sms_bus.token", "SMS-TOKEN");
@@ -560,6 +564,7 @@ test("SettingsService：加载后原样保存，密钥不被重复加密，表�
   const svc = new SettingsService(cm);
   const snap = svc.loadSettingsSnapshot();
   assert.equal(snap.gemini_api_key, "G-KEY");
+  assert.equal(snap.captcha_api_key, "CAP-KEY");
   svc.saveSettingsSnapshot(snap);
   svc.saveSettingsSnapshot(svc.loadSettingsSnapshot());
 
@@ -567,12 +572,14 @@ test("SettingsService：加载后原样保存，密钥不被重复加密，表�
   assert.equal(fresh.getAiProviderApiKey("gemini"), "G-KEY");
   assert.equal(fresh.getAiProviderApiKey("anthropic"), "A-KEY");
   assert.equal(fresh.getGmailImapPassword(), "app pass");
+  assert.equal(fresh.get("captcha.api_key"), "CAP-KEY");
   assert.equal(fresh.get("sub2api.admin_token"), "SUB-TOKEN");
   assert.equal(fresh.get("sms_bus.token"), "SMS-TOKEN");
   const after = JSON.parse(readFileSync(configFile, "utf-8"));
   assert.equal(after.sub2api.admin_token, before.sub2api.admin_token, "表单外密文原样保留");
   assert.equal(after.sms_bus.token, before.sms_bus.token);
   assert.equal(after.ai_agent.providers.gemini.api_key, before.ai_agent.providers.gemini.api_key, "同值加密结果不变");
+  assert.equal(after.captcha.api_key, before.captcha.api_key, "同值加密结果不变");
 });
 
 test("settings handler：getTheme 只返回 theme", async () => {
@@ -635,4 +642,93 @@ test("settings handler：删除代理只回写一次，并级联删除被删代�
   assert.deepEqual(repo.getProxyBindingDetails(ids.a), []);
   assert.deepEqual(repo.getProxyBindingDetails(ids.c), []);
   assert.equal(repo.getProxyBindingDetails(ids.b).length, 1, "未删的代理绑定保留");
+});
+
+// ==================== captcha（人机验证打码） ====================
+
+test("SettingsService.save：captcha_api_key 加密落盘、load 读回明文，enabled / max_rounds 无条件写入", () => {
+  const { cm, configFile } = makeConfig();
+  const svc = new SettingsService(cm);
+  svc.saveSettingsSnapshot(
+    baseSnapshot({ captcha_api_key: "CAP-KEY-1234", captcha_enabled: false, captcha_max_rounds: 7 }),
+  );
+
+  const raw = readFileSync(configFile, "utf-8");
+  assert.equal(raw.includes("CAP-KEY-1234"), false, "CapSolver 密钥不能明文落盘");
+  const tree = JSON.parse(raw);
+  assert.ok(String(tree.captcha.api_key).startsWith("ENC:"), `落盘应为密文，实际: ${tree.captcha.api_key}`);
+  assert.equal(tree.captcha.enabled, false);
+  assert.equal(tree.captcha.max_rounds, 7);
+
+  const snap = svc.loadSettingsSnapshot();
+  assert.equal(snap.captcha_api_key, "CAP-KEY-1234", "loadSettingsSnapshot 读回明文");
+  assert.equal(snap.captcha_enabled, false);
+  assert.equal(snap.captcha_max_rounds, 7);
+});
+
+test("SettingsService.save：captcha_api_key 为空不覆盖已保存密钥，enabled / max_rounds 照常写入", () => {
+  const { cm, configFile } = makeConfig();
+  const svc = new SettingsService(cm);
+  svc.saveSettingsSnapshot(baseSnapshot({ captcha_api_key: "CAP-OLD" }));
+  svc.saveSettingsSnapshot(baseSnapshot({ captcha_api_key: "", captcha_enabled: false, captcha_max_rounds: 5 }));
+
+  const fresh = new ConfigManager({ configFile, log: silent });
+  assert.equal(fresh.get("captcha.api_key"), "CAP-OLD");
+  assert.equal(fresh.get("captcha.enabled"), false);
+  assert.equal(fresh.get("captcha.max_rounds"), 5);
+  assert.ok(String(JSON.parse(readFileSync(configFile, "utf-8")).captcha.api_key).startsWith("ENC:"));
+});
+
+test("SettingsService.load：captcha 字段缺失时回落默认值（enabled=true / max_rounds=3 / 密钥空）", () => {
+  const { cm } = makeConfig();
+  const s = new SettingsService(cm).loadSettingsSnapshot();
+  assert.equal(s.captcha_api_key, "");
+  assert.equal(s.captcha_enabled, true);
+  assert.equal(s.captcha_max_rounds, 3);
+});
+
+test("settings handler：captcha 数值范围与布尔类型校验（0 / 11 / 非布尔都被拒）", async () => {
+  const { call } = makeHandlers();
+  const I = SETTINGS_INVOKE;
+  await rejectsInvalid(() => call(I.settingsSave, baseSnapshot({ captcha_max_rounds: 0 })));
+  await rejectsInvalid(() => call(I.settingsSave, baseSnapshot({ captcha_max_rounds: 11 })));
+  await rejectsInvalid(() => call(I.settingsSave, baseSnapshot({ captcha_enabled: "true" })));
+  await rejectsInvalid(() => call(I.settingsSave, baseSnapshot({ captcha_enabled: 1 })));
+  await rejectsInvalid(() => call(I.settingsSave, baseSnapshot({ captcha_api_key: 123 })));
+
+  const saved = await call(I.settingsSave, baseSnapshot({ captcha_max_rounds: 10, captcha_enabled: false }));
+  assert.equal(saved.captcha_max_rounds, 10);
+  assert.equal(saved.captcha_enabled, false);
+});
+
+// ==================== wiring（设置界面按源码扫） ====================
+
+const CONFIG_TAB = new URL("../app/renderer/src/pages/settings/ConfigTab.tsx", import.meta.url);
+
+/** 取 save() 里组装的 snapshot 对象字面量的源码文本 */
+function snapshotLiteral(src) {
+  const start = src.indexOf("const snapshot: SettingsSnapshotDto = {");
+  assert.notEqual(start, -1, "没找到 save() 里的 snapshot 组装");
+  const end = src.indexOf("};", start);
+  assert.notEqual(end, -1, "没找到 snapshot 字面量的结尾");
+  return src.slice(start, end);
+}
+
+test("wiring：ConfigTab 的「人机验证打码」区块（密钥 / 开关 / 轮次上限）", () => {
+  const src = readFileSync(CONFIG_TAB, "utf-8");
+  assert.match(src, /title="人机验证打码（CapSolver）"/);
+  assert.match(src, /name="captcha_api_key"[\s\S]{0,200}?<Input\.Password/);
+  assert.match(src, /name="captcha_enabled"[\s\S]{0,120}?valuePropName="checked"/);
+  assert.match(src, /name="captcha_max_rounds"/);
+});
+
+test("wiring：captcha 三个字段并入 save() 的 snapshot，并在表单初始值里给了默认值", () => {
+  const src = readFileSync(CONFIG_TAB, "utf-8");
+  const snapshot = snapshotLiteral(src);
+  assert.match(snapshot, /captcha_api_key:/);
+  assert.match(snapshot, /captcha_enabled:/);
+  assert.match(snapshot, /captcha_max_rounds: num\("captcha_max_rounds"\)/);
+  assert.match(src, /captcha_api_key: ""/);
+  assert.match(src, /captcha_enabled: true/);
+  assert.match(src, /captcha_max_rounds: 3/);
 });

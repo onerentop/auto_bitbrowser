@@ -101,6 +101,7 @@ test("isSensitiveKeyPath: 固定清单命中 + providers.*.api_key 通配 + 不�
     "sub2api.admin_token",
     "sms_bus.token",
     "ai_agent.api_key",
+    "captcha.api_key",
   ]);
 });
 
@@ -312,5 +313,57 @@ test("getLlmConfig: 汇总 provider / api_key / model / max_tokens / timeout", (
     assert.equal(llm.model, "gemini-2.5-flash");
     assert.equal(llm.max_tokens, 8192);
     assert.equal(llm.timeout, 60);
+  });
+});
+
+// ==================== captcha（人机验证打码配置） ====================
+
+test("DEFAULT_CONFIG.captcha：默认值与 design.md §3 一致", () => {
+  assert.deepEqual(DEFAULT_CONFIG.captcha, {
+    provider: "capsolver",
+    enabled: true,
+    api_key: "",
+    max_rounds: 3,
+    timeout: 20,
+  });
+  withConfig(({ cm }) => {
+    assert.equal(cm.get("captcha.provider"), "capsolver");
+    assert.equal(cm.get("captcha.enabled"), true);
+    assert.equal(cm.get("captcha.api_key"), "");
+    assert.equal(cm.get("captcha.max_rounds"), 3);
+    assert.equal(cm.get("captcha.timeout"), 20);
+  });
+});
+
+test("captcha.api_key：历史明文在 load 时自动迁移为密文，get 读回明文", () => {
+  withConfig(
+    ({ cm, file, logs }) => {
+      cm.load();
+      const raw = readRaw(file);
+      assert.ok(
+        String(raw.captcha.api_key).startsWith("ENC:"),
+        `落盘应为密文，实际: ${raw.captcha.api_key}`,
+      );
+      assert.notEqual(raw.captcha.api_key, "CAP-legacy-plain");
+      assert.equal(cm.get("captcha.api_key"), "CAP-legacy-plain", "get 自动解密");
+      assert.ok(
+        logs.some((m) => m.includes("已迁移明文敏感字段") && m.includes("captcha.api_key")),
+        `迁移日志应提到 captcha.api_key，实际: ${JSON.stringify(logs)}`,
+      );
+    },
+    { captcha: { api_key: "CAP-legacy-plain" } },
+  );
+});
+
+test("set: captcha.api_key 落盘为密文，明文不出现在文件里（重复写入不叠加 ENC:）", () => {
+  withConfig(({ cm, file }) => {
+    cm.set("captcha.api_key", "CAP-7f3d-secret");
+    assert.equal(cm.get("captcha.api_key"), "CAP-7f3d-secret");
+    assert.ok(String(readRaw(file).captcha.api_key).startsWith("ENC:"));
+    assert.equal(fs.readFileSync(file, "utf-8").includes("CAP-7f3d-secret"), false);
+
+    cm.set("captcha.api_key", "CAP-second");
+    assert.equal(cm.get("captcha.api_key"), "CAP-second");
+    assert.equal(fs.readFileSync(file, "utf-8").includes("CAP-second"), false);
   });
 });

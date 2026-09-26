@@ -67,6 +67,9 @@ export interface SettingsSnapshotDto {
   theme: string;
   data_dir: string;
   data_separator: string;
+  captcha_api_key: string;
+  captcha_enabled: boolean;
+  captcha_max_rounds: number;
 }
 
 export type SettingsNumberField =
@@ -78,7 +81,8 @@ export type SettingsNumberField =
   | "delay_after_offer"
   | "delay_after_save"
   | "proxy_max_windows_per_ip"
-  | "default_thread_count";
+  | "default_thread_count"
+  | "captcha_max_rounds";
 
 /** 数值字段的 [最小, 最大, 默认] */
 export const SETTINGS_NUMBER_RANGES: Readonly<Record<SettingsNumberField, readonly [number, number, number]>> = {
@@ -91,6 +95,7 @@ export const SETTINGS_NUMBER_RANGES: Readonly<Record<SettingsNumberField, readon
   delay_after_save: [1, 60, 18], // :354-356
   proxy_max_windows_per_ip: [1, 100, 3], // :368-370
   default_thread_count: [1, 20, 3], // :387-389
+  captcha_max_rounds: [1, 10, 3], // 单次登录最多几轮图片挑战（design.md §3）
 };
 
 /**

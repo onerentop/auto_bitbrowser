@@ -29,6 +29,12 @@ export function asString(value: unknown, name: string, maxLength = MAX_FIELD_LEN
   return value;
 }
 
+/** 布尔字段（界面上的 Switch）：只接受真正的布尔值，不接受 0/1、"true" 这类宽松写法 */
+export function asBool(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") invalid(`${name} 必须是布尔值`);
+  return value;
+}
+
 export function field(obj: Record<string, unknown>, key: string, name = key, maxLength = MAX_FIELD_LENGTH): string {
   return asString(obj[key], name, maxLength);
 }

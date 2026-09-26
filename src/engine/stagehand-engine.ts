@@ -13,6 +13,10 @@ import { Stagehand } from "@browserbasehq/stagehand";
 import { IxBrowserClient } from "../ixbrowser/client.ts";
 import { Timeouts } from "./constants.ts";
 import { createCompatPage, type CompatPage } from "./playwright-compat.ts";
+import { CdpConnection, fetchPageTarget, parseHostPort } from "./captcha/cdp.ts";
+import { resolveCaptchaConfig } from "./captcha/config.ts";
+import { solveRecaptcha } from "./captcha/solver.ts";
+import type { CaptchaLogger, CaptchaSolveResult } from "./captcha/types.ts";
 
 /** provider → 该 provider 的 AI SDK 环境变量名 */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -183,7 +187,10 @@ export class StagehandGoogleEngine {
   private readonly ix: IxBrowserClient;
   private profileId: number | null = null;
   private loggedInEmail: string | null = null;
-
+  /** 窗口的 CDP HTTP 端点（127.0.0.1:<port>），打码那条独立 CDP 连接要靠它找页面目标 */
+  private debuggingAddress: string | null = null;
+  /** 打码用的独立 CDP 连接：懒建、close() 时关闭（Stagehand 那条不带 sessionId，访问不了跨域 iframe） */
+  private captchaCdp: CdpConnection | null = null;
   constructor(options: EngineOptions) {
     this.options = options;
     this.ix = options.ixClient ?? new IxBrowserClient();
@@ -231,6 +238,7 @@ export class StagehandGoogleEngine {
   /** 复用 CDP 端点建立 Stagehand 会话（内部实现，供 connectCdp 调用） */
   async connectViaCdp(wsEndpoint: string): Promise<void> {
     setupProviderEnvVars(this.options.modelName, this.options.apiKey);
+    this.debuggingAddress = parseHostPort(wsEndpoint);
 
     const sh = new Stagehand({
       env: "LOCAL",
@@ -252,6 +260,9 @@ export class StagehandGoogleEngine {
     this.profileId = id;
 
     const opened = await this.ix.openProfile(id);
+    // 打码那条独立 CDP 连接要用 HTTP 端点（/json/list）找页面目标；
+    // ixBrowser 直接给的就是它，缺失时从 ws 端点里解析出 host:port。
+    this.debuggingAddress = opened.debugging_address || parseHostPort(opened.ws);
     setupProviderEnvVars(this.options.modelName, this.options.apiKey);
 
     const sh = new Stagehand({
@@ -286,6 +297,10 @@ export class StagehandGoogleEngine {
     }
     this.sh = null;
     this.page = null;
+
+    // 打码用的独立 CDP 连接：先于关窗断开，重复调用安全（close() 幂等）
+    this.captchaCdp?.close();
+    this.captchaCdp = null;
 
     if (closeBrowser && this.profileId !== null) {
       try {
@@ -609,6 +624,57 @@ export class StagehandGoogleEngine {
   // 这些门面方法用动态 import 避免
   // engine ↔ operations 的循环依赖（operations 需要 engine 类型）。
   // 每个方法只做一件事：构造对应 Operation 并委托执行。
+  /**
+   * 自动求解 reCAPTCHA（CapSolver 图片识别）。
+   *
+   * 为什么要自开一条 CDP 连接：Stagehand 的 `page.sendCDP` 没有 sessionId 参数，
+   * 访问不了跨域 iframe（reCAPTCHA 的 bframe 是独立进程的 target），
+   * 而「取原始图 → 点格子 → 点 Verify」全都要在 bframe 里做。
+   *
+   * 失败返回原因而不是抛异常：登录流程据此给出可区分的提示，绝不假装成功。
+   * 未配置密钥 / 未启用 / 拿不到端点时**不发任何网络请求**。
+   */
+  async solveCaptcha(log?: CaptchaLogger | null): Promise<CaptchaSolveResult> {
+    const config = resolveCaptchaConfig();
+    if (!config) {
+      // 来源未注册 / 未启用 / 密钥为空，三种情况登录侧给的是同一条旧文案，这里不细分
+      return { ok: false, reason: "no_api_key", rounds: 0 };
+    }
+
+    const endpoint = this.debuggingAddress;
+    if (!endpoint) return { ok: false, reason: "no_endpoint", rounds: 0 };
+
+    try {
+      const { page } = this.ensureReady();
+      const currentUrl = typeof page.url === "function" ? page.url() : "";
+      // 窗口里常开多个标签页：按 URL 认页，选错会把鼠标事件派发到别的标签（点击落空）
+      const target = await fetchPageTarget(endpoint, currentUrl);
+      if (!target) return { ok: false, reason: "no_endpoint", rounds: 0 };
+
+      if (!this.captchaCdp) {
+        const fresh = new CdpConnection(target.webSocketDebuggerUrl);
+        await fresh.connect();
+        this.captchaCdp = fresh;
+      }
+
+      const result = await solveRecaptcha({ connection: this.captchaCdp, config, log: log ?? null });
+      if (!result.ok && result.reason === "cdp_failed") {
+        // 连接已经不可用了：丢掉缓存，下一次登录重新建
+        this.captchaCdp.close();
+        this.captchaCdp = null;
+      }
+      return result;
+    } catch (error) {
+      this.captchaCdp?.close();
+      this.captchaCdp = null;
+      return {
+        ok: false,
+        reason: "cdp_failed",
+        detail: error instanceof Error ? error.message : String(error),
+        rounds: 0,
+      };
+    }
+  }
 
   async login(options: {
     email: string;

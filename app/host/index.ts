@@ -19,6 +19,7 @@ import { DATA_ROOT_ENV, createHostContext } from "./context.ts";
 import { ERROR_CODES, errEnvelope } from "../shared/envelope.ts";
 import { isHostRequestMessage, type HostOutboundMessage } from "../shared/ipc.ts";
 import { registerStagehandConfigSource } from "../../src/engine/stagehand-config.ts";
+import { registerCaptchaConfigSource } from "../../src/engine/captcha/config.ts";
 
 /** utilityProcess 里 process.parentPort 的最小形状 */
 interface ParentPortLike {
@@ -60,7 +61,11 @@ const ctx = createHostContext({
 const dispatch = createDispatcher(createHostHandlers(ctx));
 
 // Stagehand 引擎在调用方未传 model/key 时回落到这份配置（取自 ConfigManager）
+// Stagehand 引擎在调用方未传 model/key 时回落到这份配置（取自 ConfigManager）
 registerStagehandConfigSource(() => ctx.config());
+// 打码（CapSolver）密钥同样由宿主注册：engine 层不认识 ConfigManager，
+// 未注册时 resolveCaptchaConfig() 返回 null —— 登录遇到验证码就维持旧的 captcha_required。
+registerCaptchaConfigSource(() => ctx.config());
 
 port.on("message", (event) => {
   const message = event.data;

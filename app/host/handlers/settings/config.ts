@@ -15,7 +15,7 @@ import {
 } from "../../../shared/channels/settings.ts";
 import type { HostContext } from "../../context.ts";
 import type { HostHandlerTable } from "../../dispatch.ts";
-import { asOneOf, asRecord, asInt, asString, field, invalid } from "./validate.ts";
+import { asBool, asOneOf, asRecord, asInt, asString, field, invalid } from "./validate.ts";
 
 export interface ConfigHandlerDeps {
   /** 测试注入：替换真实 HTTP */
@@ -33,7 +33,11 @@ const STRING_FIELDS = [
   "gmail_imap_password",
   "data_dir",
   "data_separator",
+  "captcha_api_key",
 ] as const;
+
+/** 布尔字段（界面上的 Switch）：必须是真正的布尔值 */
+const BOOL_FIELDS = ["captcha_enabled"] as const;
 
 /** 校验保存参数：字符串字段类型 / 长度，数值字段整数且在 SETTINGS_NUMBER_RANGES 范围内，枚举字段取值合法 */
 export function parseSnapshotArg(value: unknown): SettingsSnapshotDto {
@@ -49,9 +53,13 @@ export function parseSnapshotArg(value: unknown): SettingsSnapshotDto {
     numbers[key] = asInt(o[key], key, min, max);
   }
 
+  const bools = {} as Record<(typeof BOOL_FIELDS)[number], boolean>;
+  for (const key of BOOL_FIELDS) bools[key] = asBool(o[key], key);
+
   return {
     ...strings,
     ...numbers,
+    ...bools,
     ai_default_provider: asOneOf(o["ai_default_provider"], "ai_default_provider", AI_PROVIDERS),
     theme: asOneOf(o["theme"], "theme", SETTINGS_THEMES),
   };

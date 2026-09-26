@@ -83,6 +83,9 @@ function defaultFormValues(): Omit<FormValues, "data_dir"> {
     default_thread_count: 3,
     theme: "auto",
     data_separator: "----",
+    captcha_api_key: "",
+    captcha_enabled: true,
+    captcha_max_rounds: 3,
   };
 }
 
@@ -195,6 +198,9 @@ export function ConfigTab(): ReactElement {
       theme: normalizeThemeMode(v.theme),
       data_dir: dataDirInput.trim(),
       data_separator: (v.data_separator ?? "").trim(),
+      captcha_api_key: (v.captcha_api_key ?? "").trim(),
+      captcha_enabled: v.captcha_enabled ?? true,
+      captcha_max_rounds: num("captcha_max_rounds"),
     };
     setSaving(true);
     try {
@@ -404,6 +410,19 @@ export function ConfigTab(): ReactElement {
               ]}
             />
             <NumberField name="ai_max_steps" label="最大步骤" />
+          </Section>
+
+          <Section
+            title="人机验证打码（CapSolver）"
+            description="登录遇到 Google 图片人机验证时自动打码；密钥留空或关闭开关则不自动打码"
+          >
+            <Form.Item name="captcha_api_key" label="CapSolver API Key">
+              <Input.Password placeholder="留空表示不自动打码" autoComplete="off" />
+            </Form.Item>
+            <Form.Item name="captcha_enabled" label="启用自动打码" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <NumberField name="captcha_max_rounds" label="轮次上限" />
           </Section>
 
           <Section

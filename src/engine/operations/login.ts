@@ -27,10 +27,15 @@
  * 10. 提交方式（真机测试发现）：ixBrowser 窗口里常开着多个标签页，登录页不在前台时
  *     按坐标的鼠标点击会落空。打开登录页后先切到前台，提交时依次尝试
  *     Enter → 点击按钮 → 派发点击事件 → AI，每次都确认页面真的跳转了。
+ * 11. 人机验证（reCAPTCHA）：不再直接判失败。引擎实现了 solveCaptcha 就先自动打码
+ *     （CapSolver 图片识别 + 真实鼠标点击），成功后必须用 detectStage 复核页面真的跳走了；
+ *     未配置密钥 / 打码失败一律维持 captcha_required + blocked，只把原因写进 error_type 与
+ *     message（写进账号 last_error 与任务日志，便于区分「未配置」「API 报错」「打码后没通过」）。
  */
 import { generateTotp } from "../totp.ts";
 import { Timeouts } from "../constants.ts";
 import { createLoginResult, type LoginResult, type LoginState, type OperationStatus } from "../types.ts";
+import type { CaptchaSolveResult } from "../captcha/types.ts";
 
 /** 登录操作用到的引擎能力（StagehandGoogleEngine 满足；单测用假引擎） */
 export interface LoginEngine {
@@ -60,7 +65,21 @@ export interface LoginEngine {
     mode?: "prefix" | "contains",
   ): Promise<{ tag: string; href: string | null } | null>;
   act(instruction: string): Promise<{ success: boolean }>;
+  /**
+   * 可选：自动求解 reCAPTCHA（CapSolver）。假引擎与未接打码的引擎可以不实现 ——
+   * 此时验证码阶段维持既有 captcha_required 行为。返回 ok 只表示「已离开验证码页」，
+   * 调用方仍要用 detectStage 复核，绝不凭它的返回值判成功。
+   */
+  solveCaptcha?(log?: ((msg: string) => void) | null): Promise<CaptchaSolveResult>;
 }
+
+/** fail() 的签名（失败结果构造器），供 resolveBlocked / captchaFail 复用 */
+export type Fail = (
+  login_state: LoginState,
+  error_type: string,
+  error: string,
+  extra?: Partial<LoginResult> & { status?: OperationStatus },
+) => LoginResult;
 
 /** 登录入口（hl=en 固定页面语言，continue 固定登录后跳到 myaccount） */
 export const SIGNIN_URL =
@@ -272,8 +291,9 @@ export class LoginOperation {
       if (stage === "chooser") {
         return fail("logged_out", "chooser_stuck", "账号选择页没有放行（重试一次后仍停在选择页）");
       }
-      const blocked = this.blockedResult(stage, totpSecret, fail);
-      if (blocked) return blocked;
+      const blocked = await this.resolveBlocked(stage, totpSecret, fail, log);
+      stage = blocked.stage;
+      if (blocked.blocked) return blocked.blocked;
 
       // 5. 密码（只写入一次）
       if (stage === "password") {
@@ -306,8 +326,9 @@ export class LoginOperation {
           }
         }
       }
-      const blocked2 = this.blockedResult(stage, totpSecret, fail);
-      if (blocked2) return blocked2;
+      const blocked2 = await this.resolveBlocked(stage, totpSecret, fail, log);
+      stage = blocked2.stage;
+      if (blocked2.blocked) return blocked2.blocked;
 
       // 6. 验证器（TOTP）
       if (stage === "totp" && totpSecret) {
@@ -328,8 +349,9 @@ export class LoginOperation {
             two_fa_method: "totp",
           });
         }
-        const blocked3 = this.blockedResult(stage, totpSecret, fail);
-        if (blocked3) return blocked3;
+        const blocked3 = await this.resolveBlocked(stage, totpSecret, fail, log);
+        stage = blocked3.stage;
+        if (blocked3.blocked) return blocked3.blocked;
       }
 
       /**
@@ -406,6 +428,111 @@ export class LoginOperation {
       }
       default:
         return null;
+    }
+  }
+
+  /**
+   * 「不能继续」的阶段的统一处理。
+   *
+   * 验证码阶段先尝试自动打码（引擎实现了 solveCaptcha 才试），其余阶段原样交给 blockedResult。
+   * 返回 `{ blocked: null, stage }` 表示可以继续，`stage` 可能已被更新成打码后的新阶段；
+   * `blocked` 非空表示到此为止。
+   *
+   * 打码失败**绝不改写 login_state / status**（仍是 captcha_required / blocked），
+   * 只是把原因写进 error_type 与 message，供日志与账号 last_error 区分。
+   */
+  private async resolveBlocked(
+    stage: LoginStage,
+    totpSecret: string | null,
+    fail: Fail,
+    log: (msg: string) => void,
+  ): Promise<{ blocked: LoginResult | null; stage: LoginStage }> {
+    if (stage !== "captcha") {
+      return { blocked: this.blockedResult(stage, totpSecret, fail), stage };
+    }
+
+    // 可选能力：假引擎与未接打码的引擎都没有这个方法 —— 此时维持既有行为
+    const solve = this.engine.solveCaptcha?.bind(this.engine);
+    if (!solve) {
+      return { blocked: this.blockedResult(stage, totpSecret, fail), stage };
+    }
+
+    log("检测到人机验证（reCAPTCHA），尝试自动打码");
+    const solved = await solve(log);
+    if (!solved.ok) {
+      log(`自动打码未通过（${solved.reason}${solved.detail ? `: ${solved.detail}` : ""}）`);
+      return { blocked: this.captchaFail(solved, fail), stage };
+    }
+
+    log(`自动打码已通过（${solved.rounds} 轮，${(solved.costMs / 1000).toFixed(1)}s），等待页面跳转`);
+    const after = await this.waitForStage(["captcha", "unknown"], 25_000);
+    if (after === "captcha") {
+      return {
+        blocked: fail("captcha_required", "captcha_not_passed", `自动打码后仍停留在人机验证页（已尝试 ${solved.rounds} 轮）`, {
+          status: "blocked",
+        }),
+        stage,
+      };
+    }
+    if (after === "unknown") {
+      // 已离开验证码页，但下一步还没渲染出来：再等一轮；仍不确定就如实失败，不假装成功
+      const settled = await this.waitForStage(["unknown"], 15_000);
+      if (settled === "unknown") {
+        // 有意保留「可重试」：这个 error_type 不在 batch-account-processor 的 NON_RETRYABLE_ERRORS 里，
+        // 批量任务会再整轮登录一次。这里是「页面卡住没渲染」而非「验证码过不去」，
+        // 重试有机会成功，成本上限也只是再打几轮码（轮次由 captcha.max_rounds 约束）。
+        return {
+          blocked: fail("unknown", "captcha_solved_no_progress", "自动打码已通过，但页面没有渲染出下一步", {
+            status: "blocked",
+          }),
+          stage: "unknown",
+        };
+      }
+      return { blocked: null, stage: settled };
+    }
+    return { blocked: null, stage: after };
+  }
+
+  /** 打码失败 → 可区分的失败结果（未配置密钥时逐字保留旧文案） */
+  private captchaFail(
+    solved: Extract<CaptchaSolveResult, { ok: false }>,
+    fail: Fail,
+  ): LoginResult {
+    switch (solved.reason) {
+      case "no_api_key":
+      case "disabled":
+        // 未配置密钥 / 未启用：行为与接打码之前**完全一致**
+        return fail("captcha_required", "captcha_required", "需要人机验证（验证码），已停止", { status: "blocked" });
+      case "no_endpoint":
+      case "cdp_failed":
+        return fail("captcha_required", "captcha_api_error", "人机验证自动打码不可用（无法连接窗口调试端口）", {
+          status: "blocked",
+        });
+      case "no_raw_image":
+      case "unsupported_object": {
+        const why = solved.reason === "no_raw_image" ? "未取到原始图" : "挑战对象不支持";
+        return fail("captcha_required", "captcha_api_error", `人机验证自动打码未能开始（${why}）`, { status: "blocked" });
+      }
+      case "api_error":
+        return fail(
+          "captcha_required",
+          "captcha_api_error",
+          `人机验证自动打码失败（CapSolver 报错: ${String(solved.detail ?? "").slice(0, 200)}）`,
+          { status: "blocked" },
+        );
+      case "no_challenge":
+        return fail("captcha_required", "captcha_not_passed", "人机验证页上没有可自动求解的图片挑战", {
+          status: "blocked",
+        });
+      case "round_limit":
+        return fail("captcha_required", "captcha_not_passed", `已达到打码轮次上限（${solved.rounds} 轮）仍未通过`, {
+          status: "blocked",
+        });
+      case "not_passed":
+      default:
+        return fail("captcha_required", "captcha_not_passed", `自动打码后仍停留在人机验证页（已尝试 ${solved.rounds} 轮）`, {
+          status: "blocked",
+        });
     }
   }
 

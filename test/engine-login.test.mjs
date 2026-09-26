@@ -670,6 +670,132 @@ test("失败：提交密码后出现 reCAPTCHA", async () => {
   await expectFail({ captchaAt: "password" }, {}, { state: "captcha_required", type: "captcha_required" });
 });
 
+// ==================== 人机验证自动打码（CapSolver 集成） ====================
+
+/**
+ * 给假引擎装上 solveCaptcha。
+ * `solve` 收到 (fake, log)；返回 CaptchaSolveResult。调用记录存在 `g.solveCalls`。
+ */
+function withSolver(g, solve) {
+  g.solveCalls = [];
+  g.solveCaptcha = async (log) => {
+    g.solveCalls.push(log);
+    return solve(g, log);
+  };
+  return g;
+}
+
+test("验证码：引擎报 no_api_key（未配置密钥）→ 逐字保留旧文案、状态仍是 blocked、不写密码", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: false, reason: "no_api_key", rounds: 0 }));
+  const { result, logs } = await run(g);
+  assert.equal(g.solveCalls.length, 1, "配置了 solveCaptcha 就要被调用一次");
+  assert.equal(result.success, false);
+  assert.equal(result.login_state, "captcha_required");
+  assert.equal(result.status, "blocked");
+  assert.equal(result.error_type, "captcha_required");
+  assert.equal(result.error, "需要人机验证（验证码），已停止");
+  assert.equal(passwordWrites(g).length, 0, "验证码没过就不能写密码");
+  assert.ok(logs.some((l) => l.includes("尝试自动打码")));
+  assertNoSecretLeak(g, logs);
+});
+
+test("验证码：自动打码通过 → 页面跳到密码页，继续走完密码与验证器并登录成功", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), (fake) => {
+    fake.go("password"); // 打码通过 = 离开验证码页
+    return { ok: true, rounds: 2, costMs: 18_400 };
+  });
+  const { result, logs } = await run(g);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.login_state, "logged_in");
+  assert.equal(g.solveCalls.length, 1);
+  assert.ok(logs.some((l) => l.includes("检测到人机验证")), logs.join("\n"));
+  assert.ok(logs.some((l) => l.includes("自动打码已通过（2 轮，18.4s）")), logs.join("\n"));
+  assert.deepEqual(g.submits, ["enter:email", "enter:password", "enter:totp"]);
+  assert.equal(passwordWrites(g).length, 1);
+  assertNoSecretLeak(g, logs);
+});
+
+test("验证码：打码声称通过、页面却仍停在验证码页 → 判失败（不假装成功）", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: true, rounds: 1, costMs: 9_000 }));
+  const { result, logs } = await run(g);
+  assert.equal(result.success, false);
+  assert.equal(result.login_state, "captcha_required");
+  assert.equal(result.status, "blocked");
+  assert.equal(result.error_type, "captcha_not_passed");
+  assert.match(result.error ?? "", /仍停留在人机验证页（已尝试 1 轮）/);
+  assert.equal(passwordWrites(g).length, 0);
+  assertNoSecretLeak(g, logs);
+});
+
+test("验证码：打码通过但下一步一直没渲染（unknown）→ 判失败并给出专门原因", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), (fake) => {
+    fake.go("pwd_transition"); // 离开验证码页，但密码框还没出来
+    return { ok: true, rounds: 1, costMs: 7_000 };
+  });
+  const { result } = await run(g);
+  assert.equal(result.success, false);
+  assert.equal(result.error_type, "captcha_solved_no_progress");
+  assert.equal(result.status, "blocked");
+  assert.equal(passwordWrites(g).length, 0);
+});
+
+test("验证码：打码 API 报错 → 原因可区分（与「未配置密钥」不是同一句）", async () => {
+  const noKey = await run(
+    withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: false, reason: "no_api_key", rounds: 0 })),
+  );
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({
+    ok: false,
+    reason: "api_error",
+    detail: "ERROR_KEY_DENIED_ACCESS",
+    rounds: 0,
+  }));
+  const { result, logs } = await run(g);
+  assert.equal(result.success, false);
+  assert.equal(result.login_state, "captcha_required");
+  assert.equal(result.status, "blocked");
+  assert.equal(result.error_type, "captcha_api_error");
+  assert.match(result.error ?? "", /CapSolver 报错: ERROR_KEY_DENIED_ACCESS/);
+  assert.notEqual(result.error, noKey.result.error, "API 报错与未配置密钥要说清楚区别");
+  assert.ok(logs.some((l) => l.includes("自动打码未通过（api_error")), logs.join("\n"));
+});
+
+test("验证码：未取到原始图 / 挑战对象不支持 → 归到打码未开始，且不写密码", async () => {
+  /** @type {Array<[import("../src/engine/captcha/types.ts").CaptchaFailureReason, RegExp]>} */
+  const cases = [
+    ["no_raw_image", /未取到原始图/],
+    ["unsupported_object", /挑战对象不支持/],
+  ];
+  for (const [reason, want] of cases) {
+    const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: false, reason, rounds: 0 }));
+    const { result } = await run(g);
+    assert.equal(result.login_state, "captcha_required");
+    assert.equal(result.status, "blocked");
+    assert.equal(result.error_type, "captcha_api_error");
+    assert.match(result.error ?? "", want);
+    assert.equal(passwordWrites(g).length, 0);
+  }
+});
+
+test("验证码：达到轮次上限 → 原因里带轮次数", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "email" }), () => ({ ok: false, reason: "round_limit", rounds: 3 }));
+  const { result } = await run(g);
+  assert.equal(result.error_type, "captcha_not_passed");
+  assert.match(result.error ?? "", /已达到打码轮次上限（3 轮）/);
+  assert.equal(result.status, "blocked");
+});
+
+test("验证码：提交密码后才弹 reCAPTCHA，也能自动打码后走完", async () => {
+  const g = withSolver(new FakeGoogle({ captchaAt: "password" }), (fake) => {
+    fake.go("totp"); // 通过后直接进入验证器页
+    return { ok: true, rounds: 1, costMs: 6_000 };
+  });
+  const { result } = await run(g);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.login_state, "logged_in");
+  assert.equal(g.solveCalls.length, 1);
+  assert.equal(passwordWrites(g).length, 1, "密码只写一次");
+});
+
 test("失败：需要短信两步验证", async () => {
   const { result } = await expectFail({ secondFactor: "sms" }, {}, { state: "need_2fa", type: "need_2fa", message: /短信/ });
   assert.equal(result.two_fa_method, "sms");

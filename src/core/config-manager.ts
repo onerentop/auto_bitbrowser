@@ -42,6 +42,7 @@ export const SENSITIVE_CONFIG_PATHS: readonly string[] = [
   "sub2api.admin_token",
   "sms_bus.token",
   "ai_agent.api_key",
+  "captcha.api_key",
 ];
 
 /**
@@ -148,6 +149,14 @@ export const DEFAULT_CONFIG: ConfigDict = {
     api_key: "",
     base_url: "",
     model: "",
+  },
+  // 人机验证打码（CapSolver）
+  captcha: {
+    provider: "capsolver", // 扩展位：当前只认 capsolver
+    enabled: true,
+    api_key: "", // 加密存储
+    max_rounds: 3, // 单次登录最多几轮图片挑战
+    timeout: 20, // 单次 CapSolver 请求超时（秒）
   },
 };
 

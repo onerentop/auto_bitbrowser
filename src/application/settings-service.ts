@@ -34,6 +34,9 @@ export interface SettingsSnapshot {
   theme: string;
   data_dir: string;
   data_separator: string;
+  captcha_api_key: string;
+  captcha_enabled: boolean;
+  captcha_max_rounds: number;
 }
 
 /** 配置文件里的值可能被手工改坏：非字符串按空串处理 */
@@ -47,6 +50,11 @@ function str(value: unknown, fallback = ""): string {
 function num(value: unknown, fallback: number): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+/** 非布尔回退到默认值（配置可能被手工改坏） */
+function bool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function isRecord(value: unknown): value is ConfigDict {
@@ -115,6 +123,10 @@ export class SettingsService {
       theme: str(c.get("theme", "auto"), "auto"),
       data_dir: str(c.get("data_dir", "")),
       data_separator: str(c.get("data_separator", "----"), "----"),
+      // captcha.api_key 是敏感路径，get() 自动解密
+      captcha_api_key: str(c.get("captcha.api_key", "")),
+      captcha_enabled: bool(c.get("captcha.enabled", true), true),
+      captcha_max_rounds: num(c.get("captcha.max_rounds", 3), 3),
     };
   }
 
@@ -164,6 +176,13 @@ export class SettingsService {
     setPath(tree, "default_thread_count", s.default_thread_count);
     setPath(tree, "theme", s.theme);
     setPath(tree, "data_separator", s.data_separator.trim());
+
+    // CapSolver 密钥与上面两个 API Key 同规则：输入为空时不覆盖已保存的密钥
+    if (s.captcha_api_key) {
+      setPath(tree, "captcha.api_key", encryptSensitive(s.captcha_api_key));
+    }
+    setPath(tree, "captcha.enabled", s.captcha_enabled);
+    setPath(tree, "captcha.max_rounds", s.captcha_max_rounds);
 
     this.config.save(tree);
   }
