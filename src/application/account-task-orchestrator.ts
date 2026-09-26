@@ -22,6 +22,7 @@ import {
 } from "../automation/batch-account-processor.ts";
 import type { IxBrowserClient } from "../ixbrowser/client.ts";
 import { deleteBrowserById, type IxWindowClient } from "../ixbrowser/window.ts";
+import { abortLoginsWithClosedWindow } from "../automation/live-engines.ts";
 
 export type AccountDict = Record<string, unknown>;
 export type LogFn = (message: string) => void;
@@ -342,7 +343,15 @@ export async function executeAccountWorkerTask(params: {
     onAccountDone,
   });
   const p = processor;
-  params.onStop(() => p.stop());
+  params.onStop(() => {
+    p.stop();
+    // 进行中的账号如果窗口已经关了，它永远等不到结果 —— 停止时立刻掐断它，
+    // 否则界面会一直停在进行中的那个账号上（真机 2026-09-26）。
+    // 窗口还活着时不动它，保持「停止不打断进行中账号」的既有语义。
+    void abortLoginsWithClosedWindow(log).catch((e: unknown) =>
+      log(`检查窗口是否已关闭失败: ${errorText(e)}`),
+    );
+  });
 
   if (shouldStop()) return { ...createStoppedResult(taskType) };
   const result = await runAccountWorkerTask({

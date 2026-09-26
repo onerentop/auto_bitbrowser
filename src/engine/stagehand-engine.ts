@@ -196,6 +196,13 @@ export class StagehandGoogleEngine {
    * 只是给单测的接缝：真机 15s 太长，测试要能把它压到几十毫秒才验得了「卡住的调用会超时」。
    */
   private callTimeoutOverrideMs: number | null = null;
+
+  /**
+   * 「主动掐断」信号：窗口已关闭时（见 live-engines.ts）用它让所有在飞的调用立刻失败。
+   * null = 尚未连接或已掐断，此时 withLimit 不参与竞速。
+   */
+  private abortFailure: Promise<never> | null = null;
+  private rejectAbort: ((error: Error) => void) | null = null;
   constructor(options: EngineOptions) {
     this.options = options;
     this.ix = options.ixClient ?? new IxBrowserClient();
@@ -257,6 +264,7 @@ export class StagehandGoogleEngine {
 
     await sh.init();
     this.sh = sh;
+    this.armAbort();
     this.page = await sh.context.awaitActivePage(15_000);
   }
 
@@ -282,6 +290,7 @@ export class StagehandGoogleEngine {
 
     await sh.init();
     this.sh = sh;
+    this.armAbort();
     this.page = await sh.context.awaitActivePage(15_000);
   }
 
@@ -295,6 +304,11 @@ export class StagehandGoogleEngine {
 
   /** 关闭 Stagehand 并按需关闭 ixBrowser 窗口 */
   async close(closeBrowser = false): Promise<void> {
+
+    // 先让在飞的调用立刻失败，再去关底层连接：停止要「立即」，不能等封顶超时
+    this.abortFailure = null;
+    this.rejectAbort?.(new Error("引擎已中断：窗口已关闭"));
+    this.rejectAbort = null;
     try {
       if (this.sh) await this.sh.close();
     } catch {
@@ -316,9 +330,45 @@ export class StagehandGoogleEngine {
     }
   }
 
+  /**
+   * 窗口（那台浏览器的进程）是否还活着。
+   *
+   * 走 DevTools 的 HTTP 端点 `http://<debugging_address>/json/version`：它由浏览器进程本身提供，
+   * 窗口一关（或被掐、崩掉）就连不上了。这是「窗口已关闭」最直接、又不需要额外依赖的判据
+   * —— ixBrowser 的 profile-list 里没有「窗口是否打开」这个字段（真机探针确认过）。
+   *
+   * 拿不到调试地址时返回 true：情况不明就当作还活着，绝不因为「不知道」去掐断一个正常登录。
+   */
+  async isWindowAlive(timeoutMs: number = Timeouts.WINDOW_PROBE): Promise<boolean> {
+    const address = this.debuggingAddress;
+    if (!address) return true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`http://${address}/json/version`, { signal: controller.signal });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private ensureReady(): { sh: V3Like; page: PageLike } {
     if (!this.sh || !this.page) throw new Error("引擎未初始化，请先调用 connect()");
     return { sh: this.sh, page: this.page };
+  }
+
+  /**
+   * 装好「主动掐断」信号：close() 时触发它，所有在飞的引擎调用立刻失败。
+   * 每次 connect 重建一份（一次连接对应一个信号），因为 close() 之后旧信号已处于失败态。
+   */
+  private armAbort(): void {
+    this.abortFailure = new Promise<never>((_resolve, reject) => {
+      this.rejectAbort = reject;
+    });
+    // 没有调用在飞时被掐断，别让它变成「未处理的 rejection」
+    void this.abortFailure.catch(() => undefined);
   }
 
   /**
@@ -339,7 +389,7 @@ export class StagehandGoogleEngine {
     const limitMs = this.callTimeoutOverrideMs ?? ms;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const racers: Array<Promise<T> | Promise<never>> = [
         promise,
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
@@ -347,7 +397,10 @@ export class StagehandGoogleEngine {
             limitMs,
           );
         }),
-      ]);
+      ];
+      // 引擎被主动掐断（窗口已关闭）时立刻失败，不等封顶超时 —— 停止才是即时的
+      if (this.abortFailure) racers.push(this.abortFailure);
+      return await Promise.race(racers);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }

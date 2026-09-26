@@ -7,6 +7,7 @@
  */
 import { StagehandGoogleEngine } from "../engine/stagehand-engine.ts";
 import { getStagehandConfig } from "../engine/stagehand-config.ts";
+import { registerLiveEngine } from "./live-engines.ts";
 
 /** provider 名称到 Stagehand 模型前缀的映射 */
 export const PROVIDER_MAP: Record<string, string> = {
@@ -98,13 +99,17 @@ export async function withEngine<T>(
   onError: (message: string) => T,
 ): Promise<T> {
   let engine: StagehandGoogleEngine | null = null;
+  let unregister: (() => void) | null = null;
   try {
     engine = await connectEngine(browserId, options);
+    // 登记进「正在跑的登录引擎」：停止任务时据此判断这个窗口是不是已经关了（见 live-engines.ts）
+    unregister = registerLiveEngine(String(browserId), engine);
     return await body(engine);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return onError(msg);
   } finally {
+    unregister?.();
     if (engine) {
       try {
         await engine.stop(options.closeAfter ?? false);

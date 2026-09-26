@@ -68,6 +68,11 @@ export const Timeouts = {
   ENGINE_CALL: 15000,
   /** 单次 AI 往返（act / observe / extract）的上限；AI 本来就慢，给得宽一些但仍有界 */
   ENGINE_AI_CALL: 60000,
+  /**
+   * 判断「窗口还在不在」的探针超时（DevTools HTTP 端点）。
+   * 只用于停止时的一次判定，给短一点让停止感觉是即时的。
+   */
+  WINDOW_PROBE: 2000,
 } as const;
 
 /** 登录页面关键词 */
