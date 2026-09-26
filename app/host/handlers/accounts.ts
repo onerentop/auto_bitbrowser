@@ -345,6 +345,10 @@ export function createAccountsHandlers(ctx: HostContext, deps: AccountsHandlerDe
         return ctx.tasks.start("login", spec.label, async (api: TaskApi) => {
           const total = spec.accounts.length;
           api.log(spec.startLog);
+          // 上一次登录没正常收尾（后端被杀 / CDP 断掉卡死后被强停）会留下「正在登录」这种非终态，
+          // 不清掉界面就永远显示「正在登录」。登录流程自己会在结束时改成终态，所以不会误伤进行中的账号。
+          const staleLogin = repo().clearStaleLoginInProgress();
+          if (staleLogin > 0) api.log(`清理上次未收尾的「正在登录」状态: ${staleLogin} 个`);
           api.progress(0, total);
           const result = await executeAccountWorkerTask({
             taskType: "login",

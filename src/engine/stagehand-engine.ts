@@ -191,6 +191,11 @@ export class StagehandGoogleEngine {
   private debuggingAddress: string | null = null;
   /** 打码用的独立 CDP 连接：懒建、close() 时关闭（Stagehand 那条不带 sessionId，访问不了跨域 iframe） */
   private captchaCdp: CdpConnection | null = null;
+  /**
+   * 封顶时间的覆盖值（毫秒）；null = 按 Timeouts 里的常量走。
+   * 只是给单测的接缝：真机 15s 太长，测试要能把它压到几十毫秒才验得了「卡住的调用会超时」。
+   */
+  private callTimeoutOverrideMs: number | null = null;
   constructor(options: EngineOptions) {
     this.options = options;
     this.ix = options.ixClient ?? new IxBrowserClient();
@@ -316,6 +321,38 @@ export class StagehandGoogleEngine {
     return { sh: this.sh, page: this.page };
   }
 
+  /**
+   * 给引擎调用封顶。
+   *
+   * 为什么必须封顶：ixBrowser 窗口崩溃或被关时，CDP 传输会直接断掉
+   * （真机见过 `initiating shutdown → CDP transport closed: socket-close code=1006`）。
+   * 这种时候底层 promise **永远不会 settle**，`try/catch` 兜不住 —— 登录流程的
+   * `waitForStage()` 轮询会永远卡在 `await`，那个账号永远结束不了，任务也永远走不到
+   * 结束（真机 2026-09-26：批量登录卡在 19/20，点「停止」也没反应，因为停止按既有
+   * 设计不打断进行中的账号，而进行中的账号正卡在这个 await 上）。
+   *
+   * 超时抛错后由 `BatchAccountProcessor` 的逐账号 `try/catch` 收成「尝试异常」，
+   * 账号正常收尾，任务是结束还是停止都能正常落地。
+   */
+  private async withLimit<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    // 单测可以把封顶压到几十毫秒，避免每个用例真等 15s
+    const limitMs = this.callTimeoutOverrideMs ?? ms;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} 超时（${limitMs}ms）：浏览器连接可能已断开`)),
+            limitMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   /** 固定等待 */
   async wait(milliseconds: number): Promise<void> {
     await new Promise((r) => setTimeout(r, milliseconds));
@@ -341,8 +378,10 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     if (typeof page.evaluate === "function") {
       try {
-        const text = await page.evaluate<string>(
-          "document.body ? document.body.innerText : ''",
+        const text = await this.withLimit(
+          page.evaluate<string>("document.body ? document.body.innerText : ''"),
+          Timeouts.ENGINE_CALL,
+          "读取页面文本",
         );
         return typeof text === "string" ? text : "";
       } catch {
@@ -352,7 +391,7 @@ export class StagehandGoogleEngine {
     // 回退：拿不到 evaluate 能力时退回 HTML（调用方需自行容忍噪声）
     if (typeof page.content === "function") {
       try {
-        return await page.content();
+      return await this.withLimit(page.content(), Timeouts.ENGINE_CALL, "读取页面 HTML");
       } catch {
         return "";
       }
@@ -377,7 +416,7 @@ export class StagehandGoogleEngine {
     try {
       const loc = this.firstLocator(selector);
       if (!loc) return false;
-      await loc.fill(value);
+      await this.withLimit(loc.fill(value), Timeouts.ENGINE_CALL, "填写输入框");
       return true;
     } catch {
       return false;
@@ -396,7 +435,7 @@ export class StagehandGoogleEngine {
     try {
       const loc = this.firstLocator(selector);
       if (!loc || typeof loc.isVisible !== "function") return false;
-      if (!(await loc.isVisible())) return false;
+      if (!(await this.withLimit(loc.isVisible(), Timeouts.ENGINE_CALL, "判断元素可见"))) return false;
     } catch {
       return false;
     }
@@ -404,7 +443,7 @@ export class StagehandGoogleEngine {
     if (typeof page.evaluate !== "function") return true;
     try {
       // null：主文档里查不到（可能在 shadow DOM 里），沿用 Stagehand 的结论
-      const rendered = await page.evaluate<boolean | null>(renderedCheckScript(selector));
+      const rendered = await this.withLimit(page.evaluate<boolean | null>(renderedCheckScript(selector)), Timeouts.ENGINE_CALL, "复核元素渲染可见性");
       return rendered !== false;
     } catch {
       return true;
@@ -416,7 +455,7 @@ export class StagehandGoogleEngine {
     try {
       const loc = this.firstLocator(selector);
       if (!loc || typeof loc.click !== "function") return false;
-      await loc.click();
+      await this.withLimit(loc.click(), Timeouts.ENGINE_CALL, "点击元素");
       return true;
     } catch {
       return false;
@@ -431,7 +470,7 @@ export class StagehandGoogleEngine {
     try {
       const loc = this.firstLocator(selector);
       if (!loc || typeof loc.sendClickEvent !== "function") return false;
-      await loc.sendClickEvent();
+      await this.withLimit(loc.sendClickEvent(), Timeouts.ENGINE_CALL, "派发点击事件");
       return true;
     } catch {
       return false;
@@ -452,8 +491,10 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     if (typeof page.evaluate !== "function") return null;
     try {
-      const hit = await page.evaluate<{ tag: string; href: string | null } | null>(
-        textClickScript(text, mode),
+      const hit = await this.withLimit(
+        page.evaluate<{ tag: string; href: string | null } | null>(textClickScript(text, mode)),
+        Timeouts.ENGINE_CALL,
+        "按文本点击",
       );
       return hit ?? null;
     } catch {
@@ -465,7 +506,7 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     if (typeof page.sendCDP !== "function") return;
     try {
-      await page.sendCDP("Page.bringToFront");
+      await this.withLimit(page.sendCDP("Page.bringToFront"), Timeouts.ENGINE_CALL, "切换标签页到前台");
     } catch {
       /* 切前台失败不影响后续操作 */
     }
@@ -476,7 +517,7 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     if (typeof page.keyPress !== "function") return false;
     try {
-      await page.keyPress(key);
+      await this.withLimit(page.keyPress(key), Timeouts.ENGINE_CALL, "按键");
       return true;
     } catch {
       return false;
@@ -488,10 +529,10 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     try {
       if (typeof page.evaluate === "function") {
-        const html = await page.evaluate<string>("document.documentElement ? document.documentElement.outerHTML : ''");
+        const html = await this.withLimit(page.evaluate<string>("document.documentElement ? document.documentElement.outerHTML : ''"), Timeouts.ENGINE_CALL, "读取页面 HTML");
         if (typeof html === "string") return html;
       }
-      if (typeof page.content === "function") return await page.content();
+      if (typeof page.content === "function") return await this.withLimit(page.content(), Timeouts.ENGINE_CALL, "读取页面 HTML");
     } catch {
       /* 取不到就当空 */
     }
@@ -507,16 +548,16 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     try {
       if (page.keyboard && typeof page.keyboard.type === "function") {
-        await page.keyboard.type(text);
+        await this.withLimit(page.keyboard.type(text), Timeouts.ENGINE_CALL, "键盘输入");
         return true;
       }
       if (typeof page.type === "function") {
-        await page.type(text);
+        await this.withLimit(page.type(text), Timeouts.ENGINE_CALL, "键盘输入");
         return true;
       }
       // 回退：尝试对当前焦点元素用 locator 输入
       if (typeof page.locator === "function") {
-        await page.locator("input:focus").type(text);
+        await this.withLimit(page.locator("input:focus").type(text), Timeouts.ENGINE_CALL, "键盘输入");
         return true;
       }
     } catch {
@@ -533,10 +574,12 @@ export class StagehandGoogleEngine {
     const start = Date.now();
     try {
       const { page } = this.ensureReady();
-      await page.goto(url, {
-        waitUntil: options.waitUntil ?? "domcontentloaded",
-        timeout: options.timeoutMs ?? Timeouts.NAVIGATION,
-      });
+      const navTimeoutMs = options.timeoutMs ?? Timeouts.NAVIGATION;
+      await this.withLimit(
+        page.goto(url, { waitUntil: options.waitUntil ?? "domcontentloaded", timeout: navTimeoutMs }),
+        navTimeoutMs + 5_000,
+        "页面导航",
+      );
       return { success: true, data: page.url(), durationMs: Date.now() - start };
     } catch (err) {
       return {
@@ -552,7 +595,7 @@ export class StagehandGoogleEngine {
     const start = Date.now();
     try {
       const { sh } = this.ensureReady();
-      const result = await sh.act(instruction);
+      const result = await this.withLimit(sh.act(instruction), Timeouts.ENGINE_AI_CALL, "AI 动作");
       const ok =
         result && typeof result === "object" && "success" in result
           ? Boolean((result as { success: unknown }).success)
@@ -578,8 +621,8 @@ export class StagehandGoogleEngine {
     try {
       const { sh } = this.ensureReady();
       const data = schema
-        ? await sh.extract(instruction, schema)
-        : await sh.extract(instruction);
+        ? await this.withLimit(sh.extract(instruction, schema), Timeouts.ENGINE_AI_CALL, "AI 抽取")
+        : await this.withLimit(sh.extract(instruction), Timeouts.ENGINE_AI_CALL, "AI 抽取");
       return { success: true, data: data as T, durationMs: Date.now() - start };
     } catch (err) {
       return {
@@ -595,7 +638,7 @@ export class StagehandGoogleEngine {
     const start = Date.now();
     try {
       const { sh } = this.ensureReady();
-      const data = await sh.observe(instruction);
+      const data = await this.withLimit(sh.observe(instruction), Timeouts.ENGINE_AI_CALL, "观察页面");
       return {
         success: true,
         data: Array.isArray(data) ? data : [],
@@ -696,7 +739,7 @@ export class StagehandGoogleEngine {
     const { page } = this.ensureReady();
     if (typeof page.evaluate !== "function") return null;
     try {
-      return (await page.evaluate<R>(script)) ?? null;
+      return (await this.withLimit(page.evaluate<R>(script), Timeouts.ENGINE_CALL, "在页面里执行脚本")) ?? null;
     } catch {
       return null;
     }

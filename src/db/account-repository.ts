@@ -215,6 +215,29 @@ export class AccountRepository {
   }
 
   /**
+   * 清掉「正在登录」这个非终态，返回清掉的条数。
+   *
+   * 只有登录流程会写 logging_in，而它在每次登录结束时必定改成终态（logged_in / login_failed）。
+   * 所以任务开始前还留着 logging_in 的账号 = 上一次运行没正常收尾（后端被杀、进程崩溃，
+   * 或 CDP 断掉卡死后被强制重启）。不清掉的话界面会永远显示「正在登录」。
+   * 登录任务开始时调用；此时不可能有别的登录在进行，不会误伤进行中的账号。
+   */
+  clearStaleLoginInProgress(reason = "上次登录未正常结束"): number {
+    try {
+      const info = this.db
+        .prepare(
+          "UPDATE accounts SET login_status = 'login_failed', last_error = ?, " +
+            "updated_at = CURRENT_TIMESTAMP WHERE login_status = 'logging_in'",
+        )
+        .run(reason);
+      return Number(info.changes ?? 0);
+    } catch (error) {
+      console.error(`[DB ERROR] 清理 logging_in 失败: ${error}`);
+      return 0;
+    }
+  }
+
+  /**
    * 只写一条「最近发现的问题」（例如健康巡检发现窗口打不开），**不动** login_status。
    *
    * 为什么不能直接用 updateLoginStatus：它对 `logged_in` 会顺带把 last_error 清成 NULL，

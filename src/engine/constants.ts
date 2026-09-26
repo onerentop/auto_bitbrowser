@@ -61,6 +61,13 @@ export const Timeouts = {
   AFTER_CLICK: 1000,
   AFTER_INPUT: 500,
   AFTER_2FA: 3000,
+  /**
+   * 单次页面往返的上限（evaluate / click / fill / isVisible / sendCDP 等）。
+   * CDP 连接断掉时这些 await 永不 settle，必须自己封顶 —— 见引擎的 withLimit()。
+   */
+  ENGINE_CALL: 15000,
+  /** 单次 AI 往返（act / observe / extract）的上限；AI 本来就慢，给得宽一些但仍有界 */
+  ENGINE_AI_CALL: 60000,
 } as const;
 
 /** 登录页面关键词 */
