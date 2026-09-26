@@ -2,7 +2,7 @@
  * 渲染层入口：挂载 React，套上 Ant Design 的中文语言包与「值班台」主题（深浅色随 theme store 切换）
  */
 import { StrictMode, useLayoutEffect, useMemo, type ReactElement } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { App as AntApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { App } from "./App.tsx";
@@ -30,7 +30,16 @@ function Root(): ReactElement {
 const container = document.getElementById("root");
 if (!container) throw new Error("找不到挂载点 #root");
 
-createRoot(container).render(
+/**
+ * 容器已有 root 时复用。
+ * dev 模式下 HMR 会就地重新求值本模块：再调一次 createRoot 会撞上 React 的
+ * "container has already been passed to createRoot()"，React 拒绝挂载，界面直接变空白。
+ */
+const rootHost = window as unknown as { __abbRoot?: Root };
+const root = rootHost.__abbRoot ?? createRoot(container);
+rootHost.__abbRoot = root;
+
+root.render(
   <StrictMode>
     <Root />
   </StrictMode>,

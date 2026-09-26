@@ -22,6 +22,7 @@ import { createIpcRegistrar, senderFrameUrl } from "./ipc/registrar.ts";
 import { registerAppHandlers } from "./ipc/app-handlers.ts";
 import { isAppUrl } from "./navigation.ts";
 import { createMainWindow, resolveAppOrigin } from "./window.ts";
+import { initRendererLog } from "./renderer-log.ts";
 
 /** 打包后本文件位于 out/main/index.js；后端入口与之同目录 */
 const mainDir = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +57,8 @@ function bootstrap(): void {
     appPath: app.getAppPath(),
   });
   log(`数据目录: ${dataRoot}`);
+  // 渲染层报错同时落盘（白屏后控制台已滚掉时仍有据可查）
+  initRendererLog(dataRoot);
 
   const host = new HostClient({
     spawn: createUtilitySpawner({ entry: HOST_ENTRY, env: { ABB_DATA_ROOT: dataRoot } }),

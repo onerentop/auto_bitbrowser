@@ -10,6 +10,7 @@ import { BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isAppUrl, type AppOrigin } from "./navigation.ts";
+import { logRendererEvent } from "./renderer-log.ts";
 
 /** 窗口标题 */
 export const WINDOW_TITLE = "ixBrowser 窗口管理工具";
@@ -81,20 +82,32 @@ export function createMainWindow(options: CreateWindowOptions): BrowserWindow {
   // 不允许嵌入 <webview>（webviewTag 已关，这里再兜底一次）
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
 
-  // 渲染层加载失败 / 崩溃 / 控制台错误都打到主进程日志，否则窗口不出现时无从排查
+  // 渲染层加载失败 / 崩溃 / 无响应 / 控制台错误：既打主进程控制台，也落盘到 <数据根>/logs/renderer.log
+  // （控制台输出会随终端滚掉，白屏后再想查就没了）
+  // console-message 落盘记全部级别（排查白屏时 log/info 往往是唯一线索），终端仍只打 error/warning
+  const reportRenderer = (tag: string, message: string, alsoConsole = true): void => {
+    if (alsoConsole) process.stdout.write(`[${tag}] ${message}\n`);
+    logRendererEvent(tag, message);
+  };
+
   window.webContents.on("did-fail-load", (_e, code, desc, url) => {
-    process.stdout.write(`[abb-main] 渲染层加载失败 ${code} ${desc} ${url}\n`);
+    reportRenderer("abb-main", `渲染层加载失败 ${code} ${desc} ${url}`);
   });
   window.webContents.on("render-process-gone", (_e, details) => {
-    process.stdout.write(`[abb-main] 渲染进程退出: ${details.reason} (exitCode=${details.exitCode})\n`);
+    reportRenderer("abb-main", `渲染进程退出: ${details.reason} (exitCode=${details.exitCode})`);
+  });
+  window.webContents.on("unresponsive", () => {
+    reportRenderer("abb-main", "渲染层无响应（界面可能卡住或空白）");
   });
   window.webContents.on("preload-error", (_e, path, error) => {
-    process.stdout.write(`[abb-main] 预加载脚本出错 ${path}: ${error.message}\n`);
+    reportRenderer("abb-main", `预加载脚本出错 ${path}: ${error.message}`);
   });
   window.webContents.on("console-message", (event) => {
-    if (event.level === "error" || event.level === "warning") {
-      process.stdout.write(`[renderer:${event.level}] ${event.message}\n`);
-    }
+    reportRenderer(
+      `renderer:${event.level}`,
+      event.message,
+      event.level === "error" || event.level === "warning",
+    );
   });
 
   if (options.devServerUrl) {
