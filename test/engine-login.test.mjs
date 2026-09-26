@@ -546,7 +546,9 @@ test("未登录且没有密码（数据库缺密码）：不提交空密码，�
   const g = new FakeGoogle();
   const { result } = await run(g, { password: "" });
   assert.equal(result.success, false);
-  assert.match(result.error ?? "", /没有该账号的密码/);
+  // 文案只说「密码为空」：引擎无从得知账号在不在库里，不能说成「数据库里没有该账号」
+  assert.match(result.error ?? "", /该账号在数据库里没有密码/);
+  assert.doesNotMatch(result.error ?? "", /没有该账号/);
   assert.deepEqual(g.writes, [], "不在登录页输入任何东西");
   assert.ok(!g.navs.includes(SIGNIN_URL), "不打开登录页");
 });

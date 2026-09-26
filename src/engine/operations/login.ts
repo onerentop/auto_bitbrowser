@@ -245,8 +245,9 @@ export class LoginOperation {
       }
       if (pre.otherAccount) log("窗口当前登录的是其他账号，继续登录目标账号");
 
-      // 没登录又没有密码（数据库缺密码）：不去登录页提交空密码，直接说明原因
-      if (!password) return fail("logged_out", "no_password", "数据库里没有该账号的密码，无法登录");
+      // 没登录又没有密码：不去登录页提交空密码，直接说明原因。
+      // 文案只描述「密码为空」——引擎无从得知账号在不在库里（那条由调用方区分，见 ai-task-runner 的提前失败分支）
+      if (!password) return fail("logged_out", "no_password", "该账号在数据库里没有密码，无法登录");
 
       // 2. 打开登录页
       log("打开 Google 登录页");
